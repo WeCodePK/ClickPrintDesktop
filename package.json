@@ -26,6 +26,7 @@
   "build": {
     "appId": "com.clickprint.desktop",
     "productName": "ClickPrint",
+    "icon": "main/assets/icon.png",
     "files": [
       "main/**/*",
       "renderer/dist/**/*"

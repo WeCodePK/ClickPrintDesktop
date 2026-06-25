@@ -7,7 +7,13 @@ function TitleBar({ theme, onToggleTheme }) {
 
 	return (
 		<div className="title-bar">
-			<span className="title-bar__title">ClickPrint</span>
+			<div className="title-bar__brand">
+				<img src="icon.png" className="title-bar__logo" alt="" />
+				<span className="title-bar__title">
+					<span className="title-bar__title-click">Click</span>
+					<span className="title-bar__title-print">Print</span>
+				</span>
+			</div>
 			<div className="title-bar__controls">
 				<button
 					className="title-bar__theme-toggle"

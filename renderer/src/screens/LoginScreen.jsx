@@ -87,7 +87,13 @@ function LoginScreen({ onOtpSent }) {
 
 				<div className="input-group">
 					<div className="country-code">
-						<span>🇵🇰</span>
+						<svg width="20" height="14" viewBox="0 0 30 20" style={{ display: "inline-block", borderRadius: "1px", overflow: "hidden" }}>
+							<rect width="30" height="20" fill="#01411C" />
+							<rect width="7.5" height="20" fill="#ffffff" />
+							<circle cx="18.75" cy="10" r="4.5" fill="#ffffff" />
+							<circle cx="19.75" cy="9.25" r="4.25" fill="#01411C" />
+							<polygon points="21.5,7.5 22,9 23.5,9 22.25,10 22.75,11.5 21.5,10.5 20.25,11.5 20.75,10 19.5,9 21,9" fill="#ffffff" />
+						</svg>
 						<span>{countryCode}</span>
 					</div>
 					<div className="phone-input-wrapper">

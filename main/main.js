@@ -13,6 +13,7 @@ function createWindow() {
 		frame: false,
 		titleBarStyle: "hidden",
 		backgroundColor: "#F7F8FA",
+		icon: path.join(__dirname, "assets", "icon.png"),
 		webPreferences: {
 			preload: path.join(__dirname, "preload.js"),
 			nodeIntegration: false,

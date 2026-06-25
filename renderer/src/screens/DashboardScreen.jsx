@@ -97,9 +97,11 @@ const ALL_CAPABILITIES = [
 
 const PrintJobsIcon = () => (
 	<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-		<polyline points="6 9 6 2 18 2 18 9" />
-		<path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-		<rect x="6" y="14" width="12" height="8" />
+		<path d="M9 17H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2" />
+		<path d="M21 9v11a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+		<line x1="11" y1="11" x2="17" y2="11" />
+		<line x1="11" y1="15" x2="17" y2="15" />
+		<line x1="11" y1="18" x2="14" y2="18" />
 	</svg>
 );
 
@@ -183,7 +185,7 @@ function DashboardScreen({ shopProfile, onLogout }) {
 
 	const TABS = [
 		{ key: "printJobs", label: "Print Jobs", Icon: PrintJobsIcon },
-		{ key: "printerManagement", label: "Printer Mgmt", Icon: PrinterIcon },
+		{ key: "printerManagement", label: "Printer Management", Icon: PrinterIcon },
 		{ key: "history", label: "History", Icon: HistoryIcon },
 		{ key: "settings", label: "Settings", Icon: SettingsIcon },
 	];
@@ -298,7 +300,7 @@ function DashboardScreen({ shopProfile, onLogout }) {
 							<span className="db-tab__icon">
 								<Icon />
 							</span>
-							{/* <span className="db-tab__label">{label}</span> */}
+							<span className="db-tab__label">{label}</span>
 						</button>
 					))}
 				</nav>
@@ -468,7 +470,7 @@ function DashboardScreen({ shopProfile, onLogout }) {
 					) : (
 						<div className="db-detail__welcome">
 							<div className="db-detail__logo">
-								<img src="icon.png" alt="ClickPrint" />
+								<img src="icon.png" className="db-detail__logo-img" alt="ClickPrint" />
 							</div>
 							<p className="db-detail__msg">
 								{activeTab

@@ -7,7 +7,7 @@ const http = require("http");
 const https = require("https");
 const { URL } = require("url");
 
-const API_BASE_URL = "http://localhost:3000/api";
+const API_BASE_URL = "http://192.168.200.254:3000/api";
 
 // ──────────── In-memory auth state ────────────
 let authState = {
