@@ -52,9 +52,10 @@ function createWindow() {
 	app.isPackaged
 	?	window.loadFile(path.join(__dirname, "../renderer/dist/index.html"))
 	: 	window.loadURL("http://localhost:3001");
+
+	registerIpcHandlers(() => window);
 }
 
-registerIpcHandlers();
 
 ipcMain.on("window:close", () => {
 	// Treat the IPC close (custom titlebar ✕ button) the same as the native close
