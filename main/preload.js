@@ -1,12 +1,21 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
-contextBridge.exposeInMainWorld("electronAPI", {
-	// Auth
-	sendOtp: (number) => ipcRenderer.invoke("auth:send-otp", number),
-	verifyOtp: (code, number) =>
-		ipcRenderer.invoke("auth:verify-otp", code, number),
-	getAuthState: () => ipcRenderer.invoke("auth:get-state"),
-	logout: () => ipcRenderer.invoke("auth:logout"),
+contextBridge.exposeInMainWorld("controls", {
+	close: 	() => ipcRenderer.send("window:close"),
+	maximize: () => ipcRenderer.send("window:maximize"),
+	minimize: () => ipcRenderer.send("window:minimize")
+});
+
+contextBridge.exposeInMainWorld("api", {
+	sendOtp: (opts) => ipcRenderer.invoke("api:sendOtp", opts),
+	verifyOtp: (opts) => ipcRenderer.invoke("api:verifyOtp", opts),
+
+	getProfile: () => ipcRenderer.invoke("api:getProfile"),
+	updateProfile: (opts) => ipcRenderer.invoke("api:updateProfile", opts),
+
+	updateShop: (opts) => ipcRenderer.invoke("api:updateShop", opts),
+
+
 
 	// Jobs
 	fetchJobs: () => ipcRenderer.invoke("jobs:fetch"),
@@ -18,9 +27,4 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
 	// Shop
 	updateShop: (shopId, data) => ipcRenderer.invoke("shop:update", shopId, data),
-
-	// Window controls
-	minimizeWindow: () => ipcRenderer.send("window:minimize"),
-	maximizeWindow: () => ipcRenderer.send("window:maximize"),
-	closeWindow: () => ipcRenderer.send("window:close"),
 });

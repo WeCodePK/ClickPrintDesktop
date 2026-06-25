@@ -1,20 +1,9 @@
 const { ipcMain } = require("electron");
-const {
-	sendOtp,
-	verifyOtp,
-	updateShop,
-	getAuthState,
-	clearAuthState,
-	fetchJobs,
-	startJobsSse,
-	stopJobsSse,
-} = require("./api-service");
+const { sendOtp, verifyOtp, updateShop, fetchJobs } = require("./api");
 
-function registerIpcHandlers(getMainWindow) {
-	ipcMain.handle("auth:send-otp", async (_event, number) => {
-		console.log("[IPC] auth:send-otp →", number);
-		return await sendOtp(number);
-	});
+ipcMain.handle("api:sendOtp", async (event, { number }) => await sendOtp(number));
+ipcMain.handle("api:verifyOtp", async (event, opts) => await sendOtp(opts));
+
 
 	ipcMain.handle("auth:verify-otp", async (_event, code, number) => {
 		console.log("[IPC] auth:verify-otp →", number);
@@ -34,13 +23,18 @@ function registerIpcHandlers(getMainWindow) {
 		return result;
 	});
 
+function registerIpcHandlers(getMainWindow) {
+
+
+
+
 	ipcMain.handle("auth:get-state", async () => {
-		return getAuthState();
+		return getAuth();
 	});
 
 	ipcMain.handle("auth:logout", async () => {
 		stopJobsSse();
-		clearAuthState();
+		clearAuth();
 		return { success: true };
 	});
 

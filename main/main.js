@@ -1,70 +1,75 @@
-const path = require("path");
-const { app, BrowserWindow, ipcMain } = require("electron");
-const { registerIpcHandlers } = require("./ipc-handlers");
+const path = require('path');
+const { registerIpcHandlers } = require('./ipc');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
 
-let mainWindow = null;
-const isDev = !app.isPackaged;
+let window = null;
+let tray = null;
+
+function createTray() {
+	const icon = nativeImage.createFromPath(path.join(__dirname, 'tray-icon.ico'));
+	tray = new Tray(icon);
+
+	tray.setToolTip('Your App Name');
+	tray.setContextMenu(Menu.buildFromTemplate([
+		{
+			label: 'Exit',
+			click: () => {
+				app.isQuitting = true;
+				app.quit();
+			}
+		}
+	]));
+
+	tray.on('click', () => {
+		window?.show();
+		window?.focus();
+	});
+}
 
 function createWindow() {
-	mainWindow = new BrowserWindow({
+	window = new BrowserWindow({
 		show: false,
 		minWidth: 900,
 		minHeight: 600,
 		frame: false,
-		titleBarStyle: "hidden",
 		backgroundColor: "#F7F8FA",
+		icon: path.join(__dirname, "assets", "icon.png"),
 		webPreferences: {
 			preload: path.join(__dirname, "preload.js"),
-			nodeIntegration: false,
-			contextIsolation: true,
 		},
 	});
 
-	// Show maximized once the page is ready to avoid the window flashing small first
-	mainWindow.once("ready-to-show", () => {
-		mainWindow.maximize();
-		mainWindow.show();
+	window.on("close", (event) => {
+		if (!app.isQuitting) {
+			event.preventDefault();
+			window.hide();
+		}
 	});
 
-	if (isDev) {
-		mainWindow.loadURL("http://localhost:3001");
-	} else {
-		mainWindow.loadFile(path.join(__dirname, "../renderer/dist/index.html"));
-	}
+	window.on("closed", () => window = null);
+	window.once("ready-to-show", () => window.show());
 
-	mainWindow.on("closed", () => {
-		mainWindow = null;
-	});
+	app.isPackaged
+	?	window.loadFile(path.join(__dirname, "../renderer/dist/index.html"))
+	: 	window.loadURL("http://localhost:3001");
 }
 
-registerIpcHandlers(() => mainWindow);
-
-ipcMain.on("window:minimize", () => {
-	mainWindow?.minimize();
-});
-
-ipcMain.on("window:maximize", () => {
-	if (mainWindow?.isMaximized()) {
-		mainWindow.unmaximize();
-	} else {
-		mainWindow?.maximize();
-	}
-});
+registerIpcHandlers();
 
 ipcMain.on("window:close", () => {
-	mainWindow?.close();
-});
-
-app.whenReady().then(createWindow);
-
-app.on("window-all-closed", () => {
-	if (process.platform !== "darwin") {
-		app.quit();
+	// Treat the IPC close (custom titlebar ✕ button) the same as the native close
+	if (!app.isQuitting) {
+		window?.hide();
+	} else {
+		window?.close();
 	}
 });
+ipcMain.on("window:minimize", () => window?.minimize());
+ipcMain.on("window:maximize", () => window.isMaximized() ? window.unmaximize() : window?.maximize());
 
-app.on("activate", () => {
-	if (BrowserWindow.getAllWindows().length === 0) {
-		createWindow();
-	}
+app.whenReady().then(() => {
+	createWindow();
+	createTray();
 });
+
+app.on("window-all-closed", (event) => event.preventDefault());
