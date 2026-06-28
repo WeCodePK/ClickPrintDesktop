@@ -5,12 +5,28 @@ const {
 	updateShop,
 	getAuthState,
 	clearAuthState,
+	fetchPrices,
+	createPrice,
+	updatePrice,
+	deletePrice,
 	fetchJobs,
+	fetchHistory,
+	updateJobStatus,
+	acknowledgeNewJobs,
 	startJobsSse,
 	stopJobsSse,
 } = require("./api");
+const { syncJobFiles, getStatusMap, setNotifier } = require("./files");
 
 function registerIpcHandlers(getMainWindow) {
+	// Push per-file download status updates to the renderer as they happen.
+	setNotifier((updates) => {
+		const win = getMainWindow();
+		if (win && !win.isDestroyed()) {
+			win.webContents.send("files:updated", updates);
+		}
+	});
+
 	ipcMain.handle("auth:send-otp", async (_event, number) => {
 		console.log("[IPC] auth:send-otp →", number);
 		return await sendOtp(number);
@@ -29,6 +45,9 @@ function registerIpcHandlers(getMainWindow) {
 				if (win && !win.isDestroyed()) {
 					win.webContents.send("jobs:updated", jobs);
 				}
+				// Acknowledge new jobs to the backend and download their files.
+				acknowledgeNewJobs(jobs);
+				syncJobFiles(jobs);
 			});
 		}
 		return result;
@@ -51,7 +70,47 @@ function registerIpcHandlers(getMainWindow) {
 
 	ipcMain.handle("jobs:fetch", async () => {
 		console.log("[IPC] jobs:fetch");
-		return await fetchJobs();
+		const result = await fetchJobs();
+		// On initial load / reload, acknowledge new jobs and cache their files.
+		if (result.success) {
+			acknowledgeNewJobs(result.data);
+			syncJobFiles(result.data);
+		}
+		return result;
+	});
+
+	ipcMain.handle("history:fetch", async () => {
+		console.log("[IPC] history:fetch");
+		return await fetchHistory();
+	});
+
+	ipcMain.handle("prices:fetch", async () => {
+		console.log("[IPC] prices:fetch");
+		return await fetchPrices();
+	});
+
+	ipcMain.handle("prices:create", async (_event, price) => {
+		console.log("[IPC] prices:create →", price?.name);
+		return await createPrice(price);
+	});
+
+	ipcMain.handle("prices:update", async (_event, priceId, price) => {
+		console.log("[IPC] prices:update →", priceId);
+		return await updatePrice(priceId, price);
+	});
+
+	ipcMain.handle("prices:delete", async (_event, priceId) => {
+		console.log("[IPC] prices:delete →", priceId);
+		return await deletePrice(priceId);
+	});
+
+	ipcMain.handle("jobs:update-status", async (_event, jobId, status) => {
+		console.log(`[IPC] jobs:update-status → ${jobId} = ${status}`);
+		return await updateJobStatus(jobId, status);
+	});
+
+	ipcMain.handle("files:status", async () => {
+		return getStatusMap();
 	});
 }
 

@@ -1,6 +1,10 @@
 const path = require('path');
 const { registerIpcHandlers } = require('./ipc');
+const { registerFileSchemePrivileges, registerFileProtocol } = require('./files');
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
+
+// Privileged scheme registration must happen before the app is ready.
+registerFileSchemePrivileges();
 
 let window = null;
 let tray = null;
@@ -36,6 +40,10 @@ function createWindow() {
 		icon: path.join(__dirname, "assets", "icon.png"),
 		webPreferences: {
 			preload: path.join(__dirname, "preload.js"),
+			plugins: true, // enable Chromium's built-in PDF viewer for previews
+			// Allow the renderer to play notification sounds without a per-event
+			// user gesture (Chromium blocks programmatic audio by default).
+			autoplayPolicy: "no-user-gesture-required",
 		},
 	});
 
@@ -69,6 +77,7 @@ ipcMain.on("window:minimize", () => window?.minimize());
 ipcMain.on("window:maximize", () => window.isMaximized() ? window.unmaximize() : window?.maximize());
 
 app.whenReady().then(() => {
+	registerFileProtocol();
 	createWindow();
 	createTray();
 });

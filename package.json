@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "electron-store": "^8.1.0",
-    "eventsource": "^1.1.2"
+    "eventsource": "^1.1.2",
+    "react-router-dom": "^7.18.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
@@ -27,7 +28,7 @@
   "build": {
     "appId": "com.clickprint.desktop",
     "productName": "ClickPrint",
-     "icon": "main/assets/icon.png",
+    "icon": "main/assets/icon.png",
     "files": [
       "main/**/*",
       "renderer/dist/**/*"

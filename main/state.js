@@ -1,5 +1,5 @@
 const state = {
-	auth: { token: null, profile: null, phoneNumber: null },
+	auth: { token: null, profile: null, phoneNumber: null, shopId: null },
 	jobs: [],
 };
 
@@ -12,7 +12,7 @@ function setAuth(updates) {
 }
 
 function clearAuth() {
-	state.auth = { token: null, profile: null, phoneNumber: null };
+	state.auth = { token: null, profile: null, phoneNumber: null, shopId: null };
 	state.jobs = [];
 }
 
