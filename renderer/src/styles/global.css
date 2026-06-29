@@ -369,6 +369,13 @@ body {
 	outline: none;
 }
 
+[data-theme='dark'] .country-code,
+[data-theme='dark'] .phone-input {
+	background: var(--color-bg-card);
+	border-color: rgba(255, 255, 255, 0.05);
+	box-shadow: var(--shadow-sm);
+}
+
 .phone-input::placeholder {
 	color: var(--color-text-muted);
 	font-weight: 400;
@@ -1830,6 +1837,37 @@ body,
 
 .db-list__add:hover {
 	background: rgba(0, 230, 173, 0.18);
+}
+
+/* Settings section panel (right pane). */
+.settings-panel__header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	margin-bottom: 20px;
+}
+
+.settings-panel__sub {
+	font-size: 13px;
+	color: var(--color-text-secondary);
+}
+
+.settings-panel__action {
+	flex: 0 0 auto;
+}
+
+.price-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+/* Wider modal variant for forms that don't fit the default confirm width. */
+.modal-card--wide {
+	max-width: 560px;
+	max-height: 85vh;
+	overflow-y: auto;
 }
 
 /* Price list row: name + meta on the left, rate on the right. */

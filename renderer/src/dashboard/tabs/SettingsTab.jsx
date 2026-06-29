@@ -1,9 +1,16 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import ListColumn from "../components/ListColumn";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { TrashIcon } from "../icons";
 
 const PAGE_TYPES = ["A4", "A5", "A3", "Letter", "Legal"];
+
+// Settings sections shown in the left column. Add more entries here as the
+// settings surface grows — each renders its own panel in the right pane.
+const SECTIONS = [
+	{ id: "pricing", label: "Pricing", description: "Print rates by paper, color & sides" },
+];
 
 // Two-state segmented toggle.
 function Segmented({ options, value, onChange }) {
@@ -23,9 +30,9 @@ function Segmented({ options, value, onChange }) {
 	);
 }
 
-// Create / edit form for a single price. Remounted (keyed) per selection so the
-// fields reset cleanly.
-function PriceForm({ price, saving, onSave, onDelete }) {
+// Create / edit form for a single price, shown inside a modal. Remounted (keyed)
+// per selection so the fields reset cleanly.
+function PriceForm({ price, saving, onSave, onCancel, onDelete }) {
 	const isNew = !price._id;
 	const [rate, setRate] = useState(price.rate ?? "");
 	const [colored, setColored] = useState(price.keys?.colored ?? false);
@@ -46,8 +53,8 @@ function PriceForm({ price, saving, onSave, onDelete }) {
 	};
 
 	return (
-		<form className="db-detail__view price-form" onSubmit={submit}>
-			<h3 className="db-detail__title">{isNew ? "New Price" : "Edit Price"}</h3>
+		<form className="price-form" onSubmit={submit}>
+			<h3 className="modal-title">{isNew ? "New Price" : "Edit Price"}</h3>
 
 			<div className="form-field">
 				<label className="form-label">Name</label>
@@ -119,6 +126,9 @@ function PriceForm({ price, saving, onSave, onDelete }) {
 						Delete
 					</button>
 				)}
+				<button type="button" className="btn-outline" onClick={onCancel} disabled={saving}>
+					Cancel
+				</button>
 				<button type="submit" className="btn-gradient" disabled={saving}>
 					{saving ? "Saving…" : isNew ? "Create Price" : "Save Changes"}
 				</button>
@@ -127,12 +137,14 @@ function PriceForm({ price, saving, onSave, onDelete }) {
 	);
 }
 
-// Settings tab — manages the shop's print pricing (CRUD).
-function SettingsTab() {
+// Pricing settings panel — the shop's print pricing CRUD, rendered in the right
+// detail pane. The price list lives here with a "New Price" action; creating or
+// editing opens the form in a modal.
+function PricingSettings() {
 	const [prices, setPrices] = useState([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState(null);
-	const [selected, setSelected] = useState(null); // price object, or { keys: {} } for new
+	const [editing, setEditing] = useState(null); // price object, { keys: {} } for new, or null
 	const [saving, setSaving] = useState(false);
 	const [confirmDelete, setConfirmDelete] = useState(null);
 
@@ -159,12 +171,12 @@ function SettingsTab() {
 		setSaving(true);
 		setError(null);
 		try {
-			const result = selected._id
-				? await window.electronAPI.updatePrice(selected._id, data)
+			const result = editing._id
+				? await window.electronAPI.updatePrice(editing._id, data)
 				: await window.electronAPI.createPrice(data);
 			if (result.success) {
 				await loadPrices();
-				setSelected(null);
+				setEditing(null);
 			} else {
 				setError(result.message || "Failed to save price.");
 			}
@@ -181,7 +193,7 @@ function SettingsTab() {
 			const result = await window.electronAPI.deletePrice(price._id);
 			if (result.success) {
 				await loadPrices();
-				setSelected(null);
+				setEditing(null);
 			} else {
 				setError(result.message || "Failed to delete price.");
 			}
@@ -191,33 +203,35 @@ function SettingsTab() {
 	};
 
 	return (
-		<>
-			<ListColumn
-				title="Pricing"
-				action={
-					<button className="db-list__add" onClick={() => setSelected({ keys: {} })}>
-						+ New
-					</button>
-				}
-			>
-				{loading ? (
-					<div className="db-coming-soon">
-						<div className="spinner spinner--dark" />
-						<p>Loading prices…</p>
-					</div>
-				) : prices.length === 0 ? (
-					<div className="db-coming-soon">
-						<p>No prices yet</p>
-						<p style={{ fontSize: "11.5px", color: "var(--color-text-secondary)" }}>
-							Add your first print price to get started.
-						</p>
-					</div>
-				) : (
-					prices.map((price) => (
+		<div className="db-detail__view">
+			<div className="settings-panel__header">
+				<div>
+					<h3 className="db-detail__title" style={{ marginBottom: "4px" }}>Pricing</h3>
+					<p className="settings-panel__sub">Manage the print rates customers are charged.</p>
+				</div>
+				<button className="btn-gradient settings-panel__action" onClick={() => setEditing({ keys: {} })}>
+					+ New Price
+				</button>
+			</div>
+
+			{error && <div className="form-error">{error}</div>}
+
+			{loading ? (
+				<div className="db-coming-soon">
+					<div className="spinner spinner--dark" />
+					<p>Loading prices…</p>
+				</div>
+			) : prices.length === 0 ? (
+				<div className="db-detail__empty">
+					<p>No prices yet. Add your first print price to get started.</p>
+				</div>
+			) : (
+				<div className="price-list">
+					{prices.map((price) => (
 						<button
 							key={price._id}
-							className={`db-entry db-entry--price ${selected?._id === price._id ? "db-entry--active" : ""}`}
-							onClick={() => setSelected(price)}
+							className="db-entry db-entry--price"
+							onClick={() => setEditing(price)}
 						>
 							<div className="db-entry__info">
 								<span className="db-entry__name">{price.name}</span>
@@ -227,28 +241,27 @@ function SettingsTab() {
 							</div>
 							<span className="db-entry__price">Rs. {price.rate}</span>
 						</button>
-					))
-				)}
-			</ListColumn>
+					))}
+				</div>
+			)}
 
-			<div className="db-detail">
-				{error && <div className="form-error">{error}</div>}
-				{selected ? (
-					<PriceForm
-						key={selected._id || "new"}
-						price={selected}
-						saving={saving}
-						onSave={handleSave}
-						onDelete={(p) => setConfirmDelete(p)}
-					/>
-				) : (
-					<div className="db-detail__empty">
-						<p>Select a price to edit, or create a new one.</p>
+			{editing && createPortal(
+				<div className="modal-overlay" onClick={() => !saving && setEditing(null)}>
+					<div className="modal-card modal-card--wide" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+						<PriceForm
+							key={editing._id || "new"}
+							price={editing}
+							saving={saving}
+							onSave={handleSave}
+							onCancel={() => setEditing(null)}
+							onDelete={(p) => setConfirmDelete(p)}
+						/>
 					</div>
-				)}
-			</div>
+				</div>,
+				document.body
+			)}
 
-			{confirmDelete && (
+			{confirmDelete && createPortal(
 				<ConfirmDialog
 					title="Delete this price?"
 					message={`Are you sure you want to delete "${confirmDelete.name}"? This cannot be undone.`}
@@ -257,8 +270,44 @@ function SettingsTab() {
 					danger
 					onConfirm={() => handleDelete(confirmDelete)}
 					onCancel={() => setConfirmDelete(null)}
-				/>
+				/>,
+				document.body
 			)}
+		</div>
+	);
+}
+
+// Settings tab — a left column of setting sections; the selected section's
+// management UI renders in the right pane.
+function SettingsTab() {
+	const [section, setSection] = useState("pricing");
+
+	return (
+		<>
+			<ListColumn title="Settings">
+				{SECTIONS.map((s) => (
+					<button
+						key={s.id}
+						className={`db-entry ${section === s.id ? "db-entry--active" : ""}`}
+						onClick={() => setSection(s.id)}
+					>
+						<div className="db-entry__info">
+							<span className="db-entry__name">{s.label}</span>
+							<span className="db-entry__meta">{s.description}</span>
+						</div>
+					</button>
+				))}
+			</ListColumn>
+
+			<div className="db-detail">
+				{section === "pricing" ? (
+					<PricingSettings />
+				) : (
+					<div className="db-detail__empty">
+						<p>Select a setting to manage.</p>
+					</div>
+				)}
+			</div>
 		</>
 	);
 }

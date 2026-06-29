@@ -1,5 +1,5 @@
 const EventSource = require("eventsource");
-const { getAuth, setAuth, setJobs } = require("./state");
+const { getAuth, setAuth, setJobs, clearAuth } = require("./state");
 
 const API_BASE_URL = "https://clickprintbackend.wckd.pk"
 
@@ -100,6 +100,16 @@ async function updateJobStatus(jobId, status) {
 		console.error(`[API] updateJobStatus ${jobId} error:`, error);
 		return { success: false };
 	}
+}
+
+// Returns the current in-memory auth state (token, profile, etc.).
+function getAuthState() {
+	return getAuth();
+}
+
+// Clears all auth + cached job state (used on logout).
+function clearAuthState() {
+	clearAuth();
 }
 
 // Jobs arrive from the backend as "submitted". We acknowledge receipt of each
@@ -349,6 +359,8 @@ async function _reconcile() {
 module.exports = {
 	sendOtp,
 	verifyOtp,
+	getAuthState,
+	clearAuthState,
 	updateShop,
 	fetchPrices,
 	createPrice,

@@ -168,12 +168,32 @@ async function printFile(fileId, settings) {
 		await win.loadFile(localPath(fileId));
 		// Give the PDF plugin a moment to lay the document out before printing.
 		await new Promise((resolve) => setTimeout(resolve, 400));
+		const options = buildPrintOptions(settings);
+		console.log(`[Files] printing ${fileId} →`, options);
 		await new Promise((resolve, reject) => {
-			win.webContents.print(buildPrintOptions(settings), (success, failureReason) => {
-				if (success) resolve();
-				else reject(new Error(failureReason || "print failed"));
+			let settled = false;
+			const finish = (fn, arg) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				fn(arg);
+			};
+
+			win.webContents.print(options, (success, failureReason) => {
+				console.log(`[Files] print callback ${fileId}: success=${success} reason=${failureReason}`);
+				if (success) finish(resolve);
+				else finish(reject, new Error(failureReason || "print failed"));
 			});
+
+			// Safety net: some printers (notably "Microsoft Print to PDF") never
+			// invoke the completion callback. The print() call above didn't throw, so
+			// the job was dispatched — assume it spooled so the status can advance.
+			const timer = setTimeout(() => {
+				console.log(`[Files] print callback timed out ${fileId}, assuming spooled`);
+				finish(resolve);
+			}, 8000);
 		});
+		console.log(`[Files] print spooled ${fileId}`);
 	} finally {
 		if (!win.isDestroyed()) win.destroy();
 	}
