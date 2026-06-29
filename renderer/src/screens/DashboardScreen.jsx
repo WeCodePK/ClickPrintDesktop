@@ -6,7 +6,7 @@ import DashboardLayout from "../dashboard/DashboardLayout";
 import PrintJobsTab from "../dashboard/tabs/PrintJobsTab";
 import PrintersTab from "../dashboard/tabs/PrintersTab";
 import HistoryTab from "../dashboard/tabs/HistoryTab";
-import PlaceholderTab from "../dashboard/tabs/PlaceholderTab";
+import DashboardTab from "../dashboard/tabs/DashboardTab";
 import SettingsTab from "../dashboard/tabs/SettingsTab";
 import LogoutTab from "../dashboard/tabs/LogoutTab";
 
@@ -24,15 +24,7 @@ function DashboardScreen({ shopProfile, onLogout }) {
 							<Route path="jobs" element={<PrintJobsTab />} />
 							<Route path="printers" element={<PrintersTab />} />
 							<Route path="history" element={<HistoryTab />} />
-							<Route
-								path="home"
-								element={
-									<PlaceholderTab
-										title="Dashboard"
-										description="Dashboard analytics and widgets are currently under construction."
-									/>
-								}
-							/>
+							<Route path="home" element={<DashboardTab />} />
 							<Route path="settings" element={<SettingsTab />} />
 							<Route path="logout" element={<LogoutTab onLogout={onLogout} />} />
 							<Route path="*" element={<Navigate to="jobs" replace />} />
