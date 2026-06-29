@@ -1282,6 +1282,18 @@ body,
 	transition: all var(--transition-fast);
 }
 
+.db-entry__avatar--chosen {
+	color: var(--color-primary);
+}
+
+.db-entry__avatar--muted {
+	color: var(--color-text-muted);
+}
+
+.db-entry__avatar--secondary {
+	color: var(--color-text-secondary);
+}
+
 .db-entry--active .db-entry__avatar {
 	background: var(--color-primary);
 	color: #111b21;

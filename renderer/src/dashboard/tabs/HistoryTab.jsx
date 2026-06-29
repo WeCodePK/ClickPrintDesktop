@@ -61,7 +61,7 @@ function HistoryTab() {
 							className={`db-entry ${selectedEntry?._id === entry._id ? "db-entry--active" : ""}`}
 							onClick={() => setSelectedEntry(entry)}
 						>
-							<div className="db-entry__avatar" style={{ color: "var(--color-text-secondary)" }}>
+							<div className="db-entry__avatar db-entry__avatar--secondary">
 								<HistoryGlyph />
 							</div>
 							<div className="db-entry__info">

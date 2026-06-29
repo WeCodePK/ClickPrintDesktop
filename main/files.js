@@ -3,6 +3,7 @@ const fsp = require("fs/promises");
 const path = require("path");
 const { app, protocol, shell, BrowserWindow } = require("electron");
 const { fetchFileBuffer } = require("./api");
+const store = require("./store");
 
 // Job files are downloaded once and cached on disk under userData. All files are
 // treated as PDFs (per product spec) and served to the renderer through a
@@ -169,7 +170,18 @@ async function printFile(fileId, settings) {
 		// Give the PDF plugin a moment to lay the document out before printing.
 		await new Promise((resolve) => setTimeout(resolve, 400));
 		const options = buildPrintOptions(settings);
-		console.log(`[Files] printing ${fileId} →`, options);
+		// Route the job to the operator's chosen printer (falls back to the system
+		// default printer when none has been selected yet).
+		const chosen = store.get("selectedPrinter");
+		if (chosen?.name) options.deviceName = chosen.name;
+		console.log(`[Files] printing ${fileId} → ${options.deviceName || "default printer"}`, options);
+
+		// "Microsoft Print to PDF" reports success=false in the callback even when
+		// the file was saved fine, so we forgive a reported failure ONLY for that
+		// pseudo-printer. A real printer's failure is trusted and propagates as an
+		// error (the job is then left untouched, never marked "printing").
+		const isPdfPrinter = /print to pdf/i.test(options.deviceName || "");
+
 		await new Promise((resolve, reject) => {
 			let settled = false;
 			const finish = (fn, arg) => {
@@ -181,17 +193,22 @@ async function printFile(fileId, settings) {
 
 			win.webContents.print(options, (success, failureReason) => {
 				console.log(`[Files] print callback ${fileId}: success=${success} reason=${failureReason}`);
-				if (success) finish(resolve);
+				if (success || isPdfPrinter) finish(resolve);
 				else finish(reject, new Error(failureReason || "print failed"));
 			});
 
-			// Safety net: some printers (notably "Microsoft Print to PDF") never
-			// invoke the completion callback. The print() call above didn't throw, so
-			// the job was dispatched — assume it spooled so the status can advance.
+			// Guard against a callback that never fires at all. For Print to PDF we
+			// assume the file was saved; for a real printer we treat the silence as a
+			// failure so a stuck/offline printer never falsely advances the status.
 			const timer = setTimeout(() => {
-				console.log(`[Files] print callback timed out ${fileId}, assuming spooled`);
-				finish(resolve);
-			}, 8000);
+				if (isPdfPrinter) {
+					console.log(`[Files] PDF print callback timed out ${fileId}, assuming saved`);
+					finish(resolve);
+				} else {
+					console.log(`[Files] print callback timed out ${fileId}, treating as failed`);
+					finish(reject, new Error("print timed out"));
+				}
+			}, 30000);
 		});
 		console.log(`[Files] print spooled ${fileId}`);
 	} finally {

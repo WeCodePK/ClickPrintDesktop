@@ -108,7 +108,7 @@ function PrintersTab() {
 							className={`db-entry ${selectedEntry?.name === printer.name ? "db-entry--active" : ""}`}
 							onClick={() => setSelectedEntry(printer)}
 						>
-							<div className="db-entry__avatar" style={{ color: chosen === printer.name ? "var(--color-primary)" : "var(--color-text-muted)" }}>
+							<div className={`db-entry__avatar ${chosen === printer.name ? "db-entry__avatar--chosen" : "db-entry__avatar--muted"}`}>
 								<PrinterIcon />
 							</div>
 							<div className="db-entry__info">
