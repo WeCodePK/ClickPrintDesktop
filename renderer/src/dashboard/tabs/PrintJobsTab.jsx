@@ -5,7 +5,7 @@ import ListColumn from "../components/ListColumn";
 import WelcomePane from "../components/WelcomePane";
 import JobDetailCard from "../components/JobDetailCard";
 import ConfirmDialog from "../components/ConfirmDialog";
-import { CheckIcon, TrashIcon } from "../icons";
+import { CheckIcon, TrashIcon, SearchIcon } from "../icons";
 
 // Print Jobs tab: active job queue list on the left, job details on the right.
 // Each file can be previewed in the OS viewer or printed silently with its own
@@ -20,11 +20,24 @@ function PrintJobsTab() {
 	// Job pending a mark-complete confirmation.
 	const [pendingComplete, setPendingComplete] = useState(null);
 
+	// Phone-number search query.
+	const [query, setQuery] = useState("");
+
 	// Oldest job first, so #1 is the next one up in the queue. The top (oldest)
 	// job gets a special dashed highlight below.
 	const entries = printJobs
 		.filter((j) => ACTIVE_STATUSES.has(j.rawStatus))
 		.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+	// Apply the phone-number search (also matches the customer name). The queue
+	// numbering / "top" highlight still reflect each job's position in the full
+	// queue, not the filtered view.
+	const q = query.trim().toLowerCase();
+	const visible = q
+		? entries.filter((e) =>
+				`${e.createdBy?.number || ""} ${e.createdBy?.name || ""}`.toLowerCase().includes(q)
+			)
+		: entries;
 
 	// Optimistically applies a status change to a job, both in the list and in the
 	// current selection. Returns a revert function for use on request failure.
@@ -114,42 +127,61 @@ function PrintJobsTab() {
 
 	return (
 		<>
-			<ListColumn title="Print Jobs" count={entries.length}>
+			<ListColumn title="Print Jobs" count={visible.length}>
+				<div className="db-search">
+					<SearchIcon />
+					<input
+						className="db-search__input"
+						type="text"
+						placeholder="Search any print job…"
+						value={query}
+						onChange={(e) => setQuery(e.target.value)}
+					/>
+					{query && (
+						<button className="db-search__clear" onClick={() => setQuery("")} title="Clear">
+							×
+						</button>
+					)}
+				</div>
+
 				{jobsLoading ? (
 					<div className="db-coming-soon">
 						<div className="spinner spinner--dark" />
 						<p>Loading jobs…</p>
 					</div>
-				) : entries.length === 0 ? (
+				) : visible.length === 0 ? (
 					<div className="db-coming-soon">
-						<p>No active print jobs</p>
+						<p>{q ? "No jobs match that number" : "No active print jobs"}</p>
 					</div>
 				) : (
-					entries.map((entry, index) => (
-						<button
-							key={entry._id}
-							className={`db-entry db-entry--job ${selectedEntry?._id === entry._id ? "db-entry--active" : ""} ${index === 0 ? "db-entry--top" : ""}`}
-							onClick={() => setSelectedEntry(entry)}
-						>
-							<span className="db-entry__qnum">{index + 1}</span>
-							<div className="db-entry__info">
-								<div className="db-entry__line">
-									<span className="db-entry__name">{entry.fileName}</span>
-									<span className="db-entry__price">Rs. {entry.price}</span>
+					visible.map((entry) => {
+						const queueIndex = entries.indexOf(entry);
+						return (
+							<button
+								key={entry._id}
+								className={`db-entry db-entry--job ${selectedEntry?._id === entry._id ? "db-entry--active" : ""} ${queueIndex === 0 ? "db-entry--top" : ""}`}
+								onClick={() => setSelectedEntry(entry)}
+							>
+								<span className="db-entry__qnum">{queueIndex + 1}</span>
+								<div className="db-entry__info">
+									<div className="db-entry__line">
+										<span className="db-entry__name">{entry.createdBy?.number || entry.createdBy?.name || "Unknown number"}</span>
+										<span className="db-entry__price">Rs. {entry.price}</span>
+									</div>
+									<div className="db-entry__line">
+										<span className="db-entry__sub">
+											{entry.createdBy?.name ? `${entry.createdBy.name} · ` : ""}
+											{entry.copies} {entry.copies === 1 ? "copy" : "copies"} · {entry.color ? "Color" : "B&W"} · {entry.filesCount} {entry.filesCount === 1 ? "file" : "files"}
+										</span>
+										<span className="db-entry__right">
+											<span className="db-entry__time">{entry.time}</span>
+											<span className={`db-entry__dot db-entry__dot--${entry.status}`} />
+										</span>
+									</div>
 								</div>
-								<div className="db-entry__line">
-									<span className="db-entry__sub">
-										{entry.createdBy?.name ? `${entry.createdBy.name} · ` : ""}
-										{entry.copies} {entry.copies === 1 ? "copy" : "copies"} · {entry.color ? "Color" : "B&W"} · {entry.filesCount} {entry.filesCount === 1 ? "file" : "files"}
-									</span>
-									<span className="db-entry__right">
-										<span className="db-entry__time">{entry.time}</span>
-										<span className={`db-entry__dot db-entry__dot--${entry.status}`} />
-									</span>
-								</div>
-							</div>
-						</button>
-					))
+							</button>
+						);
+					})
 				)}
 			</ListColumn>
 

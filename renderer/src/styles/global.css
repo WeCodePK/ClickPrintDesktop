@@ -1167,6 +1167,47 @@ body,
 	padding: 8px;
 }
 
+/* Sticky search bar at the top of a list column. */
+.db-search {
+	position: sticky;
+	top: 0;
+	z-index: 3;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+	padding: 9px 12px;
+	background: var(--color-bg-input);
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-md);
+	color: var(--color-text-muted);
+}
+
+.db-search__input {
+	flex: 1;
+	min-width: 0;
+	border: none;
+	background: transparent;
+	color: var(--color-text-primary);
+	font-family: var(--font-family);
+	font-size: 13px;
+	outline: none;
+}
+
+.db-search__input::placeholder { color: var(--color-text-muted); }
+
+.db-search__clear {
+	border: none;
+	background: transparent;
+	color: var(--color-text-muted);
+	cursor: pointer;
+	font-size: 18px;
+	line-height: 1;
+	padding: 0 2px;
+}
+
+.db-search__clear:hover { color: var(--color-text-primary); }
+
 /* ── Entry Items (WhatsApp chat rows + Sadapay premium design) ── */
 
 .db-entry {

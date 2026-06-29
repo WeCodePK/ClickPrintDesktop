@@ -131,6 +131,13 @@ export const RefreshIcon = () => (
 	</svg>
 );
 
+export const SearchIcon = () => (
+	<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+		<circle cx="11" cy="11" r="7" />
+		<line x1="21" y1="21" x2="16.65" y2="16.65" />
+	</svg>
+);
+
 export const EyeIcon = () => (
 	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
 		<path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
