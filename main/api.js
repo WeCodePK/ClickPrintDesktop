@@ -8,7 +8,7 @@ async function sendOtp(number) {
 		const response = await fetch(`${API_BASE_URL}/api/auth/otp`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ number }),
+			body: JSON.stringify({ number, actor: "shop" }),
 		});
 
 		const data = await response.json();
@@ -35,7 +35,7 @@ async function verifyOtp(code, number) {
 		const response = await fetch(`${API_BASE_URL}/api/auth/verify`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ code, number, actor: "shop" }),
+			body: JSON.stringify({ code, number }),
 		});
 
 		const data = await response.json();
