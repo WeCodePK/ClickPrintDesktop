@@ -29,6 +29,7 @@ function App() {
 			.then((auth) => {
 				if (cancelled) return;
 				if (auth?.token && auth?.profile) {
+					window.location.hash = "#/jobs";
 					setShopProfile(auth.profile);
 					setPhoneNumber(auth.phoneNumber || "");
 					setScreen("dashboard");
@@ -57,12 +58,14 @@ function App() {
 	};
 
 	const handleLoginSuccess = (data) => {
+		window.location.hash = "#/jobs";
 		setShopProfile(data.profile);
 		setScreen("dashboard");
 	};
 
 	const handleLogout = async () => {
 		await window.electronAPI.logout();
+		window.location.hash = "#/jobs";
 		setShopProfile(null);
 		setPhoneNumber("");
 		setScreen("login");

@@ -48,13 +48,6 @@ function createWindow() {
 		},
 	});
 
-	window.on("close", (event) => {
-		if (!app.isQuitting) {
-			event.preventDefault();
-			window.hide();
-		}
-	});
-
 	window.on("closed", () => window = null);
 	window.once("ready-to-show", () => {
 		window.maximize();
@@ -70,12 +63,7 @@ function createWindow() {
 
 
 ipcMain.on("window:close", () => {
-	// Treat the IPC close (custom titlebar ✕ button) the same as the native close
-	if (!app.isQuitting) {
-		window?.hide();
-	} else {
-		window?.close();
-	}
+	window?.close();
 });
 ipcMain.on("window:minimize", () => window?.minimize());
 ipcMain.on("window:maximize", () => window.isMaximized() ? window.unmaximize() : window?.maximize());
@@ -89,4 +77,4 @@ app.whenReady().then(() => {
 	createTray();
 });
 
-app.on("window-all-closed", (event) => event.preventDefault());
+app.on("window-all-closed", () => app.quit());

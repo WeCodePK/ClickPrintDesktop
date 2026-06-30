@@ -1,5 +1,3 @@
-import React from "react";
-
 function TitleBar({ theme, onToggleTheme }) {
 	const handleMinimize = () => window.electronAPI?.minimizeWindow();
 	const handleMaximize = () => window.electronAPI?.maximizeWindow();
