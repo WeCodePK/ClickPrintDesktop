@@ -1,8 +1,5 @@
-import React from "react";
 import { PdfGlyph, UserGlyph, PrinterIcon, EyeIcon } from "../icons";
 import { useFiles } from "../FilesContext";
-
-// ── Settings display helpers ──────────────────────────────────────────────────
 
 function sidednessLabel(value) {
 	switch (value) {
@@ -69,7 +66,7 @@ function FileThumb({ file }) {
 	);
 }
 
-function FilePreview({ file, index, onPreview, onPrint }) {
+function FilePreview({ file, index, onPreview, onPrint, showPreview }) {
 	const settings = file.settings || {};
 	return (
 		<div className="file-preview">
@@ -78,7 +75,7 @@ function FilePreview({ file, index, onPreview, onPrint }) {
 				<span className="file-preview__name" title={file.name}>{file.name}</span>
 			</div>
 			<div className="file-preview__content">
-				<FileThumb file={file} />
+				{showPreview && <FileThumb file={file} />}
 				<div className="file-preview__settings">
 					{fileSettingRows(settings).map((row) => (
 						<div key={row.label} className="receipt-row">
@@ -120,7 +117,7 @@ function FilePreview({ file, index, onPreview, onPrint }) {
 // `headerActions` is an optional node (decline / mark-complete buttons) rendered
 // beside the title. Per-file preview/print handlers, when provided, render
 // action buttons under each file.
-function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile }) {
+function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showPreview = true }) {
 	const files = entry.files || [];
 	const cost = entry.cost;
 
@@ -228,6 +225,7 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile }) {
 								index={index}
 								onPreview={onPreviewFile}
 								onPrint={onPrintFile}
+								showPreview={showPreview}
 							/>
 						))}
 					</div>

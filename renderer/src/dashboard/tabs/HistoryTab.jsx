@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { transformJob } from "../jobUtils";
 import ListColumn from "../components/ListColumn";
 import WelcomePane from "../components/WelcomePane";
@@ -9,8 +9,7 @@ function formatHistoryDate(isoString) {
 	return new Date(isoString).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-// History tab: past (completed/cancelled) jobs fetched from GET /api/history.
-// Re-fetched on each visit since navigating tabs remounts the route.
+//past (completed/cancelled) jobs fetched from GET /api/history.
 function HistoryTab() {
 	const [entries, setEntries] = useState([]);
 	const [loading, setLoading] = useState(true);
@@ -80,7 +79,7 @@ function HistoryTab() {
 
 			<div className="db-detail">
 				{selectedEntry ? (
-					<JobDetailCard entry={selectedEntry} />
+					<JobDetailCard entry={selectedEntry} showPreview={false}/>
 				) : (
 					<WelcomePane />
 				)}
