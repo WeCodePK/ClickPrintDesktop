@@ -1923,9 +1923,16 @@ body,
 	overflow-y: auto;
 }
 
-/* Price list row: name + meta on the left, rate on the right. */
+/* Price list row: name + meta on the left, rate + delete icon on the right. */
 .db-entry--price {
 	justify-content: space-between;
+}
+
+.db-entry__price-actions {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	gap: 8px;
 }
 
 .db-detail__empty {
@@ -1978,7 +1985,7 @@ body,
 	display: block;
 	margin-top: 6px;
 	font-size: 11px;
-	color: var(--color-text-muted);
+	color: var(--color-accent);
 }
 
 .form-error {
@@ -1990,6 +1997,37 @@ body,
 	color: var(--color-accent);
 	font-size: 12.5px;
 	font-weight: 600;
+}
+
+.form-success {
+	margin-bottom: 16px;
+	padding: 10px 14px;
+	border-radius: var(--radius-md);
+	background: rgba(0, 217, 163, 0.15);
+	border: 1px solid var(--color-primary);
+	color: var(--color-primary-dark);
+	font-size: 12.5px;
+	font-weight: 600;
+}
+
+.db-entry__delete-btn {
+	background: none;
+	border: none;
+	padding: 10px;
+	padding-left: 25px;
+	border-radius: var(--radius-sm);
+	color: var(--color-text-muted);
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: all var(--transition-fast);
+}
+
+.db-entry__delete-btn:hover {
+	color: var(--color-accent);
+	background: rgba(255, 79, 0, 0.15);
+	box-shadow: 0 0 10px rgba(255, 79, 0, 0.5);
 }
 
 .segmented {
@@ -2025,6 +2063,17 @@ body,
 	border-color: var(--color-primary);
 	background: rgba(0, 230, 173, 0.1);
 	color: var(--color-primary);
+}
+
+/* The last remaining selected option in a capability group — clicking it is a
+   no-op (see MultiSegmented), so the cursor signals that rather than inviting
+   another click. */
+.segmented__btn--locked {
+	cursor: not-allowed;
+}
+
+.segmented__btn--locked:hover {
+	border-color: inherit;
 }
 
 /* Actions styling */
@@ -2570,6 +2619,7 @@ body,
 	word-break: break-word;
 	display: -webkit-box;
 	-webkit-line-clamp: 2;
+	line-clamp: 2;
 	-webkit-box-orient: vertical;
 	overflow: hidden;
 }
