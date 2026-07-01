@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { useJobs } from "../JobsContext";
 import { ACTIVE_STATUSES } from "../jobUtils";
 import ListColumn from "../components/ListColumn";
@@ -27,7 +27,13 @@ function PrintJobsTab() {
 	// job gets a special dashed highlight below.
 	const entries = printJobs
 		.filter((j) => ACTIVE_STATUSES.has(j.rawStatus))
-		.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+		.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+		.map((job) => {
+			const n = job.createdBy?.number || "";
+			const sn = n.startsWith("0") ? n.slice(1) : n;
+			const formattedNumber = "0".concat(sn.slice(2));
+			return { ...job, formattedNumber };
+		});
 
 	// Apply the phone-number search (also matches the customer name). The queue
 	// numbering / "top" highlight still reflect each job's position in the full
@@ -35,7 +41,7 @@ function PrintJobsTab() {
 	const q = query.trim().toLowerCase();
 	const visible = q
 		? entries.filter((e) =>
-				`${e.createdBy?.number || ""} ${e.createdBy?.name || ""}`.toLowerCase().includes(q)
+				`${e.formattedNumber || ""} ${e.createdBy?.name || ""}`.toLowerCase().includes(q)
 			)
 		: entries;
 
@@ -165,7 +171,7 @@ function PrintJobsTab() {
 								<span className="db-entry__qnum">{queueIndex + 1}</span>
 								<div className="db-entry__info">
 									<div className="db-entry__line">
-										<span className="db-entry__name">{entry.createdBy?.number || entry.createdBy?.name || "Unknown number"}</span>
+										<span className="db-entry__name">{entry.formattedNumber || "Unknown number"}</span>
 										<span className="db-entry__price">Rs. {entry.price}</span>
 									</div>
 									<div className="db-entry__line">
