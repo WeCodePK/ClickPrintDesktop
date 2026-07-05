@@ -332,7 +332,7 @@ function stopJobsSse() {
 function _connectSse() {
 	if (!getAuth().token || !_onJobsUpdate) return;
 
-	const endpoint = `${API_BASE_URL}/events`;
+	const endpoint = `${API_BASE_URL}/api/events`;
 
 	_sse = new EventSource(endpoint, {
 		headers: { Authorization: `Bearer ${getAuth().token}` },
