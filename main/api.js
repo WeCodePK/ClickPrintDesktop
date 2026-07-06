@@ -3,6 +3,17 @@ const { getAuth, setAuth, setJobs, clearAuth } = require("./state");
 
 const API_BASE_URL = "https://clickprintbackend.wckd.pk"
 
+// The backend now nests each route's payload under a named key inside `data`
+// (e.g. { data: { jobs: [...] } } instead of { data: [...] }). Unwrap that named
+// key so callers keep receiving the bare value as `data`, matching the previous
+// response shape. Untouched when the response failed or the key isn't present.
+function unwrap(payload, key) {
+	if (payload && payload.success && payload.data && typeof payload.data === "object" && key in payload.data) {
+		return { ...payload, data: payload.data[key] };
+	}
+	return payload;
+}
+
 async function sendOtp(number) {
 	try {
 		const response = await fetch(`${API_BASE_URL}/api/auth/otp`, {
@@ -71,7 +82,7 @@ async function fetchJobs() {
 		Authorization: `Bearer ${getAuth().token}`,
 	},
 		});
-		return await response.json();
+		return unwrap(await response.json(), "jobs");
 	} catch (error) {
 		console.error("[API] fetchJobs error:", error);
 		return {
@@ -94,7 +105,7 @@ async function updateJobStatus(jobId, status) {
 			},
 			body: JSON.stringify({ status }),
 		});
-		return await response.json();
+		return unwrap(await response.json(), "job");
 	} catch (error) {
 		console.error(`[API] updateJobStatus ${jobId} error:`, error);
 		return { success: false };
@@ -187,7 +198,7 @@ async function fetchPrices() {
 		const response = await fetch(`${API_BASE_URL}/api/shops/${shopId}`, {
 			headers: authHeaders(),
 		});
-		return await response.json();
+		return unwrap(await response.json(), "shop");
 	} catch (error) {
 		console.error("[API] fetchPrices error:", error);
 		return apiError(error);
@@ -203,7 +214,7 @@ async function createPrice(price) {
 			headers: authHeaders(),
 			body: JSON.stringify(price),
 		});
-		return await response.json();
+		return unwrap(await response.json(), "price");
 	} catch (error) {
 		console.error("[API] createPrice error:", error);
 		return apiError(error);
@@ -219,7 +230,7 @@ async function updatePrice(priceId, price) {
 			headers: authHeaders(),
 			body: JSON.stringify(price),
 		});
-		return await response.json();
+		return unwrap(await response.json(), "price");
 	} catch (error) {
 		console.error("[API] updatePrice error:", error);
 		return apiError(error);
@@ -234,7 +245,7 @@ async function deletePrice(priceId) {
 			method: "DELETE",
 			headers: authHeaders(),
 		});
-		return await response.json();
+		return unwrap(await response.json(), "price");
 	} catch (error) {
 		console.error("[API] deletePrice error:", error);
 		return apiError(error);
@@ -249,7 +260,7 @@ async function fetchHistory() {
 				Authorization: `Bearer ${getAuth().token}`,
 			},
 		});
-		return await response.json();
+		return unwrap(await response.json(), "history");
 	} catch (error) {
 		console.error("[API] fetchHistory error:", error);
 		return {
@@ -273,7 +284,7 @@ async function updateShop(shopId, data) {
 			body: JSON.stringify(data),
 		});
 
-		return await response.json();
+		return unwrap(await response.json(), "shop");
 	} catch (error) {
 		console.error("[API] updateShop error:", error);
 		return {

@@ -98,8 +98,11 @@ async function _runLimited(items, limit, worker) {
 function syncJobFiles(jobs) {
 	const ids = new Set();
 	for (const job of jobs || []) {
-		for (const file of job.files || []) {
-			if (file.fileId) ids.add(file.fileId);
+		for (const entry of job.files || []) {
+			// New job schema nests the document under `entry.file._id`; fall back to
+			// the older flat `entry.fileId` shape just in case.
+			const fileId = entry.file?._id || entry.fileId;
+			if (fileId) ids.add(fileId);
 		}
 	}
 	if (ids.size === 0) return;
