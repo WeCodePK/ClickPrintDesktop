@@ -1,7 +1,5 @@
-import React from "react";
 import { LockGlyph } from "../icons";
 
-// Default right-hand pane shown when no entry is selected.
 function WelcomePane() {
 	return (
 		<div className="db-welcome">

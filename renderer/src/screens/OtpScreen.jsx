@@ -19,12 +19,10 @@ function OtpScreen({ phoneNumber, onBack, onVerified }) {
 		return () => clearInterval(interval);
 	}, [timer]);
 
-	// ── Format phone number for display ──
 	const formattedPhone = phoneNumber
 		? `+${phoneNumber.slice(0, 2)} ${phoneNumber.slice(2)}`
 		: "";
 
-	// ── Format timer as MM:SS ──
 	const formatTimer = (seconds) => {
 		const mins = Math.floor(seconds / 60)
 			.toString()
@@ -32,8 +30,7 @@ function OtpScreen({ phoneNumber, onBack, onVerified }) {
 		const secs = (seconds % 60).toString().padStart(2, "0");
 		return `${mins}:${secs}`;
 	};
-
-	// ── Handle digit input ──
+	
 	const handleCodeChange = useCallback(
 		(value, index) => {
 			if (value.length > 1) return;
@@ -56,7 +53,6 @@ function OtpScreen({ phoneNumber, onBack, onVerified }) {
 		[codes, verifying]
 	);
 
-	// ── Handle backspace ──
 	const handleKeyDown = (e, index) => {
 		if (e.key === "Backspace" && !codes[index] && index > 0) {
 			inputRefs.current[index - 1]?.focus();

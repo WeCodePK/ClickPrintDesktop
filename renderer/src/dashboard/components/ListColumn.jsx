@@ -1,7 +1,3 @@
-import React from "react";
-
-// Middle column shell shared by every tab: the header (title + optional count /
-// action) and the scrollable entries area. Each tab supplies its own entry rows.
 function ListColumn({ title, count, action, children }) {
 	return (
 		<div className="db-list">

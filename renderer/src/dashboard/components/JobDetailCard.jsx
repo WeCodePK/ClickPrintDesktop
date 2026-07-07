@@ -16,7 +16,6 @@ function sidednessLabel(value) {
 	}
 }
 
-// Primary settings — shown as label/value rows next to the thumbnail.
 function fileSettingRows(settings = {}) {
 	return [
 		{ label: "Print Mode", value: settings.color ? "Color" : "Black & White" },
@@ -26,8 +25,6 @@ function fileSettingRows(settings = {}) {
 	].filter((row) => row.value != null && row.value !== "");
 }
 
-// Secondary, less-important settings — shown inline (pipe-separated) in a muted
-// pill below the row: "Copies: 1× | Pages/Sheet: 1 | Range: All pages".
 function fileMinorFields(settings = {}) {
 	return [
 		{ label: "Copies", value: `${settings.numberOfCopies || 1}×` },
@@ -147,16 +144,13 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, pr
 	);
 }
 
-// ── Detail card ───────────────────────────────────────────────────────────────
-// Full-height quadrant layout shared by the Print Jobs and History tabs:
+//  Detail card shared by the Print Jobs and History tabs:
 //   ┌────────────┬──────────────────┐
 //   │ Job detail │                  │
-//   ├────────────┤   File previews  │  (right column spans both rows, scrolls)
+//   ├────────────┤   File previews  │
 //   │    Cost    │                  │
 //   └────────────┴──────────────────┘
-// `headerActions` is an optional node (decline / mark-complete buttons) rendered
-// beside the title. Per-file preview/print handlers, when provided, render
-// action buttons under each file.
+
 function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showPreview = true, printedFileIds, printingAll, printers, selectedPrinterName, onPrinterMenuOpen }) {
 	const files = entry.files || [];
 	const cost = entry.cost;

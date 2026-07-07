@@ -43,7 +43,6 @@ function LoginScreen({ onOtpSent }) {
 	return (
 		<div className="screen">
 			<div style={{ marginTop: "40px" }}>
-				{/* Logo / Brand Mark */}
 				<div
 					style={{
 						display: "flex",
@@ -103,7 +102,6 @@ function LoginScreen({ onOtpSent }) {
 							placeholder="3012345678"
 							value={phone}
 							onChange={(e) => {
-								// Only allow digits
 								const val = e.target.value.replace(/\D/g, "");
 								setPhone(val);
 								setError("");

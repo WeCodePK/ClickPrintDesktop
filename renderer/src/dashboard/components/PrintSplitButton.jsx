@@ -2,10 +2,6 @@ import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDownIcon, CheckIcon } from "../icons";
 
-// Split "print" button: the left part prints with the operator's selected
-// (default) printer; the right chevron opens a dropdown to print this job to a
-// different printer for this one action. `onPrint(deviceName)` is called with
-// `undefined` for the default, or a printer name for an override.
 function PrintSplitButton({
 	onPrint,
 	onOpen,
@@ -27,7 +23,7 @@ function PrintSplitButton({
 		printers.find((p) => p.name === selectedName)?.displayName || selectedName || "System default";
 
 	const openMenu = () => {
-		onOpen?.(); // refresh the printer list on open (fire-and-forget)
+		onOpen?.();
 		const rect = rowRef.current?.getBoundingClientRect();
 		if (rect) setPos({ top: rect.bottom + 6, right: window.innerWidth - rect.right });
 		setOpen(true);

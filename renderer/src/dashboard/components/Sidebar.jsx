@@ -1,4 +1,3 @@
-import React from "react";
 import { NavLink } from "react-router-dom";
 import {
 	HomeIcon,
@@ -15,13 +14,11 @@ const TABS = [
 	{ to: "history", label: "History", Icon: HistoryIcon },
 ];
 
-// Left vertical navigation (WhatsApp-style). Each item is a router NavLink so the
-// active state follows the URL.
+// Left vertical navigation (WhatsApp-style). Each item is a router NavLink so the state follows the URL.
 function Sidebar() {
 	return (
 		<nav className="db-sidebar">
 			<div className="db-sidebar__top">
-				{/* Home / Dashboard icon at top (replacing avatar initials) */}
 				<div className="tooltip-wrapper">
 					<NavLink
 						to="home"
@@ -51,7 +48,7 @@ function Sidebar() {
 				</div>
 			</div>
 
-			{/* Bottom settings & power/logout icons */}
+			{/* Bottom settings & logout icon */}
 			<div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "auto", width: "100%", alignItems: "center" }}>
 				<div className="tooltip-wrapper">
 					<NavLink

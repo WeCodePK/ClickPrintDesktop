@@ -1,6 +1,3 @@
-import React from "react";
-
-// Lightweight modal confirmation. Clicking the backdrop or Cancel dismisses it.
 function ConfirmDialog({ title, message, confirmLabel = "Confirm", cancelLabel = "Cancel", danger, onConfirm, onCancel }) {
 	return (
 		<div className="modal-overlay" onClick={onCancel}>

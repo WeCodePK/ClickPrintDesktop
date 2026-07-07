@@ -1,5 +1,3 @@
-// ── Job status mapping helpers ────────────────────────────────────────────────
-// "queued" = acknowledged by this app, waiting to be printed (still active).
 export const ACTIVE_STATUSES = new Set(["draft", "submitted", "queued", "processing", "printing"]);
 
 export function mapStatus(serverStatus) {

@@ -3,7 +3,6 @@ import ListColumn from "../components/ListColumn";
 import WelcomePane from "../components/WelcomePane";
 import { PrinterIcon, PaperIcon, CheckIcon, RefreshIcon } from "../icons";
 
-// A Windows printer status of 0 means idle / ready; anything else needs a look.
 function statusLabel(status) {
 	return status === 0 ? "Ready" : "Check printer";
 }

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
+import { createContext, useContext, useState, useEffect } from "react";
 
 // Tracks the download status of job files. The main process downloads files in
 // the background as jobs arrive and pushes per-file status updates over the

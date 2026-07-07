@@ -9,7 +9,6 @@ function formatHistoryDate(isoString) {
 	return new Date(isoString).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-//past (completed/cancelled) jobs fetched from GET /api/history.
 function HistoryTab() {
 	const [entries, setEntries] = useState([]);
 	const [loading, setLoading] = useState(true);
