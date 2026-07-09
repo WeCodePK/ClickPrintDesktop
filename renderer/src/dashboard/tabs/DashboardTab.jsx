@@ -180,9 +180,8 @@ function TotalsPanel({ stats }) {
 
 // Dashboard tab — analytics computed from GET /api/history.
 function DashboardTab() {
-	const { autoPrintEnabled, queueCount } = useAutoPrint();
+	const { autoPrintEnabled, queueCount, selectedPrinter: printer } = useAutoPrint();
 	const [stats, setStats] = useState(null);
-	const [printer, setPrinter] = useState(null);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState(null);
 
@@ -190,11 +189,7 @@ function DashboardTab() {
 		setLoading(true);
 		setError(null);
 		try {
-			const [result, selected] = await Promise.all([
-				window.electronAPI.fetchHistory(),
-				window.electronAPI.getSelectedPrinter(),
-			]);
-			setPrinter(selected || null);
+			const result = await window.electronAPI.fetchHistory();
 			if (result.success) {
 				setStats(computeStats(result.data || []));
 			} else {

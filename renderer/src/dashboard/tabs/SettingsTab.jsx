@@ -117,6 +117,15 @@ function PriceForm({ price, error, saving, onSave, onCancel }) {
 			</div>
 
 			<div className="form-field">
+				<label className="form-label">Paper Size</label>
+				<select className="form-input" value={pageType} onChange={(e) => setPageType(e.target.value)}>
+					{PAGE_TYPES.map((pt) => (
+						<option key={pt} value={pt}>{pt}</option>
+					))}
+				</select>
+			</div>
+
+			<div className="form-field">
 				<label className="form-label">Color</label>
 				<Segmented
 					value={colored}
@@ -126,15 +135,6 @@ function PriceForm({ price, error, saving, onSave, onCancel }) {
 						{ label: "Color", value: true, activeClass: "segmented__btn--colorful" },
 					]}
 				/>
-			</div>
-
-			<div className="form-field">
-				<label className="form-label">Paper Size</label>
-				<select className="form-input" value={pageType} onChange={(e) => setPageType(e.target.value)}>
-					{PAGE_TYPES.map((pt) => (
-						<option key={pt} value={pt}>{pt}</option>
-					))}
-				</select>
 			</div>
 
 			<div className="form-field">
@@ -595,19 +595,15 @@ function ShopProfileSettings() {
 // turned ON when a real printer is selected (not Microsoft Print to PDF), and
 // turning it OFF while a queue is draining asks for confirmation.
 function AutomationSettings() {
-	const { autoPrintEnabled, enableAutoPrint, disableAutoPrint, queueCount } = useAutoPrint();
-	const [selectedPrinter, setSelectedPrinter] = useState(null);
-	const [loaded, setLoaded] = useState(false);
+	const { autoPrintEnabled, enableAutoPrint, disableAutoPrint, queueCount, selectedPrinter, printersReady, refreshPrinterState } = useAutoPrint();
 	const [confirmOff, setConfirmOff] = useState(false);
 
+	// Refresh the validated printer state when entering this section.
 	useEffect(() => {
-		window.electronAPI
-			.getSelectedPrinter()
-			.then((p) => setSelectedPrinter(p || null))
-			.catch(() => setSelectedPrinter(null))
-			.finally(() => setLoaded(true));
-	}, []);
+		refreshPrinterState();
+	}, [refreshPrinterState]);
 
+	const loaded = printersReady;
 	const isPdf = /print to pdf/i.test(selectedPrinter?.name || "");
 	const canEnable = !!selectedPrinter && !isPdf;
 

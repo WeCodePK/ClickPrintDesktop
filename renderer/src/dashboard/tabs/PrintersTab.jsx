@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import ListColumn from "../components/ListColumn";
 import WelcomePane from "../components/WelcomePane";
+import { useAutoPrint } from "../AutoPrintContext";
 import { PrinterIcon, PaperIcon, CheckIcon, RefreshIcon } from "../icons";
 
 function statusLabel(status) {
@@ -10,6 +11,7 @@ function statusLabel(status) {
 // Printers tab: real connected printers (via webContents.getPrintersAsync in the
 // main process) with test-print and "select as default" actions.
 function PrintersTab() {
+	const { refreshPrinterState } = useAutoPrint();
 	const [printers, setPrinters] = useState([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState(null);
@@ -66,6 +68,7 @@ function PrintersTab() {
 			});
 			if (!result?.success) throw new Error(result?.message || "save failed");
 			setChosen(printer.name);
+			refreshPrinterState(); // propagate the new default to the dashboard/auto-print
 		} catch (err) {
 			console.error("[Renderer] failed to save selected printer:", err);
 		} finally {

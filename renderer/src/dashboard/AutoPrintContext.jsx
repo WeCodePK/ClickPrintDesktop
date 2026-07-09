@@ -33,10 +33,13 @@ export function AutoPrintProvider({ children }) {
 	const [failedFiles, setFailedFiles] = useState({}); // ephemeral, per session
 	const [busyJobs, setBusyJobs] = useState({}); // manual "print all" in flight
 	const [requeuePrompt, setRequeuePrompt] = useState(null); // jobIds pending launch re-queue
+	const [selectedPrinter, setSelectedPrinter] = useState(null); // validated saved default
+	const [printersReady, setPrintersReady] = useState(false); // first printer check done
 
 	const busyRef = useRef(false); // guards the auto processor against re-entrancy
 	const seenRef = useRef(new Set()); // jobIds already considered for enqueue
 	const initedRef = useRef(false); // launch handling done
+	const firstCheckRef = useRef(true); // gates one-time auto-print hydration
 	const [tick, setTick] = useState(0); // nudges the processor after async work
 
 	// ── printed-progress persistence + reconciliation ──────────────────────────
@@ -62,14 +65,50 @@ export function AutoPrintProvider({ children }) {
 		});
 	}, [printJobs]);
 
-	// ── hydrate the persisted auto-print flag ───────────────────────────────────
-	useEffect(() => {
-		window.electronAPI
-			.getAutoPrint()
-			.then((v) => setEnabled(!!v))
-			.catch((err) => console.warn("[AutoPrint] failed to load setting:", err))
-			.finally(() => setHydrated(true));
+	// ── printer validation + auto-print hydration ───────────────────────────────
+	// Polls the live printer list and the saved default. If the selected printer
+	// has gone (disconnected / offline), it is cleared and automated printing is
+	// forced off — auto-print can't run without a real printer. Also the single
+	// source of truth for the currently-selected printer across the dashboard.
+	const checkPrinters = useCallback(async () => {
+		try {
+			const [list, saved, ap] = await Promise.all([
+				window.electronAPI.listPrinters(),
+				window.electronAPI.getSelectedPrinter(),
+				window.electronAPI.getAutoPrint(),
+			]);
+			const online = list?.success ? list.data || [] : [];
+			// Only treat the printer as gone when we have an authoritative list.
+			const gone = list?.success && saved && !online.some((p) => p.name === saved.name);
+
+			if (gone) {
+				console.warn("[AutoPrint] selected printer offline — clearing:", saved.name);
+				await window.electronAPI.setSelectedPrinter(null);
+				await window.electronAPI.setAutoPrint(false);
+				setSelectedPrinter(null);
+				setEnabled(false);
+				setPaused(false);
+				setQueueIds([]); // nothing to auto-print without a printer
+			} else {
+				setSelectedPrinter(saved || null);
+				// Hydrate the enabled flag from the store once; after that it's owned
+				// by the toggle + gone-detection so polling can't clobber a toggle.
+				if (firstCheckRef.current) setEnabled(!!ap);
+			}
+		} catch (err) {
+			console.error("[AutoPrint] printer check failed:", err);
+		} finally {
+			firstCheckRef.current = false;
+			setPrintersReady(true);
+			setHydrated(true);
+		}
 	}, []);
+
+	useEffect(() => {
+		checkPrinters();
+		const id = setInterval(checkPrinters, 15000);
+		return () => clearInterval(id);
+	}, [checkPrinters]);
 
 	// ── shared print progress helpers ───────────────────────────────────────────
 	const isFilePrinted = useCallback((jobId, fileId) => !!printedFiles[jobId]?.[fileId], [printedFiles]);
@@ -279,6 +318,9 @@ export function AutoPrintProvider({ children }) {
 		printAllManual,
 		clearJobPrinted,
 		queueInfoFor,
+		selectedPrinter,
+		printersReady,
+		refreshPrinterState: checkPrinters,
 	};
 
 	return (
