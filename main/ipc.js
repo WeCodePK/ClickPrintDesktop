@@ -16,7 +16,7 @@ const {
 	startJobsSse,
 	stopJobsSse,
 } = require("./api");
-const { syncJobFiles, getStatusMap, setNotifier, openFile, printFile } = require("./files");
+const { syncJobFiles, getStatusMap, setNotifier, openFile, printFile, deleteJobFiles } = require("./files");
 const { listPrinters, printTestPage } = require("./printers");
 const store = require("./store");
 
@@ -119,6 +119,17 @@ function registerIpcHandlers(getMainWindow) {
 
 	ipcMain.handle("files:status", async () => {
 		return getStatusMap();
+	});
+
+	ipcMain.handle("files:delete-job-files", async (_event, fileIds) => {
+		console.log(`[IPC] files:delete-job-files → ${(fileIds || []).length} file(s)`);
+		try {
+			await deleteJobFiles(fileIds);
+			return { success: true };
+		} catch (error) {
+			console.error("[IPC] files:delete-job-files error:", error.message);
+			return { success: false, message: error.message };
+		}
 	});
 
 	ipcMain.handle("files:open", async (_event, fileId) => {

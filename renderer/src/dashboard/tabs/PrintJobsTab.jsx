@@ -26,7 +26,7 @@ function PrintJobsTab() {
 		busyJobs,
 		printFileManual,
 		printAllManual,
-		clearJobPrinted,
+		cleanupJobFiles,
 	} = useAutoPrint();
 
 	const [selectedId, setSelectedId] = useState(null);
@@ -98,7 +98,7 @@ function PrintJobsTab() {
 		try {
 			const result = await window.electronAPI.updateJobStatus(job._id, "cancelled");
 			if (!result?.success) throw new Error(result?.message || "request failed");
-			clearJobPrinted(job._id);
+			await cleanupJobFiles(job);
 		} catch (err) {
 			console.error("[Renderer] failed to cancel job:", err);
 			revert();
@@ -114,7 +114,7 @@ function PrintJobsTab() {
 		try {
 			const result = await window.electronAPI.updateJobStatus(job._id, "completed");
 			if (!result?.success) throw new Error(result?.message || "request failed");
-			clearJobPrinted(job._id);
+			await cleanupJobFiles(job);
 		} catch (err) {
 			console.error("[Renderer] failed to mark job complete:", err);
 			revert();

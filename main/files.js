@@ -111,6 +111,27 @@ function syncJobFiles(jobs) {
 	);
 }
 
+// Removes a cached file from disk and clears its status entry. Best-effort: a
+// missing file (already gone / never downloaded) is not an error.
+async function deleteFile(fileId) {
+	if (!fileId) return;
+	try {
+		await fsp.unlink(localPath(fileId));
+		console.log(`[Files] deleted ${fileId}`);
+	} catch (error) {
+		if (error.code !== "ENOENT") console.error(`[Files] failed to delete ${fileId}:`, error.message);
+	} finally {
+		delete _status[fileId];
+	}
+}
+
+// Deletes every cached file for a job once it reaches a terminal state
+// (completed/cancelled). Files aren't previewed or reused anywhere past that
+// point (History shows metadata only), so there's no reason to keep them.
+async function deleteJobFiles(fileIds) {
+	await Promise.all((fileIds || []).map(deleteFile));
+}
+
 // Opens a cached file in the OS default application (e.g. the system PDF viewer).
 async function openFile(fileId) {
 	await ensureFile(fileId);
@@ -258,6 +279,7 @@ module.exports = {
 	setNotifier,
 	openFile,
 	printFile,
+	deleteJobFiles,
 	registerFileSchemePrivileges,
 	registerFileProtocol,
 };

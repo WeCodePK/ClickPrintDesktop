@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	fileUrl: (fileId) => `clickfile://file/${fileId}`,
 	// Open a cached file in the OS default viewer / native print dialog.
 	openFile: (fileId) => ipcRenderer.invoke("files:open", fileId),
+	// Removes cached files for a job once it reaches a terminal state.
+	deleteJobFiles: (fileIds) => ipcRenderer.invoke("files:delete-job-files", fileIds),
 	printFile: (fileId, settings, deviceName) => ipcRenderer.invoke("files:print", fileId, settings, deviceName),
 
 	// Printers

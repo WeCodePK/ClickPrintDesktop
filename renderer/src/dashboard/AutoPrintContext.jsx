@@ -126,6 +126,22 @@ export function AutoPrintProvider({ children }) {
 		});
 	}, []);
 
+	// A job's cached files are only ever read while it's active (previews, print).
+	// Once it reaches a terminal state (completed/cancelled) they're never touched
+	// again — History shows metadata only — so delete them from disk to avoid
+	// piling up in userData indefinitely. Best-effort: logged, never surfaced.
+	const cleanupJobFiles = useCallback(async (job) => {
+		clearJobPrinted(job._id);
+		const fileIds = (job.files || []).map((f) => f.fileId).filter(Boolean);
+		if (fileIds.length === 0) return;
+		try {
+			const result = await window.electronAPI.deleteJobFiles(fileIds);
+			if (!result?.success) throw new Error(result?.message || "delete failed");
+		} catch (err) {
+			console.error("[AutoPrint] failed to delete job files:", err);
+		}
+	}, [clearJobPrinted]);
+
 	const setJobStatus = useCallback((jobId, status, rawStatus) => {
 		setPrintJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, status, rawStatus } : j)));
 	}, [setPrintJobs]);
@@ -147,12 +163,12 @@ export function AutoPrintProvider({ children }) {
 		try {
 			const result = await window.electronAPI.updateJobStatus(job._id, "completed");
 			if (!result?.success) throw new Error(result?.message || "request failed");
-			clearJobPrinted(job._id);
+			await cleanupJobFiles(job);
 		} catch (err) {
 			console.error("[AutoPrint] failed to complete job:", err);
 			setJobStatus(job._id, job.status, job.rawStatus); // revert
 		}
-	}, [setJobStatus, clearJobPrinted]);
+	}, [setJobStatus, cleanupJobFiles]);
 
 	const printOneFile = useCallback(async (jobId, file, deviceName) => {
 		setCurrent({ jobId, fileId: file.fileId });
@@ -317,6 +333,7 @@ export function AutoPrintProvider({ children }) {
 		printFileManual,
 		printAllManual,
 		clearJobPrinted,
+		cleanupJobFiles,
 		queueInfoFor,
 		selectedPrinter,
 		printersReady,
