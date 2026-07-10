@@ -3,13 +3,21 @@
   "version": "1.0.0",
   "description": "ClickPrint Desktop Application",
   "main": "main/main.js",
+  "author": {
+    "name": "WeCode",
+    "email": "support@wecode.com.pk",
+    "url": "https://wecode.com.pk/"
+  },
   "scripts": {
     "dev": "concurrently \"npm run dev:renderer\" \"npm run dev:electron\"",
     "dev:renderer": "cd renderer && npx vite --port 3001",
     "dev:electron": "node scripts/wait-for-renderer.js && electron .",
     "build:renderer": "cd renderer && npx vite build",
-    "build": "npm run build:renderer && electron-builder",
-    "start": "electron ."
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux"
   },
   "dependencies": {
     "electron-store": "^8.1.0",
@@ -26,15 +34,28 @@
     "vite": "^6.0.7"
   },
   "build": {
-    "appId": "com.clickprint.desktop",
-    "productName": "ClickPrint",
+    "appId": "com.clickprint.clickPrintDesktop",
+    "productName": "Click Print Desktop",
     "icon": "main/assets/icon.png",
     "files": [
-      "main/**/*",
-      "renderer/dist/**/*"
+      "**/*",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md}"
     ],
     "directories": {
       "output": "dist"
+    },
+    "win": {
+      "target": ["nsis", "portable"]
+    },
+    "mac": {
+      "target": ["dmg", "zip"]
+    },
+    "linux": {
+      "target": ["AppImage", "deb"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
   }
 }
