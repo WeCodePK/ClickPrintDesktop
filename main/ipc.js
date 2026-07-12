@@ -12,6 +12,8 @@ const {
 	fetchJobs,
 	fetchHistory,
 	updateJobStatus,
+	markJobFailed,
+	isJobFailing,
 	acknowledgeNewJobs,
 	startJobsSse,
 	stopJobsSse,
@@ -21,18 +23,31 @@ const { listPrinters, printTestPage } = require("./printers");
 const store = require("./store");
 
 function registerIpcHandlers(getMainWindow) {
+	// A job with an unrecoverable file download is marked "failed" on the backend
+	// and the renderer is told so it can drop it from the list/queue at once.
+	const handleJobFilesFailed = async (jobId) => {
+		const result = await markJobFailed(jobId);
+		if (!result?.success) return false; // let the next reconcile retry
+		const win = getMainWindow();
+		if (win && !win.isDestroyed()) win.webContents.send("jobs:file-failed", jobId);
+		return true;
+	};
+
 	// Starts the live jobs SSE stream and pushes every update to the renderer.
 	// Shared by fresh logins (auth:verify-otp) and restored sessions (startup).
 	const beginJobsSync = () => {
 		startJobsSse((jobs) => {
 			const win = getMainWindow();
-			console.log(`[IPC] Pushing jobs:updated — ${jobs.length} jobs, window=${win ? "open" : "null"}`);
+			// Hide jobs mid-transition to "failed" so their forced "printing" step
+			// never surfaces in the UI (they're removed via jobs:file-failed).
+			const visible = jobs.filter((j) => !isJobFailing(j._id));
+			console.log(`[IPC] Pushing jobs:updated — ${visible.length} jobs, window=${win ? "open" : "null"}`);
 			if (win && !win.isDestroyed()) {
-				win.webContents.send("jobs:updated", jobs);
+				win.webContents.send("jobs:updated", visible);
 			}
 			// Acknowledge new jobs to the backend and download their files.
 			acknowledgeNewJobs(jobs);
-			syncJobFiles(jobs);
+			syncJobFiles(jobs, handleJobFilesFailed);
 		});
 	};
 
@@ -82,7 +97,9 @@ function registerIpcHandlers(getMainWindow) {
 		// On initial load / reload, acknowledge new jobs and cache their files.
 		if (result.success) {
 			acknowledgeNewJobs(result.data);
-			syncJobFiles(result.data);
+			syncJobFiles(result.data, handleJobFilesFailed);
+			// Hide any jobs mid-transition to "failed" (see beginJobsSync).
+			return { ...result, data: result.data.filter((j) => !isJobFailing(j._id)) };
 		}
 		return result;
 	});

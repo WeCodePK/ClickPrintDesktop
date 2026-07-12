@@ -17,6 +17,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.on("jobs:updated", handler);
 		return () => ipcRenderer.removeListener("jobs:updated", handler);
 	},
+	// Fired when a job's file download fails unrecoverably and it was marked failed.
+	onJobFailed: (callback) => {
+		const handler = (_event, jobId) => callback(jobId);
+		ipcRenderer.on("jobs:file-failed", handler);
+		return () => ipcRenderer.removeListener("jobs:file-failed", handler);
+	},
 
 	// Files (downloaded + cached in the main process)
 	getFilesStatus: () => ipcRenderer.invoke("files:status"),

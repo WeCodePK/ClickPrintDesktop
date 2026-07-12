@@ -50,32 +50,41 @@ function _setStatus(fileId, status) {
 	if (_notify) _notify({ [fileId]: status });
 }
 
-// Ensures a single file is present on disk, downloading it if needed.
+// Ensures a single file is present on disk, downloading it if needed. Retries
+// the download once before giving up. Returns true on success, false on failure.
 async function ensureFile(fileId) {
-	if (!fileId) return;
+	if (!fileId) return false;
 
 	if (isReady(fileId)) {
 		if (_status[fileId] !== "ready") _setStatus(fileId, "ready");
-		return;
+		return true;
 	}
-	if (_inflight.has(fileId)) return;
+	// Another caller already owns this download; it will report the outcome, so
+	// don't start a second and optimistically assume success here.
+	if (_inflight.has(fileId)) return true;
 
 	_inflight.add(fileId);
 	_setStatus(fileId, "downloading");
 	try {
-		const { ok, buffer } = await fetchFileBuffer(fileId);
-		if (!ok || !buffer) throw new Error("download failed");
+		let attempt = await fetchFileBuffer(fileId);
+		if (!attempt.ok || !attempt.buffer) {
+			console.warn(`[Files] download failed for ${fileId}, retrying once…`);
+			attempt = await fetchFileBuffer(fileId);
+		}
+		if (!attempt.ok || !attempt.buffer) throw new Error("download failed");
 
 		// Write to a temp file then rename so a half-written file is never served.
 		const dest = localPath(fileId);
 		const tmp = `${dest}.part`;
-		await fsp.writeFile(tmp, Buffer.from(buffer));
+		await fsp.writeFile(tmp, Buffer.from(attempt.buffer));
 		await fsp.rename(tmp, dest);
 		_setStatus(fileId, "ready");
 		console.log(`[Files] downloaded ${fileId}`);
+		return true;
 	} catch (error) {
-		console.error(`[Files] failed to download ${fileId}:`, error.message);
+		console.error(`[Files] failed to download ${fileId} (after retry):`, error.message);
 		_setStatus(fileId, "error");
+		return false;
 	} finally {
 		_inflight.delete(fileId);
 	}
@@ -92,21 +101,56 @@ async function _runLimited(items, limit, worker) {
 	await Promise.all(runners);
 }
 
-// Collects every fileId referenced by the given jobs and downloads any that are
-// missing, in the background. Safe to call repeatedly (already-cached files and
-// in-flight downloads are skipped).
-function syncJobFiles(jobs) {
-	const ids = new Set();
-	for (const job of jobs || []) {
-		for (const entry of job.files || []) {
-			// New job schema nests the document under `entry.file._id`; fall back to
-			// the older flat `entry.fileId` shape just in case.
-			const fileId = entry.file?._id || entry.fileId;
-			if (fileId) ids.add(fileId);
+// Jobs already flagged failed (a download couldn't be fetched even after a
+// retry), so we don't re-download or re-notify on every reconcile.
+const _failedJobs = new Set();
+
+function _jobFileIds(job) {
+	const ids = [];
+	for (const entry of job.files || []) {
+		// New job schema nests the document under `entry.file._id`; fall back to the
+		// older flat `entry.fileId` shape just in case.
+		const fileId = entry.file?._id || entry.fileId;
+		if (fileId) ids.push(fileId);
+	}
+	return ids;
+}
+
+// Downloads all of a job's files. If any fail (after their one retry),
+// `onJobFailed(jobId)` is invoked so the caller can mark the job "failed" on the
+// backend. Only once that succeeds do we finalize (stop retrying + drop the
+// partial files) — if it fails we leave everything so the next reconcile retries.
+async function _syncOneJob(job, onJobFailed) {
+	const jobId = job._id;
+	const fileIds = _jobFileIds(job);
+	if (fileIds.length === 0) return;
+
+	const results = await Promise.all(fileIds.map((id) => ensureFile(id)));
+	if (results.every(Boolean) || _failedJobs.has(jobId)) return;
+
+	console.error(`[Files] job ${jobId} has a failed download → marking failed`);
+	let handled = true;
+	if (onJobFailed) {
+		try {
+			handled = await onJobFailed(jobId);
+		} catch (err) {
+			console.error(`[Files] onJobFailed(${jobId}) error:`, err.message);
+			handled = false;
 		}
 	}
-	if (ids.size === 0) return;
-	_runLimited([...ids], 4, ensureFile).catch((err) =>
+	if (handled) {
+		_failedJobs.add(jobId);
+		await deleteJobFiles(fileIds); // nothing will be printed; drop partial downloads
+	}
+}
+
+// Downloads every job's files in the background (bounded concurrency). Safe to
+// call repeatedly — cached/in-flight files and already-failed jobs are skipped.
+// `onJobFailed(jobId)` fires once per job that has an unrecoverable download.
+function syncJobFiles(jobs, onJobFailed) {
+	const pending = (jobs || []).filter((j) => !_failedJobs.has(j._id) && _jobFileIds(j).length > 0);
+	if (pending.length === 0) return;
+	_runLimited(pending, 3, (job) => _syncOneJob(job, onJobFailed)).catch((err) =>
 		console.error("[Files] syncJobFiles error:", err)
 	);
 }

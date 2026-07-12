@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { ACTIVE_STATUSES } from "./jobUtils";
 import { useJobs } from "./JobsContext";
 import ConfirmDialog from "./components/ConfirmDialog";
@@ -42,6 +43,20 @@ export function AutoPrintProvider({ children }) {
 	const firstCheckRef = useRef(true); // gates one-time auto-print hydration
 	const [tick, setTick] = useState(0); // nudges the processor after async work
 
+	// Live mirror of printJobs, so event listeners can read the current list
+	// without being re-subscribed on every job update.
+	const printJobsRef = useRef(printJobs);
+	printJobsRef.current = printJobs;
+
+	// Transient toast notifications (e.g. a job whose files failed to download).
+	const [toasts, setToasts] = useState([]);
+	const pushToast = useCallback((message) => {
+		const id = Date.now() + Math.random();
+		setToasts((t) => [...t, { id, message }]);
+		setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6000);
+	}, []);
+	const dismissToast = useCallback((id) => setToasts((t) => t.filter((x) => x.id !== id)), []);
+
 	// ── printed-progress persistence + reconciliation ──────────────────────────
 	useEffect(() => {
 		try {
@@ -62,6 +77,21 @@ export function AutoPrintProvider({ children }) {
 				else changed = true;
 			}
 			return changed ? next : prev;
+		});
+	}, [printJobs]);
+
+	// Keep the auto-print queue in sync with the live job list. A job that's no
+	// longer active — a customer cancelled it from their app, or it completed /
+	// failed — is dropped from the queue immediately so it never reaches the
+	// printer. (The processor also drops queue[0] when it turns terminal; this
+	// prunes jobs deeper in the queue too.)
+	useEffect(() => {
+		const activeIds = new Set(
+			printJobs.filter((j) => ACTIVE_STATUSES.has(j.rawStatus)).map((j) => j._id)
+		);
+		setQueueIds((q) => {
+			const next = q.filter((id) => activeIds.has(id));
+			return next.length === q.length ? q : next;
 		});
 	}, [printJobs]);
 
@@ -145,6 +175,29 @@ export function AutoPrintProvider({ children }) {
 	const setJobStatus = useCallback((jobId, status, rawStatus) => {
 		setPrintJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, status, rawStatus } : j)));
 	}, [setPrintJobs]);
+
+	// A job whose file download failed (even after retry) is marked "failed" on the
+	// backend by the main process. React here: drop it from the queue and mark it
+	// failed locally so it leaves the active list immediately (the next reconcile
+	// confirms it). Its cached files were already deleted in the main process.
+	useEffect(() => {
+		if (!window.electronAPI.onJobFailed) return;
+		return window.electronAPI.onJobFailed((jobId) => {
+			console.warn("[AutoPrint] job download failed — removing:", jobId);
+			const job = printJobsRef.current.find((j) => j._id === jobId);
+			const who = job?.createdBy?.name || job?.createdBy?.number || `#${String(jobId).slice(-6)}`;
+			pushToast(`Job (${who}) failed — files couldn’t be downloaded.`);
+			setQueueIds((q) => q.filter((id) => id !== jobId));
+			setFailedFiles((prev) => {
+				if (!prev[jobId]) return prev;
+				const next = { ...prev };
+				delete next[jobId];
+				return next;
+			});
+			clearJobPrinted(jobId);
+			setJobStatus(jobId, "completed", "failed");
+		});
+	}, [clearJobPrinted, setJobStatus, pushToast]);
 
 	// ── print primitives (used by both manual and auto paths) ───────────────────
 	const ensurePrintingStatus = useCallback(async (job) => {
@@ -352,6 +405,17 @@ export function AutoPrintProvider({ children }) {
 					onConfirm={confirmRequeue}
 					onCancel={dismissRequeue}
 				/>
+			)}
+			{toasts.length > 0 && createPortal(
+				<div className="toast-stack">
+					{toasts.map((t) => (
+						<div key={t.id} className="toast toast--error" role="alert">
+							<span className="toast__msg">{t.message}</span>
+							<button className="toast__close" onClick={() => dismissToast(t.id)} title="Dismiss">×</button>
+						</div>
+					))}
+				</div>,
+				document.body
 			)}
 		</AutoPrintContext.Provider>
 	);

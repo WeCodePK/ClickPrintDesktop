@@ -14,6 +14,19 @@ function unwrap(payload, key) {
 	return payload;
 }
 
+// Reads a response body as JSON without throwing. Gateways/proxies return HTML
+// error pages (e.g. a 502 "<!DOCTYPE html>…") that would otherwise blow up
+// JSON.parse — fall back to a clean failure object instead.
+async function readJson(response) {
+	const text = await response.text();
+	try {
+		return JSON.parse(text);
+	} catch {
+		console.error(`[API] non-JSON response (HTTP ${response.status})`);
+		return { success: false, message: `Server error (HTTP ${response.status}). Please try again.` };
+	}
+}
+
 async function sendOtp(number) {
 	try {
 		const response = await fetch(`${API_BASE_URL}/api/auth/otp`, {
@@ -22,7 +35,7 @@ async function sendOtp(number) {
 			body: JSON.stringify({ number, actor: "shop" }),
 		});
 
-		const data = await response.json();
+		const data = await readJson(response);
 
 		if (data.success) {
 			setAuth({ phoneNumber: number });
@@ -49,7 +62,7 @@ async function verifyOtp(code, number) {
 			body: JSON.stringify({ code, number }),
 		});
 
-		const data = await response.json();
+		const data = await readJson(response);
 
 		if (data.success) {
 			setAuth({
@@ -82,7 +95,7 @@ async function fetchJobs() {
 		Authorization: `Bearer ${getAuth().token}`,
 	},
 		});
-		return unwrap(await response.json(), "jobs");
+		return unwrap(await readJson(response), "jobs");
 	} catch (error) {
 		console.error("[API] fetchJobs error:", error);
 		return {
@@ -105,7 +118,7 @@ async function updateJobStatus(jobId, status) {
 			},
 			body: JSON.stringify({ status }),
 		});
-		return unwrap(await response.json(), "job");
+		return unwrap(await readJson(response), "job");
 	} catch (error) {
 		console.error(`[API] updateJobStatus ${jobId} error:`, error);
 		return { success: false };
@@ -117,6 +130,33 @@ function getAuthState() {
 }
 function clearAuthState() {
 	clearAuth();
+}
+
+// Jobs currently being transitioned to "failed". The backend only allows
+// queued → printing → failed, so we must step through "printing" — but the UI
+// must never show that intermediate state. Jobs flagged here are filtered out of
+// every push to the renderer (see isJobFailing); the UI removes them via the
+// explicit jobs:file-failed event instead.
+const _failingJobs = new Set();
+
+function isJobFailing(jobId) {
+	return _failingJobs.has(jobId);
+}
+
+// Marks a job "failed" on the backend — used when one of its files can't be
+// downloaded (even after a retry). Steps through the required "printing" status
+// first; the renderer never sees it (the job is already flagged as failing).
+async function markJobFailed(jobId) {
+	_failingJobs.add(jobId);
+	const printing = await updateJobStatus(jobId, "printing");
+	if (!printing?.success) {
+		console.error(`[API] job ${jobId}: could not transition to printing`);
+		return printing;
+	}
+	const result = await updateJobStatus(jobId, "failed");
+	if (result?.success) console.log(`[API] job ${jobId} marked failed (download error)`);
+	else console.error(`[API] job ${jobId}: could not transition to failed`);
+	return result;
 }
 
 // Jobs arrive from the backend as "submitted". We acknowledge receipt of each
@@ -143,6 +183,7 @@ function acknowledgeNewJobs(jobs) {
 // caller (files.js) can persist it to disk.
 async function fetchFileBuffer(fileId) {
 	try {
+		console.log(`[API] fetchFileBuffer ${fileId}`);
 		const response = await fetch(`${API_BASE_URL}/api/files/${fileId}`, {
 			headers: { Authorization: `Bearer ${getAuth().token}` },
 		});
@@ -198,7 +239,7 @@ async function fetchPrices() {
 		const response = await fetch(`${API_BASE_URL}/api/shops/${shopId}`, {
 			headers: authHeaders(),
 		});
-		return unwrap(await response.json(), "shop");
+		return unwrap(await readJson(response), "shop");
 	} catch (error) {
 		console.error("[API] fetchPrices error:", error);
 		return apiError(error);
@@ -214,7 +255,7 @@ async function createPrice(price) {
 			headers: authHeaders(),
 			body: JSON.stringify(price),
 		});
-		return unwrap(await response.json(), "price");
+		return unwrap(await readJson(response), "price");
 	} catch (error) {
 		console.error("[API] createPrice error:", error);
 		return apiError(error);
@@ -230,7 +271,7 @@ async function updatePrice(priceId, price) {
 			headers: authHeaders(),
 			body: JSON.stringify(price),
 		});
-		return unwrap(await response.json(), "price");
+		return unwrap(await readJson(response), "price");
 	} catch (error) {
 		console.error("[API] updatePrice error:", error);
 		return apiError(error);
@@ -245,7 +286,7 @@ async function deletePrice(priceId) {
 			method: "DELETE",
 			headers: authHeaders(),
 		});
-		return unwrap(await response.json(), "price");
+		return unwrap(await readJson(response), "price");
 	} catch (error) {
 		console.error("[API] deletePrice error:", error);
 		return apiError(error);
@@ -260,7 +301,7 @@ async function fetchHistory() {
 				Authorization: `Bearer ${getAuth().token}`,
 			},
 		});
-		return unwrap(await response.json(), "history");
+		return unwrap(await readJson(response), "history");
 	} catch (error) {
 		console.error("[API] fetchHistory error:", error);
 		return {
@@ -284,7 +325,7 @@ async function updateShop(shopId, data) {
 			body: JSON.stringify(data),
 		});
 
-		return unwrap(await response.json(), "shop");
+		return unwrap(await readJson(response), "shop");
 	} catch (error) {
 		console.error("[API] updateShop error:", error);
 		return {
@@ -306,7 +347,7 @@ async function pingShopStatus(shopId){
 				Authorization: `Bearer ${getAuth().token}`,
 			}
 		});
-		return await response.json();
+		return await readJson(response);
 	} 
 	catch (error) {
 		console.error("[API] pingShopStatus error:", error);
@@ -413,6 +454,8 @@ module.exports = {
 	fetchHistory,
 	fetchFileBuffer,
 	updateJobStatus,
+	markJobFailed,
+	isJobFailing,
 	acknowledgeNewJobs,
 	startJobsSse,
 	stopJobsSse,

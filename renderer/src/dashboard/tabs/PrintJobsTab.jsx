@@ -9,6 +9,11 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import PrintSplitButton from "../components/PrintSplitButton";
 import { CheckIcon, TrashIcon, SearchIcon, PrinterIcon, PauseIcon, PlayIcon } from "../icons";
 
+// Statuses from which the backend won't allow a direct jump to "completed" — the
+// job must pass through "printing" first. Marking one of these complete needs the
+// step-through path (see handleForceComplete).
+const PRE_PRINT_STATUSES = new Set(["draft", "submitted", "queued"]);
+
 // Print Jobs tab: active job queue on the left, job details on the right. Print
 // execution + progress live in AutoPrintContext (shared with the auto queue);
 // this tab renders the UI and drives the manual actions.
@@ -117,6 +122,27 @@ function PrintJobsTab() {
 			await cleanupJobFiles(job);
 		} catch (err) {
 			console.error("[Renderer] failed to mark job complete:", err);
+			revert();
+		}
+	};
+
+	// Completes a never-printed (queued) job. The backend requires
+	// queued → printing → completed, so we step through "printing". The UI jumps
+	// straight to completed (optimistically) so the intermediate state never shows.
+	const handleForceComplete = async () => {
+		const job = pendingComplete;
+		if (!job) return;
+		setPendingComplete(null);
+		setSelectedId(null);
+		const revert = applyStatus(job._id, "completed", "completed");
+		try {
+			const printing = await window.electronAPI.updateJobStatus(job._id, "printing");
+			if (!printing?.success) throw new Error(printing?.message || "printing transition failed");
+			const result = await window.electronAPI.updateJobStatus(job._id, "completed");
+			if (!result?.success) throw new Error(result?.message || "request failed");
+			await cleanupJobFiles(job);
+		} catch (err) {
+			console.error("[Renderer] failed to force-complete job:", err);
 			revert();
 		}
 	};
@@ -327,14 +353,32 @@ function PrintJobsTab() {
 			)}
 
 			{pendingComplete && (
-				<ConfirmDialog
-					title="Mark this job as complete?"
-					message={`Are you sure "${pendingComplete.fileName}" is done? This action can't be undone, and the customer will be notified that their print is ready.`}
-					confirmLabel="Yes, mark complete"
-					cancelLabel="Not yet"
-					onConfirm={handleConfirmComplete}
-					onCancel={() => setPendingComplete(null)}
-				/>
+				PRE_PRINT_STATUSES.has(pendingComplete.rawStatus) ? (
+					<div className="modal-overlay" onClick={() => setPendingComplete(null)}>
+						<div className="modal-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+							<h3 className="modal-title">Print before completing</h3>
+							<p className="modal-message">
+								“{pendingComplete.fileName}” hasn’t been printed yet, so it can’t be marked complete.
+								Print it first, then mark it complete.
+							</p>
+							<div className="modal-actions">
+								<button className="btn-gradient" onClick={() => setPendingComplete(null)}>Got it</button>
+							</div>
+							<button type="button" className="modal-subtle" onClick={handleForceComplete}>
+								Mark complete without printing
+							</button>
+						</div>
+					</div>
+				) : (
+					<ConfirmDialog
+						title="Mark this job as complete?"
+						message={`Are you sure "${pendingComplete.fileName}" is done? This action can't be undone, and the customer will be notified that their print is ready.`}
+						confirmLabel="Yes, mark complete"
+						cancelLabel="Not yet"
+						onConfirm={handleConfirmComplete}
+						onCancel={() => setPendingComplete(null)}
+					/>
+				)
 			)}
 		</>
 	);
