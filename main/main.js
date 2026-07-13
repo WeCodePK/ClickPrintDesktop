@@ -4,6 +4,24 @@ const { registerFileSchemePrivileges, registerFileProtocol } = require('./files'
 const { loadPersistedAuth } = require('./state');
 const { startOfflineWatcher } = require('./printers');
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
+const { autoUpdater } = require('electron-updater');
+
+//auto updater logs
+autoUpdater.on('error', (err) => {
+	console.error('Auto-updater error:', err);
+});
+autoUpdater.on('checking-for-update', () => {
+	console.log('Checking for updates...');
+});
+autoUpdater.on('update-available', (info) => {
+	console.log('Update available:', info);
+});
+autoUpdater.on('update-not-available', () => {
+	console.log('Update not available');
+});
+autoUpdater.on('update-downloaded', (info) => {
+	console.log(`Update ${info.version} downloaded, will install on restart`);
+});
 
 // Privileged scheme registration must happen before the app is ready.
 registerFileSchemePrivileges();
@@ -70,8 +88,6 @@ ipcMain.on("window:minimize", () => window?.minimize());
 ipcMain.on("window:maximize", () => window.isMaximized() ? window.unmaximize() : window?.maximize());
 
 app.whenReady().then(() => {
-	// Restore any saved session before handlers register (they check for a token
-	// to resume the live jobs sync on startup).
 	loadPersistedAuth();
 	registerFileProtocol();
 	createWindow();
@@ -79,6 +95,9 @@ app.whenReady().then(() => {
 	// Warm the printer offline-state cache and keep it fresh in the background so
 	// listing printers never blocks on a PowerShell spawn.
 	startOfflineWatcher();
+	if (app.isPackaged) {
+		autoUpdater.checkForUpdatesAndNotify();
+	}
 });
 
 app.on("window-all-closed", () => app.quit());

@@ -17,16 +17,21 @@
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux"
+    "build:linux": "electron-builder --linux",
+    "release-win": "dotenv -e .env -- electron-builder --publish always --win",
+    "release-mac": "dotenv -e .env -- electron-builder --publish always --mac",
+    "release-linux": "dotenv -e .env -- electron-builder --publish always --linux"
   },
   "dependencies": {
     "electron-store": "^8.1.0",
+    "electron-updater": "^6.8.9",
     "eventsource": "^1.1.2",
     "react-router-dom": "^7.18.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.2",
+    "dotenv-cli": "^11.0.0",
     "electron": "^33.3.1",
     "electron-builder": "^25.1.8",
     "react": "^18.3.1",
@@ -41,17 +46,31 @@
       "**/*",
       "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md}"
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "WeCodePK",
+      "repo": "ClickPrintDesktop"
+    },
     "directories": {
       "output": "dist"
     },
     "win": {
-      "target": ["nsis", "portable"]
+      "target": [
+        "nsis",
+        "portable"
+      ]
     },
     "mac": {
-      "target": ["dmg", "zip"]
+      "target": [
+        "dmg",
+        "zip"
+      ]
     },
     "linux": {
-      "target": ["AppImage", "deb"]
+      "target": [
+        "AppImage",
+        "deb"
+      ]
     },
     "nsis": {
       "oneClick": false,
