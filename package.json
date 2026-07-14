@@ -1,6 +1,6 @@
 {
   "name": "clickprint-desktop-app",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "ClickPrint Desktop Application",
   "main": "main/main.js",
   "author": {
@@ -35,6 +35,7 @@
     "dotenv-cli": "^11.0.0",
     "electron": "^33.3.1",
     "electron-builder": "^25.1.8",
+    "electron-icon-builder": "^2.0.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "vite": "^6.0.7"
@@ -42,7 +43,6 @@
   "build": {
     "appId": "com.clickprint.clickPrintDesktop",
     "productName": "Click Print Desktop",
-    "icon": "main/assets/icon.png",
     "files": [
       "**/*",
       "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md}"
@@ -60,19 +60,22 @@
         "nsis",
         "portable"
       ],
+      "icon": "build/icons/icon.ico",
       "artifactName": "${productName}-Setup.${ext}"
     },
     "mac": {
       "target": [
         "dmg",
         "zip"
-      ]
+      ],
+      "icon": "build/icons/icon.icns"
     },
     "linux": {
       "target": [
         "AppImage",
         "deb"
-      ]
+      ],
+      "icon": "build/icons/icon.png"
     },
     "nsis": {
       "oneClick": false,

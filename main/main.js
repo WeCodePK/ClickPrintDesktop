@@ -57,7 +57,7 @@ function createWindow() {
 		minHeight: 600,
 		frame: false,
 		backgroundColor: "#F7F8FA",
-		icon: path.join(__dirname, "assets", "icon.png"),
+		icon: path.join(__dirname, "assets", "icon.ico"),
 		webPreferences: {
 			preload: path.join(__dirname, "preload.js"),
 			plugins: true, // enable Chromium's built-in PDF viewer for previews
