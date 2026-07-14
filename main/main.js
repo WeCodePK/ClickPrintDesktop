@@ -6,44 +6,45 @@ const { startOfflineWatcher } = require('./printers');
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
 const { autoUpdater } = require('electron-updater');
 
-function sendUpdateEvent(channel, payload) {
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+// Last known update-lifecycle state. Kept here and replayed to the renderer on
+// demand (app:get-update-status) so a banner that mounts late — e.g. after the
+// operator logs in — still reflects an already-downloaded update instead of
+// missing the one-off "downloaded" event.
+// state: 'idle' | 'checking' | 'downloading' | 'ready'
+let updateStatus = { state: 'idle', version: null, percent: 0 };
+
+function setUpdateStatus(state, extra = {}) {
+	updateStatus = { ...updateStatus, state, ...extra };
 	if (window && !window.isDestroyed()) {
-		window.webContents.send(channel, payload);
+		window.webContents.send('updater:status', updateStatus);
 	}
 }
 
+autoUpdater.on('checking-for-update', () => setUpdateStatus('checking'));
+autoUpdater.on('update-available', (info) => {
+	console.log('Update available:', info.version);
+	setUpdateStatus('downloading', { version: info.version, percent: 0 });
+});
+autoUpdater.on('update-not-available', () => setUpdateStatus('idle'));
+autoUpdater.on('download-progress', (p) => setUpdateStatus('downloading', { percent: Math.round(p.percent || 0) }));
+autoUpdater.on('update-downloaded', (info) => {
+	console.log(`Update ${info.version} downloaded — ready to install on relaunch`);
+	setUpdateStatus('ready', { version: info.version });
+});
 autoUpdater.on('error', (err) => {
 	console.error('Auto-updater error:', err);
-	sendUpdateEvent('updater:error', { message: err?.message || String(err) });
-});
-autoUpdater.on('checking-for-update', () => {
-	console.log('Checking for updates...');
-	sendUpdateEvent('updater:checking', {});
-});
-autoUpdater.on('update-available', (info) => {
-	console.log('Update available:', info);
-	sendUpdateEvent('updater:available', { version: info.version, releaseDate: info.releaseDate });
-});
-autoUpdater.on('update-not-available', (info) => {
-	console.log('Update not available');
-	sendUpdateEvent('updater:not-available', { version: info.version });
-});
-autoUpdater.on('download-progress', (progress) => {
-	console.log(`Download progress: ${Math.round(progress.percent)}%`);
-	sendUpdateEvent('updater:progress', { percent: progress.percent });
-});
-autoUpdater.on('update-downloaded', (info) => {
-	console.log(`Update ${info.version} downloaded, will install on restart`);
-	sendUpdateEvent('updater:downloaded', { version: info.version });
+	// Fall back to idle; a later check can retry.
+	setUpdateStatus('idle', { error: err?.message || String(err) });
 });
 
-// Let the renderer trigger a restart + install.
-ipcMain.on('app:restart-to-update', () => {
-	autoUpdater.quitAndInstall();
-});
-
-// Expose current app version to the renderer.
+// Let the renderer trigger a restart + install, read the version, or replay the
+// current update status (for a banner that mounts after events already fired).
+ipcMain.on('app:restart-to-update', () => autoUpdater.quitAndInstall());
 ipcMain.handle('app:get-version', () => app.getVersion());
+ipcMain.handle('app:get-update-status', () => updateStatus);
 
 // Privileged scheme registration must happen before the app is ready.
 registerFileSchemePrivileges();
@@ -119,6 +120,8 @@ app.whenReady().then(() => {
 	startOfflineWatcher();
 	if (app.isPackaged) {
 		autoUpdater.checkForUpdates();
+		// Re-check hourly so a long-running instance picks up new releases.
+		setInterval(() => autoUpdater.checkForUpdates(), 60 * 60 * 1000);
 	}
 });
 

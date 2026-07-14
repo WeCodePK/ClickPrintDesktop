@@ -65,27 +65,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
 	// Auto-update
 	getAppVersion: () => ipcRenderer.invoke("app:get-version"),
+	getUpdateStatus: () => ipcRenderer.invoke("app:get-update-status"),
 	restartToUpdate: () => ipcRenderer.send("app:restart-to-update"),
-	onUpdateEvent: (callback) => {
-		const channels = [
-			"updater:checking",
-			"updater:available",
-			"updater:not-available",
-			"updater:progress",
-			"updater:downloaded",
-			"updater:error",
-		];
-		const handler = (channel) => (_event, payload) => callback(channel, payload);
-		const handlers = channels.map((ch) => {
-			const h = handler(ch);
-			ipcRenderer.on(ch, h);
-			return { channel: ch, handler: h };
-		});
-		// Return a cleanup function to remove all listeners.
-		return () => {
-			handlers.forEach(({ channel, handler: h }) =>
-				ipcRenderer.removeListener(channel, h),
-			);
-		};
+	onUpdateStatus: (callback) => {
+		const handler = (_event, status) => callback(status);
+		ipcRenderer.on("updater:status", handler);
+		return () => ipcRenderer.removeListener("updater:status", handler);
 	},
 });

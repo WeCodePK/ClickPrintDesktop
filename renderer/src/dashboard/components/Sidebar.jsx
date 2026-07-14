@@ -32,102 +32,69 @@ const ArrowRightIcon = () => (
 );
 
 /**
- * Claude-Code-style in-sidebar update banner.
+ * In-sidebar update prompt (Claude-Code style). A slim leaf icon in the sidebar
+ * that reveals a flyout on hover: a progress bar while downloading, or a
+ * "Relaunch to update" action once the update is ready.
  *
- * States:
- *  idle       – nothing shown (default)
- *  checking   – briefly shown while checking for updates
- *  downloading – shows a progress bar while the update downloads
- *  ready      – "Relaunch to update" prompt (mirrors the reference image)
- *  error      – silently goes back to idle after a timeout
+ * The status is fetched on mount (replay) AND kept live via a subscription, so a
+ * banner that mounts after login still reflects an update that already
+ * downloaded — the one-off event isn't missed.
  */
 function UpdateBanner() {
-	const [state, setState] = useState("idle"); // idle | checking | downloading | ready | error
-	const [version, setVersion] = useState("");
-	const [progress, setProgress] = useState(0);
+	const [status, setStatus] = useState({ state: "idle", version: null, percent: 0 });
 
 	useEffect(() => {
-		if (!window.electronAPI?.onUpdateEvent) return;
-
-		const cleanup = window.electronAPI.onUpdateEvent((channel, payload) => {
-			switch (channel) {
-				case "updater:checking":
-					setState("checking");
-					break;
-				case "updater:available":
-					setVersion(payload.version || "");
-					setState("downloading");
-					setProgress(0);
-					break;
-				case "updater:not-available":
-					setState("idle");
-					break;
-				case "updater:progress":
-					setState("downloading");
-					setProgress(Math.round(payload.percent || 0));
-					break;
-				case "updater:downloaded":
-					setVersion(payload.version || "");
-					setState("ready");
-					break;
-				case "updater:error":
-					setState("idle");
-					break;
-			}
-		});
-
-		return cleanup;
+		let active = true;
+		window.electronAPI?.getUpdateStatus?.()
+			.then((s) => { if (active && s) setStatus(s); })
+			.catch(() => {});
+		const unsubscribe = window.electronAPI?.onUpdateStatus?.((s) => setStatus(s));
+		return () => {
+			active = false;
+			if (unsubscribe) unsubscribe();
+		};
 	}, []);
 
-	const handleRelaunch = () => {
-		window.electronAPI?.restartToUpdate();
-	};
+	const { state, version, percent = 0 } = status;
 
-	if (state === "idle") return null;
+	// Only surface meaningful states — idle/checking stay hidden to avoid flicker.
+	if (state !== "downloading" && state !== "ready") return null;
 
-	// ── Downloading state: compact progress ──────────────────────────────
-	if (state === "checking" || state === "downloading") {
-		return (
-			<div className="update-banner update-banner--downloading">
-				<div className="update-banner__icon">
-					<LeafIcon />
-				</div>
-				<div className="update-banner__body">
-					<span className="update-banner__title">
-						{state === "checking" ? "Checking…" : "Updating…"}
-					</span>
-					{state === "downloading" && (
-						<div className="update-banner__progress-track">
-							<div
-								className="update-banner__progress-bar"
-								style={{ width: `${progress}%` }}
-							/>
+	const isReady = state === "ready";
+	const relaunch = () => window.electronAPI?.restartToUpdate?.();
+
+	return (
+		<div
+			className={`update-item ${isReady ? "update-item--ready" : "update-item--downloading"}`}
+			onClick={isReady ? relaunch : undefined}
+			role={isReady ? "button" : undefined}
+			title={isReady ? "Relaunch to update" : "Downloading update…"}
+		>
+			<span className="update-item__icon">
+				<LeafIcon />
+			</span>
+			<div className="update-flyout">
+				{isReady ? (
+					<>
+						<span className="update-flyout__title">Relaunch to update</span>
+						{version && <span className="update-flyout__version">v{version}</span>}
+						<span className="update-flyout__arrow">
+							<ArrowRightIcon />
+						</span>
+					</>
+				) : (
+					<div className="update-flyout__downloading">
+						<span className="update-flyout__title">
+							Downloading update{version ? ` v${version}` : ""}…
+						</span>
+						<div className="update-flyout__progress-track">
+							<div className="update-flyout__progress-bar" style={{ width: `${percent}%` }} />
 						</div>
-					)}
-				</div>
+					</div>
+				)}
 			</div>
-		);
-	}
-
-	// ── Ready state: "Relaunch to update" (Claude Code style) ────────────
-	if (state === "ready") {
-		return (
-			<button className="update-banner update-banner--ready" onClick={handleRelaunch} title="Click to relaunch and update">
-				<div className="update-banner__icon">
-					<LeafIcon />
-				</div>
-				<div className="update-banner__body">
-					<span className="update-banner__title">Relaunch to update</span>
-					<span className="update-banner__version">v{version}</span>
-				</div>
-				<span className="update-banner__arrow">
-					<ArrowRightIcon />
-				</span>
-			</button>
-		);
-	}
-
-	return null;
+		</div>
+	);
 }
 
 // Left vertical navigation (WhatsApp-style). Each item is a router NavLink so the state follows the URL.
