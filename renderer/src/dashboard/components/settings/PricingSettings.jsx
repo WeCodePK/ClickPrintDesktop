@@ -9,10 +9,8 @@ const PAGE_TYPES = ["A4", "A5", "A3", "Letter", "Legal"];
 const RATE_MIN = 1;
 const RATE_MAX = 200;
 
-// Conventional label derived from a service's keys (e.g. "A4-BW-SS"). The
-// backend doesn't return a name for services, so the UI derives it.
 function serviceLabel(keys = {}) {
-	return `${keys.pageType || "—"}-${keys.colored ? "CL" : "BW"}-${keys.sidedness ? "DS" : "SS"}`;
+	return `${keys.pageType || "—"}, ${keys.colored ? "Color" : "Black & White"}, ${keys.sidedness ? "Double Sided" : "Single Sided"}`;
 }
 
 // Two services clash when they price the same print configuration.
@@ -82,7 +80,7 @@ function PriceForm({ price, printers, error, saving, onSave, onCancel }) {
 			{error && <div className="form-error">{error}</div>}
 
 			<div className="form-field">
-				<label className="form-label" style={{ marginBottom: "1.5rem" }}>Name: {name}</label>
+				<label className="form-label" style={{ marginBottom: "2.5rem", textAlign: "center" }}>{name}</label>
 			</div>
 
 			<div className="form-field">
@@ -384,12 +382,13 @@ function PricingSettings() {
 								<div className="db-entry__info">
 									<span className="db-entry__name">{price.name || serviceLabel(price.keys)}</span>
 									<span className="db-entry__meta">
-										{price.keys?.pageType} · {price.keys?.colored ? "Color" : "B&W"} · {price.keys?.sidedness ? "Double" : "Single"}
+										{price.keys?.pageType} · {price.keys?.colored ? "Color" : "Black & White"} · {price.keys?.sidedness ? "Double" : "Single"}
 										{bound.map(({ printer, useAuto }) => (
 											<span key={printer._id}>
 												{" · "}
-												<span className={`printer-dot ${printer.online ? "printer-dot--on" : "printer-dot--off"}`} />
 												{printer.label}
+												{" "}
+												<span style={{ justifyContent: "center", alignItems: "center" }} className={`printer-dot ${printer.online ? "printer-dot--on" : "printer-dot--off"}`} />
 												{useAuto && " (Auto)"}
 											</span>
 										))}

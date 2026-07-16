@@ -2175,7 +2175,7 @@ body,
 	text-transform: uppercase;
 	letter-spacing: 0.4px;
 	color: var(--color-text-secondary);
-	margin-bottom: 8px;
+	margin: 8px 0px;
 }
 
 .form-input {
