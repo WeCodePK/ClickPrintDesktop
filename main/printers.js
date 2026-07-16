@@ -1,5 +1,6 @@
 const { BrowserWindow } = require("electron");
 const { execFile } = require("child_process");
+const fsp = require("fs/promises");
 
 // Win32 PRINTER_STATUS_OFFLINE flag — set when the printer is unreachable.
 const PRINTER_STATUS_OFFLINE = 0x80;
@@ -174,7 +175,9 @@ const TEST_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
 
 // Prints a self-contained test page to the given printer (silently, directly).
 // Resolves once spooled; a flaky/missing completion callback is assumed-spooled
-// after a grace period so the renderer never hangs.
+// after a grace period so the renderer never hangs. Microsoft Print to PDF is
+// never printed to (its callback is unreliable) — the page is rendered with
+// printToPDF and saved wherever the operator picks instead.
 async function printTestPage(deviceName) {
 	const win = new BrowserWindow({ show: false });
 	try {
@@ -183,6 +186,16 @@ async function printTestPage(deviceName) {
 			.replace("__DEVICE__", deviceName || "the default printer");
 		await win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
 		await new Promise((r) => setTimeout(r, 200));
+
+		if (/print to pdf/i.test(deviceName || "")) {
+			const { askSavePdfPath } = require("./files");
+			const data = await win.webContents.printToPDF({ printBackground: true });
+			const dest = await askSavePdfPath("ClickPrint Test Page");
+			if (!dest) throw new Error("pdf save cancelled");
+			await fsp.writeFile(dest, data);
+			console.log(`[Printers] test page saved → ${dest}`);
+			return;
+		}
 
 		await new Promise((resolve, reject) => {
 			let settled = false;

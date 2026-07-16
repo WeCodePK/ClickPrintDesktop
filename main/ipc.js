@@ -169,10 +169,10 @@ function registerIpcHandlers(getMainWindow) {
 		}
 	});
 
-	ipcMain.handle("files:print", async (_event, fileId, settings, deviceName) => {
+	ipcMain.handle("files:print", async (_event, fileId, settings, deviceName, fileName) => {
 		console.log(`[IPC] files:print → ${fileId}${deviceName ? ` (@${deviceName})` : ""}`);
 		try {
-			await printFile(fileId, settings, deviceName);
+			await printFile(fileId, settings, deviceName, fileName);
 			return { success: true };
 		} catch (error) {
 			console.error(`[IPC] files:print ${fileId} error:`, error.message);

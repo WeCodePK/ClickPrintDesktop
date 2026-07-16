@@ -226,16 +226,21 @@ export function AutoPrintProvider({ children }) {
 	const printOneFile = useCallback(async (jobId, file, deviceName) => {
 		setCurrent({ jobId, fileId: file.fileId });
 		try {
-			const result = await window.electronAPI.printFile(file.fileId, file.settings, deviceName);
+			const result = await window.electronAPI.printFile(file.fileId, file.settings, deviceName, file.name);
 			if (!result?.success) throw new Error(result?.message || "print failed");
 			return true;
 		} catch (err) {
 			console.error("[AutoPrint] failed to print file:", err);
+			// Only the PDF save-dialog cancellation gets this specific message — a
+			// real printer failure keeps the generic "nothing happened" state.
+			if (err.message === "pdf save cancelled") {
+				pushToast("Failure in printing through Microsoft Print to PDF. To cancel the job, click the Decline Job button above.");
+			}
 			return false;
 		} finally {
 			setCurrent(null);
 		}
-	}, []);
+	}, [pushToast]);
 
 	// ── manual actions (used by the Print Jobs buttons when auto-print is OFF) ───
 	const printFileManual = useCallback(async (job, file, deviceName) => {

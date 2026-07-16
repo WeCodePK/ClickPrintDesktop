@@ -19,11 +19,13 @@ function PrintSplitButton({
 	const rowRef = useRef(null);
 	const menuRef = useRef(null);
 
-	const systemDefault = printers.find((p) => p.isDefault);
+	// The app's own default — never Windows' — is Microsoft Print to PDF, so an
+	// unselected printer always displays as that, regardless of what the OS
+	// reports as its default.
 	const selectedDisplay =
 		printers.find((p) => p.name === selectedName)?.displayName ||
 		selectedName ||
-		(systemDefault ? `Sys. default (${systemDefault.displayName})` : "Sys. default");
+		"Sys. default (Microsoft Print to PDF)";
 
 	const openMenu = () => {
 		onOpen?.();

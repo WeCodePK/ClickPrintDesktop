@@ -32,6 +32,8 @@ function PrintJobsTab() {
 		printFileManual,
 		printAllManual,
 		cleanupJobFiles,
+		selectedPrinter: defaultPrinter,
+		refreshPrinterState,
 	} = useAutoPrint();
 
 	const [selectedId, setSelectedId] = useState(null);
@@ -39,22 +41,20 @@ function PrintJobsTab() {
 	const [pendingComplete, setPendingComplete] = useState(null);
 	const [query, setQuery] = useState("");
 
-	// Available printers + saved default, for the manual print dropdowns.
+	// Available printers for the manual print dropdowns; the saved default comes
+	// from AutoPrintContext (selectedPrinter), the single source of truth kept in
+	// sync with the Printers tab and the 15s reachability poll.
 	const [printers, setPrinters] = useState([]);
-	const [defaultPrinter, setDefaultPrinter] = useState(null);
 
 	const refreshPrinters = useCallback(async (force = false) => {
 		try {
-			const [list, selected] = await Promise.all([
-				window.electronAPI.listPrinters(force),
-				window.electronAPI.getSelectedPrinter(),
-			]);
+			const list = await window.electronAPI.listPrinters(force);
 			if (list?.success) setPrinters(list.data || []);
-			setDefaultPrinter(selected || null);
+			refreshPrinterState();
 		} catch (err) {
 			console.error("[Renderer] failed to load printers:", err);
 		}
-	}, []);
+	}, [refreshPrinterState]);
 
 	useEffect(() => {
 		refreshPrinters();

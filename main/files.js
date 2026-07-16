@@ -1,7 +1,7 @@
 const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
-const { app, protocol, shell, BrowserWindow } = require("electron");
+const { app, protocol, shell, BrowserWindow, dialog } = require("electron");
 const { fetchFileBuffer } = require("./api");
 const store = require("./store");
 
@@ -223,13 +223,60 @@ function buildPrintOptions(settings = {}) {
 	return options;
 }
 
+// Prompts the operator for where to save a PDF, defaulting to Downloads with the
+// given suggested name. Returns the chosen path, or null if they cancelled.
+// Shared by "printing" to Microsoft Print to PDF and the printer test page.
+async function askSavePdfPath(suggestedName) {
+	const base = String(suggestedName || "document")
+		.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_") // strip characters Windows filenames forbid
+		.replace(/\.pdf$/i, "")
+		.trim() || "document";
+	const parent = BrowserWindow.getFocusedWindow();
+	const options = {
+		title: "Save PDF",
+		defaultPath: path.join(app.getPath("downloads"), `${base}.pdf`),
+		filters: [{ name: "PDF", extensions: ["pdf"] }],
+	};
+	const { canceled, filePath } = parent
+		? await dialog.showSaveDialog(parent, options)
+		: await dialog.showSaveDialog(options);
+	return canceled || !filePath ? null : filePath;
+}
+
+// "Printing" to Microsoft Print to PDF just re-renders a PDF we already have on
+// disk — and its webContents.print callback lies (success=false even when the
+// file saved fine), which used to need an 8s/30s forgiveness timer. So that
+// pseudo-printer is never actually printed to: the operator picks a save
+// location and the cached PDF is copied there. The distinct error message on
+// cancel lets the renderer show PDF-specific guidance instead of a generic
+// print-failed message.
+async function savePdfCopy(fileId, fileName) {
+	const dest = await askSavePdfPath(fileName || fileId);
+	if (!dest) throw new Error("pdf save cancelled");
+	await fsp.copyFile(localPath(fileId), dest);
+	console.log(`[Files] saved PDF copy ${fileId} → ${dest}`);
+}
+
 // Loads a cached PDF into an offscreen window and prints it silently to a
 // printer with the document's own settings applied. `deviceName`, when given,
 // overrides the operator's saved default for this one job. Resolves once the
-// print job is spooled; rejects if printing fails.
-async function printFile(fileId, settings, deviceName) {
+// print job is spooled; rejects if printing fails. If the resolved target is
+// Microsoft Print to PDF — or nothing was ever selected, which is treated the
+// same way — the document is saved via a Save dialog instead of printed.
+async function printFile(fileId, settings, deviceName, fileName) {
 	await ensureFile(fileId);
 	if (!isReady(fileId)) throw new Error("file not ready");
+
+	// Route the job to the explicitly-requested printer, else the operator's
+	// saved choice. We never ask Windows what its own default is — if the operator
+	// hasn't picked a printer in the app, the app's default is Microsoft Print to
+	// PDF, full stop.
+	const target = deviceName || store.get("selectedPrinter")?.name || "";
+
+	if (!target || /print to pdf/i.test(target)) {
+		await savePdfCopy(fileId, fileName);
+		return;
+	}
 
 	// `plugins: true` is required so Chromium's PDF viewer actually renders the
 	// document — without it the print job comes out blank.
@@ -239,17 +286,8 @@ async function printFile(fileId, settings, deviceName) {
 		// Give the PDF plugin a moment to lay the document out before printing.
 		await new Promise((resolve) => setTimeout(resolve, 400));
 		const options = buildPrintOptions(settings);
-		// Route the job to the explicitly-requested printer, else the operator's
-		// saved choice, else the system default (no deviceName).
-		const target = deviceName || store.get("selectedPrinter")?.name;
 		if (target) options.deviceName = target;
 		console.log(`[Files] printing ${fileId} → ${options.deviceName || "default printer"}`, options);
-
-		// "Microsoft Print to PDF" reports success=false in the callback even when
-		// the file was saved fine, so we forgive a reported failure ONLY for that
-		// pseudo-printer. A real printer's failure is trusted and propagates as an
-		// error (the job is then left untouched, never marked "printing").
-		const isPdfPrinter = /print to pdf/i.test(options.deviceName || "");
 
 		await new Promise((resolve, reject) => {
 			let settled = false;
@@ -262,21 +300,15 @@ async function printFile(fileId, settings, deviceName) {
 
 			win.webContents.print(options, (success, failureReason) => {
 				console.log(`[Files] print callback ${fileId}: success=${success} reason=${failureReason}`);
-				if (success || isPdfPrinter) finish(resolve);
+				if (success) finish(resolve);
 				else finish(reject, new Error(failureReason || "print failed"));
 			});
 
-			// Guard against a callback that never fires at all. For Print to PDF we
-			// assume the file was saved; for a real printer we treat the silence as a
-			// failure so a stuck/offline printer never falsely advances the status.
+			// Guard against a callback that never fires at all — treat the silence as
+			// a failure so a stuck/offline printer never falsely advances the status.
 			const timer = setTimeout(() => {
-				if (isPdfPrinter) {
-					console.log(`[Files] PDF print callback timed out ${fileId}, assuming saved`);
-					finish(resolve);
-				} else {
-					console.log(`[Files] print callback timed out ${fileId}, treating as failed`);
-					finish(reject, new Error("print timed out"));
-				}
+				console.log(`[Files] print callback timed out ${fileId}, treating as failed`);
+				finish(reject, new Error("print timed out"));
 			}, 30000);
 		});
 		console.log(`[Files] print spooled ${fileId}`);
@@ -318,6 +350,7 @@ function registerFileProtocol() {
 
 module.exports = {
 	FILE_SCHEME,
+	askSavePdfPath,
 	syncJobFiles,
 	getStatusMap,
 	setNotifier,
