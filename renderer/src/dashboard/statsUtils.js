@@ -37,13 +37,50 @@ function sumEarningsInRange(earningsByDate, start, end) {
 // week, weekly for a month, and monthly for six months (fewer, more legible
 // bars as the window widens). `earningsByDate` comes from computeStats().
 export const EARNINGS_RANGES = [
+	{ value: "24h", label: "24 Hours" },
 	{ value: "7d", label: "7 Days" },
 	{ value: "1m", label: "1 Month" },
 	{ value: "6m", label: "6 Months" },
 ];
 
-export function buildEarningsSeries(earningsByDate, range, ref = new Date()) {
+export function buildEarningsSeries(earningsByDate, range, ref = new Date(), completedJobs = []) {
 	const today = startOfDay(ref);
+
+	if (range === "24h") {
+		const base = new Date(ref);
+		base.setHours(base.getHours() + 1, 0, 0, 0); // align to next hour boundary
+
+		const out = [];
+		const fmtHour = (d) => {
+			let hours = d.getHours();
+			const ampm = hours >= 12 ? "pm" : "am";
+			hours = hours % 12;
+			hours = hours ? hours : 12;
+			return `${hours}${ampm}`;
+		};
+
+		for (let i = 5; i >= 0; i--) {
+			const start = new Date(base.getTime() - (i + 1) * 4 * 3600 * 1000);
+			const end = new Date(base.getTime() - i * 4 * 3600 * 1000);
+			
+			// Sum earnings from completedJobs in this 4-hour block
+			let amount = 0;
+			for (const job of completedJobs) {
+				const jobDate = new Date(job.createdAt);
+				if (jobDate >= start && jobDate < end) {
+					amount += job.amount;
+				}
+			}
+
+			out.push({
+				key: `h-${start.getTime()}`,
+				label: `${fmtHour(start)} - ${fmtHour(end)}`,
+				day: start.toLocaleDateString("en-US", { weekday: "short" }),
+				amount,
+			});
+		}
+		return out;
+	}
 
 	if (range === "6m") {
 		const out = [];
@@ -122,6 +159,7 @@ export function computeStats(history = []) {
 
 	const serviceCounts = {}; // code -> { code, units, jobs }
 	const earningsByDate = {}; // YYYY-MM-DD -> amount
+	const completedJobs = [];
 
 	for (const job of history) {
 		const today = isSameDay(job.createdAt, now);
@@ -148,6 +186,10 @@ export function computeStats(history = []) {
 			totalRevenue += amount;
 			totalPages += pages;
 			earningsByDate[dateKey(job.createdAt)] = (earningsByDate[dateKey(job.createdAt)] || 0) + amount;
+			completedJobs.push({
+				createdAt: job.createdAt,
+				amount: amount,
+			});
 			if (today) {
 				todayRevenue += amount;
 				todayPages += pages;
@@ -178,6 +220,7 @@ export function computeStats(history = []) {
 		cancellationRate,
 		avgOrder,
 		earningsByDate,
+		completedJobs,
 		topServices,
 		topServiceUnits,
 		mostDemanded: topServices[0] || null,

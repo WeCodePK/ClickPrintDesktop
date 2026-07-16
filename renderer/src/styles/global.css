@@ -2151,10 +2151,11 @@ body,
 	color: var(--color-text-secondary);
 }
 
-.settings-panel__action {
+.settings-panel__action.btn-gradient {
 	flex: 0 0 auto;
-	padding: 9px 14px;
-	font-size: 13px;
+	padding: 11px 44px;
+	font-size: 13.5px;
+	width: auto;
 }
 
 .price-list {

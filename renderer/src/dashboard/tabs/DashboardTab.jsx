@@ -200,10 +200,10 @@ function DashboardTab() {
 	const [stats, setStats] = useState(null);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState(null);
-	const [earningsRange, setEarningsRange] = useState("7d");
+	const [earningsRange, setEarningsRange] = useState("24h");
 
 	const earningsSeries = useMemo(
-		() => (stats ? buildEarningsSeries(stats.earningsByDate, earningsRange) : []),
+		() => (stats ? buildEarningsSeries(stats.earningsByDate, earningsRange, stats.generatedAt || new Date(), stats.completedJobs || []) : []),
 		[stats, earningsRange]
 	);
 	const earningsMax = Math.max(1, ...earningsSeries.map((s) => s.amount));
