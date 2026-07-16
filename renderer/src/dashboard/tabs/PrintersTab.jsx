@@ -301,6 +301,36 @@ function PrintersTab() {
 							)}
 						</div>
 
+						<div className="action-panel">
+							<button
+								className="btn-outline"
+								onClick={() => handleTest(selectedEntry)}
+								disabled={!selectedEntry.online || testState[selectedEntry.name] === "testing"}
+							>
+								{testState[selectedEntry.name] === "testing" ? (
+									<>
+										<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)", width: "14px", height: "14px" }} />
+										Printing…
+									</>
+								) : (
+									<>
+										<PrinterIcon />
+										Print Test Doc
+									</>
+								)}
+							</button>
+							<button
+								className="btn-gradient"
+								onClick={() => handleSelect(selectedEntry)}
+								disabled={!selectedEntry.online || saving || chosen === selectedEntry.name}
+							>
+								<CheckIcon />
+								{chosen === selectedEntry.name ? "Selected Printer" : "Select This Printer"}
+							</button>
+						</div>
+
+						{/* Status messages */}
+
 						{!selectedEntry.online && (
 							<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(255, 87, 10, 0.08)", borderColor: "var(--color-accent)" }}>
 								<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-accent)" }}>
@@ -335,33 +365,6 @@ function PrintersTab() {
 							</div>
 						)}
 
-						<div className="action-panel">
-							<button
-								className="btn-outline"
-								onClick={() => handleTest(selectedEntry)}
-								disabled={!selectedEntry.online || testState[selectedEntry.name] === "testing"}
-							>
-								{testState[selectedEntry.name] === "testing" ? (
-									<>
-										<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)", width: "14px", height: "14px" }} />
-										Printing…
-									</>
-								) : (
-									<>
-										<PrinterIcon />
-										Print Test Doc
-									</>
-								)}
-							</button>
-							<button
-								className="btn-gradient"
-								onClick={() => handleSelect(selectedEntry)}
-								disabled={!selectedEntry.online || saving || chosen === selectedEntry.name}
-							>
-								<CheckIcon />
-								{chosen === selectedEntry.name ? "Selected Printer" : "Select This Printer"}
-							</button>
-						</div>
 					</div>
 				) : (
 					<WelcomePane />

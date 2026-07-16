@@ -1168,6 +1168,7 @@ body,
 	color: var(--color-primary);
 	background: rgba(0, 230, 173, 0.1);
 	padding: 2px 8px;
+	margin-left: 10px;
 	border-radius: var(--radius-pill);
 }
 
@@ -2225,7 +2226,6 @@ body,
 	background: none;
 	border: none;
 	padding: 10px;
-	padding-left: 25px;
 	border-radius: var(--radius-sm);
 	color: var(--color-text-muted);
 	cursor: pointer;
@@ -2382,7 +2382,7 @@ body,
 .action-panel {
 	display: flex;
 	gap: 12px;
-	margin-top: 12px;
+	margin-top: 24px;
 }
 
 .btn-gradient {
@@ -2406,6 +2406,12 @@ body,
 .btn-gradient:hover:not(:disabled) {
 	transform: translateY(-2px);
 	box-shadow: 0 8px 24px rgba(0, 230, 173, 0.3);
+}
+
+.btn-outline:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+	transform: none !important;
 }
 
 .btn-gradient:disabled {
@@ -2456,13 +2462,8 @@ body,
 	flex-direction: column;
 	gap: 20px;
 	box-shadow: var(--shadow-sm);
-	margin-bottom: 24px;
+	margin-top: 36px;
 }
-
-
-
-
-
 
 .printer-grid {
 	display: grid;
