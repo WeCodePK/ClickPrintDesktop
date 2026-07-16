@@ -293,6 +293,49 @@ async function deletePrice(priceId) {
 	}
 }
 
+// ── Shop printers CRUD ────────────────────────────────────────────────────────
+// The printers a shop has registered with the backend. Distinct from the local
+// OS printer list (printers.js), which only says what's reachable right now.
+
+async function fetchPrinters() {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/printers`, {
+			headers: authHeaders(),
+		});
+		return unwrap(await readJson(response), "printers");
+	} catch (error) {
+		console.error("[API] fetchPrinters error:", error);
+		return apiError(error);
+	}
+}
+
+async function createPrinter(name) {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/printers`, {
+			method: "POST",
+			headers: authHeaders(),
+			body: JSON.stringify({ name }),
+		});
+		return unwrap(await readJson(response), "printer");
+	} catch (error) {
+		console.error("[API] createPrinter error:", error);
+		return apiError(error);
+	}
+}
+
+async function deletePrinter(printerId) {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/printers/${printerId}`, {
+			method: "DELETE",
+			headers: authHeaders(),
+		});
+		return unwrap(await readJson(response), "printer");
+	} catch (error) {
+		console.error("[API] deletePrinter error:", error);
+		return apiError(error);
+	}
+}
+
 async function fetchHistory() {
 	try {
 		const response = await fetch(`${API_BASE_URL}/api/history`, {
@@ -450,6 +493,9 @@ module.exports = {
 	createPrice,
 	updatePrice,
 	deletePrice,
+	fetchPrinters,
+	createPrinter,
+	deletePrinter,
 	fetchJobs,
 	fetchHistory,
 	fetchFileBuffer,

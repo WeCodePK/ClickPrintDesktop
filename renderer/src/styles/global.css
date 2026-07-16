@@ -2241,6 +2241,97 @@ body,
 	box-shadow: 0 0 10px rgba(255, 79, 0, 0.5);
 }
 
+/* Always-on accent variant (printers list). */
+.db-entry__delete-btn--accent {
+	color: var(--color-accent);
+}
+
+/* ── Registered printer that's currently unreachable — greyed, never removed ── */
+.db-entry--offline .db-entry__name,
+.db-entry--offline .db-entry__meta {
+	color: var(--color-text-muted);
+}
+
+.db-entry--offline .db-entry__avatar {
+	background: rgba(134, 150, 160, 0.08);
+	color: var(--color-text-muted);
+	opacity: 0.7;
+}
+
+/* ── "Add a printer" picker rows ── */
+.printer-pick-list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-height: 320px;
+	overflow-y: auto;
+	margin-bottom: 18px;
+}
+
+.printer-pick {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	padding: 11px 12px;
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-md);
+	background: transparent;
+	cursor: pointer;
+	text-align: left;
+	font-family: var(--font-family);
+	transition: all var(--transition-fast);
+}
+
+.printer-pick:hover {
+	border-color: var(--color-text-muted);
+}
+
+.printer-pick--on {
+	border-color: var(--color-primary);
+	background: rgba(0, 230, 173, 0.08);
+}
+
+.printer-pick__check {
+	width: 20px;
+	height: 20px;
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 6px;
+	border: 1.5px solid var(--border-light);
+	color: #111b21;
+}
+
+.printer-pick--on .printer-pick__check {
+	background: var(--color-primary);
+	border-color: var(--color-primary);
+}
+
+.printer-pick__check svg {
+	width: 12px;
+	height: 12px;
+}
+
+.printer-pick__info {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+.printer-pick__name {
+	font-size: 13px;
+	font-weight: 700;
+	color: var(--color-text-primary);
+}
+
+.printer-pick__meta {
+	font-size: 11px;
+	color: var(--color-text-muted);
+}
+
 .segmented {
 	display: flex;
 	gap: 8px;

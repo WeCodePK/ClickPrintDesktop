@@ -39,7 +39,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	deleteJobFiles: (fileIds) => ipcRenderer.invoke("files:delete-job-files", fileIds),
 	printFile: (fileId, settings, deviceName) => ipcRenderer.invoke("files:print", fileId, settings, deviceName),
 
-	// Printers
+	// Shop printers (registered on the backend)
+	fetchPrinters: () => ipcRenderer.invoke("printers:fetch"),
+	createPrinter: (name) => ipcRenderer.invoke("printers:create", name),
+	deletePrinter: (printerId) => ipcRenderer.invoke("printers:delete", printerId),
+
+	// Local printers (reachable right now on this machine)
 	listPrinters: (force) => ipcRenderer.invoke("printers:list", force),
 	testPrinter: (deviceName) => ipcRenderer.invoke("printers:test", deviceName),
 	getSelectedPrinter: () => ipcRenderer.invoke("printers:get-selected"),

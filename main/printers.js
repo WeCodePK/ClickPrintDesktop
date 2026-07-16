@@ -1,17 +1,8 @@
 const { BrowserWindow } = require("electron");
 const { execFile } = require("child_process");
 
-// Virtual / document-writer printers we never want to surface — except
-// "Microsoft Print to PDF", which is intentionally kept (handled below).
-const VIRTUAL_RE = /(xps document writer|microsoft xps|onenote|send to onenote|\bfax\b|anydesk)/i;
-
 // Win32 PRINTER_STATUS_OFFLINE flag — set when the printer is unreachable.
 const PRINTER_STATUS_OFFLINE = 0x80;
-
-function isVirtualPrinter(name = "") {
-	if (/microsoft print to pdf/i.test(name)) return false; // keep this one
-	return VIRTUAL_RE.test(name);
-}
 
 // ── Offline detection (cached) ──────────────────────────────────────────────
 // Chromium's getPrintersAsync `status` is unreliable for offline detection on
@@ -104,11 +95,13 @@ function _isOffline(printer) {
 	);
 }
 
-// Lists real, connected printers (plus Microsoft Print to PDF). Offline and
-// virtual printers are excluded. The printer enumeration is always live; the
+// Lists every currently-ONLINE printer installed on this machine, virtual ones
+// (XPS / OneNote / Fax / Print to PDF …) included — the operator decides which to
+// register for the shop. Offline printers are excluded so callers can treat this
+// as "what's reachable right now". The printer enumeration is always live; the
 // offline map is served from cache (refreshed in the background), except on the
-// cold first call or an explicit `force` (the user-initiated Refresh), which
-// wait for fresh data. Requires a live webContents to query.
+// cold first call or an explicit `force`, which wait for fresh data. Requires a
+// live webContents to query.
 async function listPrinters(win, force = false) {
 	if (!win || win.isDestroyed()) return [];
 	const printers = await win.webContents.getPrintersAsync();
@@ -120,14 +113,7 @@ async function listPrinters(win, force = false) {
 	}
 
 	return printers
-		.filter((p) => {
-			if (isVirtualPrinter(p.displayName || p.name)) return false;
-			if (_isOffline(p)) {
-				console.log(`[Printers] hiding offline printer: ${p.name}`);
-				return false;
-			}
-			return true;
-		})
+		.filter((p) => !_isOffline(p))
 		.map((p) => ({
 			name: p.name,
 			displayName: p.displayName || p.name,
@@ -203,4 +189,4 @@ async function printTestPage(deviceName) {
 	}
 }
 
-module.exports = { listPrinters, printTestPage, isVirtualPrinter, startOfflineWatcher };
+module.exports = { listPrinters, printTestPage, startOfflineWatcher };

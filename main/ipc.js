@@ -9,6 +9,9 @@ const {
 	createPrice,
 	updatePrice,
 	deletePrice,
+	fetchPrinters,
+	createPrinter,
+	deletePrinter,
 	fetchJobs,
 	fetchHistory,
 	updateJobStatus,
@@ -171,7 +174,23 @@ function registerIpcHandlers(getMainWindow) {
 		}
 	});
 
-	// ── Printers ──────────────────────────────────────────────────────────────
+	// ── Shop printers (registered on the backend) ─────────────────────────────
+	ipcMain.handle("printers:fetch", async () => {
+		console.log("[IPC] printers:fetch");
+		return await fetchPrinters();
+	});
+
+	ipcMain.handle("printers:create", async (_event, name) => {
+		console.log("[IPC] printers:create →", name);
+		return await createPrinter(name);
+	});
+
+	ipcMain.handle("printers:delete", async (_event, printerId) => {
+		console.log("[IPC] printers:delete →", printerId);
+		return await deletePrinter(printerId);
+	});
+
+	// ── Local printers (what this machine can reach right now) ────────────────
 	ipcMain.handle("printers:list", async (_event, force) => {
 		try {
 			const printers = await listPrinters(getMainWindow(), force);
