@@ -19,8 +19,11 @@ function PrintSplitButton({
 	const rowRef = useRef(null);
 	const menuRef = useRef(null);
 
+	const systemDefault = printers.find((p) => p.isDefault);
 	const selectedDisplay =
-		printers.find((p) => p.name === selectedName)?.displayName || selectedName || "System default";
+		printers.find((p) => p.name === selectedName)?.displayName ||
+		selectedName ||
+		(systemDefault ? `Sys. default (${systemDefault.displayName})` : "Sys. default");
 
 	const openMenu = () => {
 		onOpen?.();
@@ -86,7 +89,7 @@ function PrintSplitButton({
 
 			{showInfo && (
 				<span className="print-split__info" title={selectedDisplay}>
-					Printer: {selectedDisplay}
+					{selectedDisplay}
 				</span>
 			)}
 

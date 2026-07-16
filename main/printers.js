@@ -123,6 +123,29 @@ async function listPrinters(win, force = false) {
 		}));
 }
 
+// Lists ALL printers installed on this machine — both online and offline — each
+// tagged with an `offline` boolean. Used by the add-printer picker so operators
+// can register a printer even when it's temporarily powered off or disconnected.
+async function listAllPrinters(win, force = false) {
+	if (!win || win.isDestroyed()) return [];
+	const printers = await win.webContents.getPrintersAsync();
+
+	if (force || _offlineAt === 0) {
+		await refreshOfflineCache(force);
+	} else if (Date.now() - _offlineAt > OFFLINE_TTL) {
+		refreshOfflineCache();
+	}
+
+	return printers.map((p) => ({
+		name: p.name,
+		displayName: p.displayName || p.name,
+		description: p.description || "",
+		status: p.status,
+		isDefault: !!p.isDefault,
+		offline: _isOffline(p),
+	}));
+}
+
 const TEST_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
   body{font-family:Arial,Helvetica,sans-serif;margin:60px;color:#111}
   h1{font-size:26px;margin:0 0 6px}
@@ -189,4 +212,4 @@ async function printTestPage(deviceName) {
 	}
 }
 
-module.exports = { listPrinters, printTestPage, startOfflineWatcher };
+module.exports = { listPrinters, listAllPrinters, printTestPage, startOfflineWatcher };

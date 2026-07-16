@@ -46,6 +46,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
 	// Local printers (reachable right now on this machine)
 	listPrinters: (force) => ipcRenderer.invoke("printers:list", force),
+	// All installed printers (online + offline) for the add-printer picker
+	listAllPrinters: (force) => ipcRenderer.invoke("printers:list-all", force),
 	testPrinter: (deviceName) => ipcRenderer.invoke("printers:test", deviceName),
 	getSelectedPrinter: () => ipcRenderer.invoke("printers:get-selected"),
 	setSelectedPrinter: (printer) => ipcRenderer.invoke("printers:set-selected", printer),

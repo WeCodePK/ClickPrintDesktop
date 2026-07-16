@@ -91,10 +91,10 @@ function PrintersTab() {
 		setAddError(null);
 		setAddLoading(true);
 		try {
-			// Force a fresh PowerShell/WMI query so the list is current.
-			const result = await window.electronAPI.listPrinters(true);
+			// Fetch ALL installed printers (online + offline) so the operator
+			// can register a printer even when it's temporarily powered off.
+			const result = await window.electronAPI.listAllPrinters(true);
 			if (result?.success) {
-				setOnline(result.data || []);
 				setAddChoices(result.data || []);
 			} else {
 				setAddError(result?.message || "Failed to find printers.");
@@ -376,8 +376,8 @@ function PrintersTab() {
 					<div className="modal-card modal-card--wide" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
 						<h3 className="modal-title">Add a printer</h3>
 						<p className="modal-message">
-							Pick the connected printers you want to add to this shop. You can select more than one.
-						</p>
+						Pick the printers you want to add to this shop. Offline printers can also be added and will work once reconnected.
+					</p>
 
 						{addError && <div className="form-error">{addError}</div>}
 
@@ -389,9 +389,9 @@ function PrintersTab() {
 						) : availableChoices.length === 0 ? (
 							<div className="db-detail__empty">
 								<p>
-									{addChoices.length
-										? "All connected printers have already been added."
-										: "No online printers found. Connect a printer and try again."}
+							{addChoices.length
+								? "All installed printers have already been added."
+								: "No printers found. Install a printer on this machine and try again."}
 								</p>
 							</div>
 						) : (
@@ -408,7 +408,7 @@ function PrintersTab() {
 											<span className="printer-pick__check">{checked && <CheckIcon />}</span>
 											<span className="printer-pick__info">
 												<span className="printer-pick__name">{p.displayName}</span>
-												<span className="printer-pick__meta">{p.isDefault ? "System default" : "Ready"}</span>
+												<span className="printer-pick__meta">{p.offline ? "Offline" : p.isDefault ? "System default" : "Ready"}</span>
 											</span>
 										</button>
 									);

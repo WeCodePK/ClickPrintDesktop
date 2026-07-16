@@ -22,7 +22,7 @@ const {
 	stopJobsSse,
 } = require("./api");
 const { syncJobFiles, getStatusMap, setNotifier, openFile, printFile, deleteJobFiles } = require("./files");
-const { listPrinters, printTestPage } = require("./printers");
+const { listPrinters, listAllPrinters, printTestPage } = require("./printers");
 const store = require("./store");
 
 function registerIpcHandlers(getMainWindow) {
@@ -197,6 +197,17 @@ function registerIpcHandlers(getMainWindow) {
 			return { success: true, data: printers };
 		} catch (error) {
 			console.error("[IPC] printers:list error:", error.message);
+			return { success: false, message: error.message, data: [] };
+		}
+	});
+
+	// All installed printers (online + offline) for the add-printer picker.
+	ipcMain.handle("printers:list-all", async (_event, force) => {
+		try {
+			const printers = await listAllPrinters(getMainWindow(), force);
+			return { success: true, data: printers };
+		} catch (error) {
+			console.error("[IPC] printers:list-all error:", error.message);
 			return { success: false, message: error.message, data: [] };
 		}
 	});
