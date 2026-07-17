@@ -68,7 +68,7 @@ function FileThumb({ file }) {
 	);
 }
 
-function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, printingAll, printers, selectedPrinterName, onPrinterMenuOpen, autoPrintOn, printingNow }) {
+function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, failed, onMarkJobFailed, printingAll, printers, selectedPrinterName, onPrinterMenuOpen, autoPrintOn, printingNow }) {
 	const settings = file.settings || {};
 	return (
 		<div className={`file-preview ${printed ? "file-preview--printed" : ""} ${printingNow ? "file-preview--printing" : ""}`}>
@@ -157,6 +157,19 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, pr
 					)}
 				</div>
 			)}
+			{failed && !printed && !printingNow && (
+				<div className="file-preview__failure">
+					<span>
+						Failure in printing doc ({index + 1}). Retry or to mark the job as failed,{" "}
+						<button type="button" className="file-preview__failure-link" onClick={onMarkJobFailed}>
+							click here…
+						</button>
+					</span>
+					<span className="file-preview__failure-note">
+						NOTE: customer will be refunded in case of marked as failed
+					</span>
+				</div>
+			)}
 		</div>
 	);
 }
@@ -168,7 +181,7 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, pr
 //   │    Cost    │                  │
 //   └────────────┴──────────────────┘
 
-function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showPreview = true, printedFileIds, printingAll, printers, selectedPrinterName, onPrinterMenuOpen, autoPrintOn, currentFileId }) {
+function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showPreview = true, printedFileIds, failedFileIds, onMarkJobFailed, printingAll, printers, selectedPrinterName, onPrinterMenuOpen, autoPrintOn, currentFileId }) {
 	const files = entry.files || [];
 	const cost = entry.cost;
 	const totalPages = getJobTotalPages(entry);
@@ -276,6 +289,8 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showP
 								onPrint={onPrintFile}
 								showPreview={showPreview}
 								printed={!!printedFileIds?.[file.fileId]}
+								failed={!!failedFileIds?.[file.fileId]}
+								onMarkJobFailed={onMarkJobFailed}
 								printingAll={printingAll}
 								printers={printers}
 								selectedPrinterName={selectedPrinterName}

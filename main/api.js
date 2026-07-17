@@ -144,18 +144,25 @@ function isJobFailing(jobId) {
 }
 
 // Marks a job "failed" on the backend — used when one of its files can't be
-// downloaded (even after a retry). Steps through the required "printing" status
-// first; the renderer never sees it (the job is already flagged as failing).
-async function markJobFailed(jobId) {
+// downloaded (even after a retry), or when every document in a job failed to
+// print. Steps through the required "printing" status first; the renderer
+// never sees it (the job is already flagged as failing). `currentStatus`, when
+// known to already be "printing" (true for every print-failure caller, since
+// the print attempt itself only happens after that transition), skips the step
+// — some backends reject a redundant same-state transition, which would
+// otherwise block the real "failed" transition from ever being attempted.
+async function markJobFailed(jobId, currentStatus) {
 	_failingJobs.add(jobId);
-	const printing = await updateJobStatus(jobId, "printing");
-	if (!printing?.success) {
-		console.error(`[API] job ${jobId}: could not transition to printing`);
-		return printing;
+	if (currentStatus !== "printing") {
+		const printing = await updateJobStatus(jobId, "printing");
+		if (!printing?.success) {
+			console.error(`[API] job ${jobId}: could not transition to printing —`, printing?.message);
+			return printing;
+		}
 	}
 	const result = await updateJobStatus(jobId, "failed");
-	if (result?.success) console.log(`[API] job ${jobId} marked failed (download error)`);
-	else console.error(`[API] job ${jobId}: could not transition to failed`);
+	if (result?.success) console.log(`[API] job ${jobId} marked failed`);
+	else console.error(`[API] job ${jobId}: could not transition to failed —`, result?.message);
 	return result;
 }
 

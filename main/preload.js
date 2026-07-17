@@ -12,14 +12,19 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	fetchJobs: () => ipcRenderer.invoke("jobs:fetch"),
 	fetchHistory: () => ipcRenderer.invoke("history:fetch"),
 	updateJobStatus: (jobId, status) => ipcRenderer.invoke("jobs:update-status", jobId, status),
+	// Marks a job "failed" — every document failed to print (or the operator
+	// forced it from the per-document failure banner). The customer is refunded
+	// on the backend for a "failed" status.
+	markJobFailed: (jobId, currentStatus) => ipcRenderer.invoke("jobs:mark-failed", jobId, currentStatus),
 	onJobsUpdate: (callback) => {
 		const handler = (_event, jobs) => callback(jobs);
 		ipcRenderer.on("jobs:updated", handler);
 		return () => ipcRenderer.removeListener("jobs:updated", handler);
 	},
-	// Fired when a job's file download fails unrecoverably and it was marked failed.
+	// Fired when a job is marked failed — its file download failed unrecoverably,
+	// or every document failed to print. `reason` is "download" or "print".
 	onJobFailed: (callback) => {
-		const handler = (_event, jobId) => callback(jobId);
+		const handler = (_event, jobId, reason) => callback(jobId, reason);
 		ipcRenderer.on("jobs:file-failed", handler);
 		return () => ipcRenderer.removeListener("jobs:file-failed", handler);
 	},

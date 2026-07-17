@@ -28,6 +28,8 @@ function PrintJobsTab() {
 		current,
 		isFilePrinted,
 		printedFiles,
+		failedFiles,
+		failJob,
 		busyJobs,
 		printFileManual,
 		printAllManual,
@@ -268,6 +270,7 @@ function PrintJobsTab() {
 			<div className="db-detail">
 				{selectedEntry ? (() => {
 					const jobPrinted = printedFiles[selectedEntry._id] || {};
+					const jobFailed = failedFiles[selectedEntry._id] || {};
 					const isPrintingAll = !!busyJobs[selectedEntry._id];
 					const isThisJobPrinting = current?.jobId === selectedEntry._id;
 					const currentFileId = isThisJobPrinting ? current.fileId : null;
@@ -280,6 +283,8 @@ function PrintJobsTab() {
 							onPreviewFile={handlePreviewFile}
 							onPrintFile={handlePrintFile}
 							printedFileIds={jobPrinted}
+							failedFileIds={jobFailed}
+							onMarkJobFailed={() => failJob(selectedEntry)}
 							printingAll={isPrintingAll}
 							printers={printers}
 							selectedPrinterName={defaultPrinter?.name}

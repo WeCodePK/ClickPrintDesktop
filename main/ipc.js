@@ -27,13 +27,15 @@ const { listPrinters, listAllPrinters, printTestPage } = require("./printers");
 const store = require("./store");
 
 function registerIpcHandlers(getMainWindow) {
-	// A job with an unrecoverable file download is marked "failed" on the backend
-	// and the renderer is told so it can drop it from the list/queue at once.
-	const handleJobFilesFailed = async (jobId) => {
-		const result = await markJobFailed(jobId);
+	// A job that can't be fulfilled — its file download failed unrecoverably, or
+	// every one of its documents failed to print — is marked "failed" on the
+	// backend and the renderer is told so it can drop it from the list/queue at
+	// once. `reason` lets the renderer show the right toast copy.
+	const handleJobFailed = async (jobId, reason = "download", currentStatus) => {
+		const result = await markJobFailed(jobId, currentStatus);
 		if (!result?.success) return false; // let the next reconcile retry
 		const win = getMainWindow();
-		if (win && !win.isDestroyed()) win.webContents.send("jobs:file-failed", jobId);
+		if (win && !win.isDestroyed()) win.webContents.send("jobs:file-failed", jobId, reason);
 		return true;
 	};
 
@@ -51,7 +53,7 @@ function registerIpcHandlers(getMainWindow) {
 			}
 			// Acknowledge new jobs to the backend and download their files.
 			acknowledgeNewJobs(jobs);
-			syncJobFiles(jobs, handleJobFilesFailed);
+			syncJobFiles(jobs, handleJobFailed);
 		});
 	};
 
@@ -101,7 +103,7 @@ function registerIpcHandlers(getMainWindow) {
 		// On initial load / reload, acknowledge new jobs and cache their files.
 		if (result.success) {
 			acknowledgeNewJobs(result.data);
-			syncJobFiles(result.data, handleJobFilesFailed);
+			syncJobFiles(result.data, handleJobFailed);
 			// Hide any jobs mid-transition to "failed" (see beginJobsSync).
 			return { ...result, data: result.data.filter((j) => !isJobFailing(j._id)) };
 		}
@@ -141,6 +143,15 @@ function registerIpcHandlers(getMainWindow) {
 	ipcMain.handle("jobs:update-status", async (_event, jobId, status) => {
 		console.log(`[IPC] jobs:update-status → ${jobId} = ${status}`);
 		return await updateJobStatus(jobId, status);
+	});
+
+	// Renderer-triggered "mark as failed" — every document in the job failed to
+	// print (or the operator forced it via the per-document failure banner).
+	// Reuses the same printing→failed step-through as a download failure.
+	ipcMain.handle("jobs:mark-failed", async (_event, jobId, currentStatus) => {
+		console.log(`[IPC] jobs:mark-failed → ${jobId}`);
+		const handled = await handleJobFailed(jobId, "print", currentStatus);
+		return handled ? { success: true } : { success: false, message: "request failed" };
 	});
 
 	ipcMain.handle("files:status", async () => {

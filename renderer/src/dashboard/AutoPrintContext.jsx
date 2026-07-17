@@ -156,6 +156,35 @@ export function AutoPrintProvider({ children }) {
 		});
 	}, []);
 
+	// A file that failed to print (any printer, any reason) shows a failure
+	// banner in the UI until either a retry succeeds (cleared) or the operator
+	// force-fails the whole job. `isFileFailed` drives that banner directly.
+	const isFileFailed = useCallback((jobId, fileId) => !!failedFiles[jobId]?.[fileId], [failedFiles]);
+
+	const markFileFailed = useCallback((jobId, fileId) => {
+		setFailedFiles((prev) => ({ ...prev, [jobId]: { ...(prev[jobId] || {}), [fileId]: true } }));
+	}, []);
+
+	const clearFileFailed = useCallback((jobId, fileId) => {
+		setFailedFiles((prev) => {
+			if (!prev[jobId]?.[fileId]) return prev;
+			const nextJob = { ...prev[jobId] };
+			delete nextJob[fileId];
+			const next = { ...prev, [jobId]: nextJob };
+			if (Object.keys(nextJob).length === 0) delete next[jobId];
+			return next;
+		});
+	}, []);
+
+	const clearJobFailed = useCallback((jobId) => {
+		setFailedFiles((prev) => {
+			if (!prev[jobId]) return prev;
+			const next = { ...prev };
+			delete next[jobId];
+			return next;
+		});
+	}, []);
+
 	// A job's cached files are only ever read while it's active (previews, print).
 	// Once it reaches a terminal state (completed/cancelled) they're never touched
 	// again — History shows metadata only — so delete them from disk to avoid
@@ -176,28 +205,70 @@ export function AutoPrintProvider({ children }) {
 		setPrintJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, status, rawStatus } : j)));
 	}, [setPrintJobs]);
 
-	// A job whose file download failed (even after retry) is marked "failed" on the
-	// backend by the main process. React here: drop it from the queue and mark it
-	// failed locally so it leaves the active list immediately (the next reconcile
-	// confirms it). Its cached files were already deleted in the main process.
+	// A job that can't be fulfilled — its file download failed unrecoverably, or
+	// every document failed to print — is marked "failed" on the backend by the
+	// main process (either automatically, see the effect below, or via the
+	// operator's "click here" in the per-document failure banner). React here:
+	// drop it from the queue and mark it failed locally so it leaves the active
+	// list immediately (the next reconcile confirms it).
 	useEffect(() => {
 		if (!window.electronAPI.onJobFailed) return;
-		return window.electronAPI.onJobFailed((jobId) => {
-			console.warn("[AutoPrint] job download failed — removing:", jobId);
+		return window.electronAPI.onJobFailed((jobId, reason) => {
+			console.warn(`[AutoPrint] job ${reason === "print" ? "print" : "download"} failed — removing:`, jobId);
 			const job = printJobsRef.current.find((j) => j._id === jobId);
 			const who = job?.createdBy?.name || job?.createdBy?.number || `#${String(jobId).slice(-6)}`;
-			pushToast(`Job (${who}) failed — files couldn’t be downloaded.`);
+			pushToast(
+				reason === "print"
+					? `Job (${who}) marked failed — every document failed to print.`
+					: `Job (${who}) failed — files couldn’t be downloaded.`
+			);
 			setQueueIds((q) => q.filter((id) => id !== jobId));
-			setFailedFiles((prev) => {
-				if (!prev[jobId]) return prev;
-				const next = { ...prev };
-				delete next[jobId];
-				return next;
-			});
+			clearJobFailed(jobId);
 			clearJobPrinted(jobId);
 			setJobStatus(jobId, "completed", "failed");
 		});
-	}, [clearJobPrinted, setJobStatus, pushToast]);
+	}, [clearJobFailed, clearJobPrinted, setJobStatus, pushToast]);
+
+	// Once every document in an active job has failed to print, mark it "failed"
+	// on the backend automatically (customer is refunded there) — except when
+	// printing to Microsoft Print to PDF (see the effect below). Guarded by a
+	// ref so a job is only ever sent through this once per session, even though
+	// the effect re-runs on every printedFiles/failedFiles change.
+	const autoFailedRef = useRef(new Set());
+
+	const failJob = useCallback(async (job) => {
+		if (!job || autoFailedRef.current.has(job._id)) return;
+		autoFailedRef.current.add(job._id);
+		try {
+			const result = await window.electronAPI.markJobFailed(job._id, job.rawStatus);
+			if (!result?.success) throw new Error(result?.message || "request failed");
+			// The main process's jobs:file-failed event (fired on success) drives the
+			// toast + local cleanup above — nothing else to do here.
+		} catch (err) {
+			console.error("[AutoPrint] failed to mark job failed:", err);
+			pushToast("Couldn't mark the job as failed — please try again.");
+			autoFailedRef.current.delete(job._id); // allow retrying
+		}
+	}, [pushToast]);
+
+	useEffect(() => {
+		// Microsoft Print to PDF is excluded from auto-fail: a failure there is
+		// usually just the operator cancelling the save dialog, not a real printer
+		// problem, so it shouldn't auto-refund the customer. They can still force
+		// it via the per-document "click here" link, which calls failJob directly.
+		const isPdfTarget = !selectedPrinter || /print to pdf/i.test(selectedPrinter?.name || "");
+		if (isPdfTarget) return;
+
+		for (const job of printJobs) {
+			if (!ACTIVE_STATUSES.has(job.rawStatus)) continue;
+			const files = job.files || [];
+			if (files.length === 0) continue;
+			const jobFailed = failedFiles[job._id] || {};
+			const jobPrinted = printedFiles[job._id] || {};
+			const allFailed = files.every((f) => jobFailed[f.fileId] && !jobPrinted[f.fileId]);
+			if (allFailed) failJob(job);
+		}
+	}, [printJobs, failedFiles, printedFiles, failJob, selectedPrinter]);
 
 	// ── print primitives (used by both manual and auto paths) ───────────────────
 	const ensurePrintingStatus = useCallback(async (job) => {
@@ -223,24 +294,31 @@ export function AutoPrintProvider({ children }) {
 		}
 	}, [setJobStatus, cleanupJobFiles]);
 
+	// Shared by every print path (manual per-doc, manual print-all, and the auto
+	// queue) so failure tracking behaves identically regardless of printer or
+	// trigger. A failure marks the file failed (driving its banner in the UI);
+	// a retry that succeeds clears it.
 	const printOneFile = useCallback(async (jobId, file, deviceName) => {
 		setCurrent({ jobId, fileId: file.fileId });
 		try {
 			const result = await window.electronAPI.printFile(file.fileId, file.settings, deviceName, file.name);
 			if (!result?.success) throw new Error(result?.message || "print failed");
+			clearFileFailed(jobId, file.fileId);
 			return true;
 		} catch (err) {
 			console.error("[AutoPrint] failed to print file:", err);
-			// Only the PDF save-dialog cancellation gets this specific message — a
-			// real printer failure keeps the generic "nothing happened" state.
+			// Only the PDF save-dialog cancellation gets this specific toast — every
+			// other failure (any printer, any reason) still gets the generic
+			// per-document failure banner via markFileFailed below.
 			if (err.message === "pdf save cancelled") {
 				pushToast("Failure in printing through Microsoft Print to PDF. To cancel the job, click the Decline Job button above.");
 			}
+			markFileFailed(jobId, file.fileId);
 			return false;
 		} finally {
 			setCurrent(null);
 		}
-	}, [pushToast]);
+	}, [pushToast, markFileFailed, clearFileFailed]);
 
 	// ── manual actions (used by the Print Jobs buttons when auto-print is OFF) ───
 	const printFileManual = useCallback(async (job, file, deviceName) => {
@@ -330,8 +408,7 @@ export function AutoPrintProvider({ children }) {
 			} else {
 				await ensurePrintingStatus(job);
 				const ok = await printOneFile(jobId, nextFile);
-				if (ok) markFilePrinted(jobId, nextFile.fileId);
-				else setFailedFiles((prev) => ({ ...prev, [jobId]: { ...(prev[jobId] || {}), [nextFile.fileId]: true } }));
+				if (ok) markFilePrinted(jobId, nextFile.fileId); // failure tracking happens inside printOneFile
 			}
 			busyRef.current = false;
 			setTick((t) => t + 1);
@@ -385,6 +462,9 @@ export function AutoPrintProvider({ children }) {
 		current,
 		printedFiles,
 		isFilePrinted,
+		failedFiles,
+		isFileFailed,
+		failJob,
 		busyJobs,
 		enableAutoPrint,
 		disableAutoPrint,

@@ -1680,6 +1680,44 @@ body,
 	padding: 0 18px 16px;
 }
 
+/* Shown below the print buttons once a file has failed to print (any printer,
+   any reason) — offers a retry (via the Print button above) or an explicit,
+   visually distinct escape hatch to fail the whole job. */
+.file-preview__failure {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin: 0 18px 16px;
+	padding: 10px 12px;
+	border: 1px solid var(--color-accent-light);
+	border-radius: var(--radius-md);
+	background: rgba(255, 79, 0, 0.08);
+	font-size: 12.5px;
+	color: var(--color-text-primary);
+	line-height: 1.5;
+}
+
+.file-preview__failure-link {
+	border: none;
+	background: none;
+	padding: 0;
+	font: inherit;
+	font-weight: 700;
+	text-decoration: underline;
+	color: var(--color-accent-hover);
+	cursor: pointer;
+}
+
+.file-preview__failure-link:hover {
+	color: var(--color-accent);
+}
+
+.file-preview__failure-note {
+	font-size: 11px;
+	font-style: italic;
+	color: var(--color-text-secondary);
+}
+
 .btn-sm {
 	padding: 8px 16px;
 	font-size: 13px;
