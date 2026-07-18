@@ -765,6 +765,79 @@ body {
 	color: var(--color-text-secondary);
 }
 
+/* ── Shop selection ── */
+
+.shop-list {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	overflow-y: auto;
+}
+
+.shop-option {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	width: 100%;
+	padding: 16px 18px;
+	border: 2px solid var(--border-light);
+	border-radius: var(--radius-md);
+	background: var(--color-bg-card);
+	color: var(--color-text-primary);
+	font-family: var(--font-family);
+	cursor: pointer;
+	text-align: left;
+	box-shadow: var(--shadow-sm);
+	transition: all var(--transition-fast);
+}
+
+.shop-option:hover:not(:disabled) {
+	border-color: var(--color-primary);
+	transform: translateY(-1px);
+	box-shadow: 0 0 0 3px rgba(0, 217, 163, 0.1);
+}
+
+.shop-option:disabled {
+	cursor: not-allowed;
+	opacity: 0.7;
+}
+
+.shop-option__avatar {
+	flex-shrink: 0;
+	width: 40px;
+	height: 40px;
+	border-radius: var(--radius-md);
+	background: rgba(0, 230, 173, 0.1);
+	color: var(--color-primary);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 17px;
+	font-weight: 800;
+}
+
+.shop-option__name {
+	flex: 1;
+	min-width: 0;
+	font-size: 15px;
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.shop-option__arrow {
+	flex-shrink: 0;
+	color: var(--color-text-muted);
+	font-size: 18px;
+	transition: transform var(--transition-fast), color var(--transition-fast);
+}
+
+.shop-option:hover:not(:disabled) .shop-option__arrow {
+	color: var(--color-primary);
+	transform: translateX(3px);
+}
+
 /* ── Scrollbar ── */
 
 ::-webkit-scrollbar {

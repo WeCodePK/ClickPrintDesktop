@@ -5,6 +5,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	sendOtp: (number) => ipcRenderer.invoke("auth:send-otp", number),
 	verifyOtp: (code, number) =>
 		ipcRenderer.invoke("auth:verify-otp", code, number),
+	// Records which shop (of possibly several the user owns) to operate as; this
+	// is what actually starts the shop-scoped jobs stream. `shop` is { _id, name }.
+	selectShop: (shop) => ipcRenderer.invoke("auth:select-shop", shop),
 	getAuthState: () => ipcRenderer.invoke("auth:get-state"),
 	logout: () => ipcRenderer.invoke("auth:logout"),
 

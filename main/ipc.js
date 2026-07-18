@@ -2,6 +2,7 @@ const { ipcMain } = require("electron");
 const {
 	sendOtp,
 	verifyOtp,
+	selectShop,
 	updateShop,
 	getAuthState,
 	clearAuthState,
@@ -72,11 +73,20 @@ function registerIpcHandlers(getMainWindow) {
 
 	ipcMain.handle("auth:verify-otp", async (_event, code, number) => {
 		console.log("[IPC] auth:verify-otp →", number);
-		const result = await verifyOtp(code, number);
+		// Verify only authenticates and returns the user's shops. We can't start the
+		// (shop-scoped) SSE stream yet — that waits until a shop is chosen, in
+		// auth:select-shop below.
+		return await verifyOtp(code, number);
+	});
+
+	// The user picked which of their shops to operate as. Store it, then start the
+	// SSE connection now that we have both a token and a shop. On every reconnect
+	// or event the main process re-fetches the full job list and pushes it to the
+	// renderer — renderer is never stale.
+	ipcMain.handle("auth:select-shop", async (_event, shop) => {
+		console.log("[IPC] auth:select-shop →", shop?._id);
+		const result = selectShop(shop);
 		if (result.success) {
-			// Start the SSE connection now that we have a token. On every reconnect
-			// or event the main process re-fetches the full job list and pushes it
-			// to the renderer — renderer is never stale.
 			beginJobsSync();
 		}
 		return result;
@@ -262,8 +272,9 @@ function registerIpcHandlers(getMainWindow) {
 	});
 
 	// If a session was restored from disk on startup, begin syncing jobs right
-	// away so the dashboard is live without requiring a fresh login.
-	if (getAuthState().token) {
+	// away so the dashboard is live without requiring a fresh login. Requires a
+	// selected shop — the SSE stream is scoped to it.
+	if (getAuthState().token && getAuthState().shopId) {
 		console.log("[IPC] Restoring session — starting jobs sync");
 		beginJobsSync();
 	}

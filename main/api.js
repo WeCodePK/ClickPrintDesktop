@@ -65,13 +65,18 @@ async function verifyOtp(code, number) {
 		const data = await readJson(response);
 
 		if (data.success) {
+			// A user can own multiple shops, returned in data.data.shops as
+			// [{ _id, name }]. We don't know which one yet — the renderer picks one
+			// (or auto-picks when there's a single shop) and calls selectShop, which
+			// is what actually stores shopId and opens the shop-scoped SSE stream.
 			setAuth({
 				token: data.data.token,
 				profile: data.data.profile ?? null,
-				shopId: data.data.shop?._id ?? data.data.profile?._id ?? null,
 				phoneNumber: number,
+				shopId: null,
+				shopName: null,
 			});
-			console.log("[API] Auth token stored, shopId:", getAuth().shopId);
+			console.log("[API] Auth token stored;", (data.data.shops?.length ?? 0), "shop(s) to choose from");
 		}
 
 		return data;
@@ -85,6 +90,16 @@ async function verifyOtp(code, number) {
 					: "An unexpected error occurred. Please try again.",
 		};
 	}
+}
+
+// Records which shop the user chose to operate as for this session. Everything
+// shop-scoped (jobs SSE, shop/services/printers fetches, isOnline ping) resolves
+// its shop id from here via getShopId.
+function selectShop(shop) {
+	if (!shop || !shop._id) return { success: false, message: "No shop selected." };
+	setAuth({ shopId: shop._id, shopName: shop.name ?? null });
+	console.log("[API] shop selected:", shop._id, shop.name);
+	return { success: true };
 }
 
 async function fetchJobs() {
@@ -214,7 +229,7 @@ function getShopId() {
 	if (!auth.token) return null;
 	try {
 		const payload = JSON.parse(Buffer.from(auth.token.split(".")[1], "base64").toString("utf8"));
-		return payload.shopId || payload.shop || payload._id || payload.sub || null;
+		return payload.shopId || payload.sid || payload.shop || payload._id || payload.sub || null;
 	} catch {
 		return null;
 	}
@@ -444,7 +459,16 @@ function stopJobsSse() {
 function _connectSse() {
 	if (!getAuth().token || !_onJobsUpdate) return;
 
-	const endpoint = `${API_BASE_URL}/api/events`;
+	// The live jobs stream is scoped to the chosen shop: /api/events/:shopId.
+	// Without a selected shop there's nothing to stream — bail (selectShop, which
+	// runs before beginJobsSync, guarantees this is set for a normal login).
+	const shopId = getShopId();
+	if (!shopId) {
+		console.warn("[SSE] no shop selected — not connecting");
+		return;
+	}
+
+	const endpoint = `${API_BASE_URL}/api/events/${shopId}`;
 
 	_sse = new EventSource(endpoint, {
 		headers: { Authorization: `Bearer ${getAuth().token}` },
@@ -503,6 +527,7 @@ async function _reconcile() {
 module.exports = {
 	sendOtp,
 	verifyOtp,
+	selectShop,
 	getAuthState,
 	clearAuthState,
 	updateShop,
