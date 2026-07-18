@@ -32,7 +32,7 @@ async function sendOtp(number) {
 		const response = await fetch(`${API_BASE_URL}/api/auth/otp`, {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ number, actor: "shop" }),
+			body: JSON.stringify({ number, intent: "shop" }),
 		});
 
 		const data = await readJson(response);
