@@ -2,8 +2,9 @@ const store = require("./store");
 
 // `shopId`/`shopName` identify the shop the user chose at login (a user may own
 // several). They stay null until a shop is selected — nothing shop-scoped (jobs
-// SSE, shop fetch) should run before then.
-const EMPTY_AUTH = { token: null, profile: null, phoneNumber: null, shopId: null, shopName: null };
+// SSE, shop fetch) should run before then. `shops` is the full list the user can
+// switch between (persisted so the in-app shop switcher works after a restart).
+const EMPTY_AUTH = { token: null, profile: null, phoneNumber: null, shopId: null, shopName: null, shops: [] };
 
 const state = {
 	auth: { ...EMPTY_AUTH },

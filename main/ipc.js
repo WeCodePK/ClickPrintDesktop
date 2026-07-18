@@ -22,9 +22,12 @@ const {
 	acknowledgeNewJobs,
 	startJobsSse,
 	stopJobsSse,
+	setSseStatusNotifier,
+	getSseStatus,
 } = require("./api");
 const { syncJobFiles, getStatusMap, setNotifier, openFile, printFile, deleteJobFiles } = require("./files");
 const { listPrinters, listAllPrinters, printTestPage } = require("./printers");
+const { setJobs } = require("./state");
 const store = require("./store");
 
 function registerIpcHandlers(getMainWindow) {
@@ -66,6 +69,15 @@ function registerIpcHandlers(getMainWindow) {
 		}
 	});
 
+	// Push live SSE connection-state changes to the renderer (drives the
+	// connection indicator next to the settings/logout icons).
+	setSseStatusNotifier((status) => {
+		const win = getMainWindow();
+		if (win && !win.isDestroyed()) {
+			win.webContents.send("sse:status", status);
+		}
+	});
+
 	ipcMain.handle("auth:send-otp", async (_event, number) => {
 		console.log("[IPC] auth:send-otp →", number);
 		return await sendOtp(number);
@@ -90,6 +102,27 @@ function registerIpcHandlers(getMainWindow) {
 			beginJobsSync();
 		}
 		return result;
+	});
+
+	// Switch the active shop without re-authenticating (the token is unchanged).
+	// Tears down the current shop's SSE stream, clears its now-stale jobs from the
+	// renderer, records the new shop, and reconnects the stream against it.
+	ipcMain.handle("auth:switch-shop", async (_event, shop) => {
+		console.log("[IPC] auth:switch-shop →", shop?._id);
+		const result = selectShop(shop);
+		if (!result.success) return result;
+		stopJobsSse();
+		setJobs([]);
+		const win = getMainWindow();
+		if (win && !win.isDestroyed()) win.webContents.send("jobs:updated", []);
+		beginJobsSync();
+		return result;
+	});
+
+	// Current SSE connection state, for a renderer that mounts after the stream is
+	// already up (the live sse:status events would otherwise have been missed).
+	ipcMain.handle("sse:get-status", async () => {
+		return getSseStatus();
 	});
 
 	ipcMain.handle("auth:get-state", async () => {

@@ -3856,3 +3856,193 @@ body,
 	from { opacity: 0; transform: translateY(12px); }
 	to { opacity: 1; transform: translateY(0); }
 }
+
+/* ── Connection status + shop switcher (sidebar) ── */
+
+.conn-switcher {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.conn-btn {
+	position: relative;
+}
+
+/* Status pip at the corner of the icon. */
+.conn-btn__dot {
+	position: absolute;
+	right: 7px;
+	bottom: 7px;
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	border: 2px solid var(--color-bg-card);
+}
+
+.conn-btn__dot--ok   { background: var(--color-primary); }
+.conn-btn__dot--warn { background: #f5a623; }
+.conn-btn__dot--off  { background: var(--color-text-muted); }
+
+/* Small spinner shown in place of the dot while (re)connecting. */
+.conn-btn__spinner {
+	position: absolute;
+	right: 6px;
+	bottom: 6px;
+	width: 11px;
+	height: 11px;
+	border: 2px solid rgba(245, 166, 35, 0.3);
+	border-top-color: #f5a623;
+	border-radius: 50%;
+	animation: spin 0.65s linear infinite;
+}
+
+/* Popover opens to the right of the sidebar, anchored near the bottom. */
+.conn-popover {
+	position: absolute;
+	left: 52px;
+	bottom: 0;
+	z-index: 1100;
+	width: 244px;
+	padding: 12px;
+	background: var(--color-bg-card);
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-lg);
+	animation: fadeSlideIn var(--transition-base) both;
+}
+
+.conn-popover__status {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 4px 4px 2px;
+}
+
+.conn-popover__dot {
+	flex-shrink: 0;
+	width: 10px;
+	height: 10px;
+	border-radius: 50%;
+}
+
+.conn-popover__dot--ok   { background: var(--color-primary); box-shadow: 0 0 0 3px rgba(0, 217, 163, 0.15); }
+.conn-popover__dot--warn { background: #f5a623; box-shadow: 0 0 0 3px rgba(245, 166, 35, 0.15); }
+.conn-popover__dot--off  { background: var(--color-text-muted); }
+
+.conn-popover__spinner {
+	flex-shrink: 0;
+	width: 14px;
+	height: 14px;
+	border: 2px solid rgba(245, 166, 35, 0.3);
+	border-top-color: #f5a623;
+	border-radius: 50%;
+	animation: spin 0.65s linear infinite;
+}
+
+.conn-popover__status-label {
+	font-size: 10.5px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+	color: var(--color-text-muted);
+}
+
+.conn-popover__status-value {
+	font-size: 13.5px;
+	font-weight: 700;
+	color: var(--color-text-primary);
+}
+
+.conn-popover__divider {
+	height: 1px;
+	background: var(--border-light);
+	margin: 10px 0;
+}
+
+.conn-popover__section-title {
+	font-size: 10.5px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+	color: var(--color-text-muted);
+	padding: 6px 4px 6px;
+}
+
+.conn-shop {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	padding: 8px 8px;
+	border-radius: var(--radius-sm);
+	font-family: var(--font-family);
+	text-align: left;
+	color: var(--color-text-primary);
+}
+
+.conn-shop--current {
+	background: rgba(0, 230, 173, 0.1);
+}
+
+.conn-shop--option {
+	border: none;
+	background: none;
+	cursor: pointer;
+	transition: background var(--transition-fast);
+}
+
+.conn-shop--option:hover:not(:disabled) {
+	background: rgba(134, 150, 160, 0.12);
+}
+
+.conn-shop--option:disabled {
+	cursor: not-allowed;
+	opacity: 0.6;
+}
+
+.conn-shop__avatar {
+	flex-shrink: 0;
+	width: 30px;
+	height: 30px;
+	border-radius: var(--radius-sm);
+	background: rgba(0, 230, 173, 0.1);
+	color: var(--color-primary);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 13px;
+	font-weight: 800;
+}
+
+.conn-shop__name {
+	flex: 1;
+	min-width: 0;
+	font-size: 13.5px;
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.conn-shop__check {
+	flex-shrink: 0;
+	display: inline-flex;
+	color: var(--color-primary);
+}
+
+.conn-popover__empty {
+	font-size: 12px;
+	color: var(--color-text-muted);
+	padding: 6px 4px 2px;
+}
+
+.conn-popover__error {
+	margin-top: 8px;
+	padding: 8px 10px;
+	border-radius: var(--radius-sm);
+	background: rgba(255, 79, 0, 0.1);
+	font-size: 12px;
+	color: var(--color-accent);
+}

@@ -8,8 +8,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	// Records which shop (of possibly several the user owns) to operate as; this
 	// is what actually starts the shop-scoped jobs stream. `shop` is { _id, name }.
 	selectShop: (shop) => ipcRenderer.invoke("auth:select-shop", shop),
+	// Switch the active shop mid-session without re-authenticating; reconnects the
+	// jobs stream to the new shop. `shop` is { _id, name }.
+	switchShop: (shop) => ipcRenderer.invoke("auth:switch-shop", shop),
 	getAuthState: () => ipcRenderer.invoke("auth:get-state"),
 	logout: () => ipcRenderer.invoke("auth:logout"),
+
+	// Live jobs-stream (SSE) connection state — "connecting" | "open" |
+	// "reconnecting" | "closed". Query the current value, and subscribe to changes.
+	getSseStatus: () => ipcRenderer.invoke("sse:get-status"),
+	onSseStatus: (callback) => {
+		const handler = (_event, status) => callback(status);
+		ipcRenderer.on("sse:status", handler);
+		return () => ipcRenderer.removeListener("sse:status", handler);
+	},
 
 	// Jobs
 	fetchJobs: () => ipcRenderer.invoke("jobs:fetch"),

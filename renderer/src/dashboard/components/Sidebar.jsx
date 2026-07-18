@@ -8,6 +8,7 @@ import {
 	SettingsIcon,
 	LogoutIcon,
 } from "../icons";
+import ConnectionSwitcher from "./ConnectionSwitcher";
 
 const TABS = [
 	{ to: "jobs", label: "Print Jobs", Icon: PrintJobsIcon },
@@ -135,6 +136,9 @@ function Sidebar() {
 			<div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "auto", width: "100%", alignItems: "center" }}>
 				{/* ── Update banner (shown only when an update is available) ── */}
 				<UpdateBanner />
+
+				{/* ── SSE connection status + shop switcher ── */}
+				<ConnectionSwitcher />
 
 				<div className="tooltip-wrapper">
 					<NavLink

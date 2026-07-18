@@ -1,7 +1,8 @@
 const EventSource = require("eventsource");
 const { getAuth, setAuth, setJobs, clearAuth } = require("./state");
 
-const API_BASE_URL = "https://clickprintbackend.wckd.pk"
+// const API_BASE_URL = "https://clickprintbackend.wckd.pk"
+const API_BASE_URL = "http://localhost:3000"
 
 // The backend now nests each route's payload under a named key inside `data`
 // (e.g. { data: { jobs: [...] } } instead of { data: [...] }). Unwrap that named
@@ -75,6 +76,7 @@ async function verifyOtp(code, number) {
 				phoneNumber: number,
 				shopId: null,
 				shopName: null,
+				shops: Array.isArray(data.data.shops) ? data.data.shops : [],
 			});
 			console.log("[API] Auth token stored;", (data.data.shops?.length ?? 0), "shop(s) to choose from");
 		}
@@ -440,6 +442,30 @@ let _sse = null;
 let _sseTimer = null;
 let _onJobsUpdate = null;
 
+// Connection state of the live jobs stream, surfaced to the renderer so the UI
+// can show a healthy/reconnecting indicator. One of:
+//   "connecting"   — opening the EventSource (initial or after a drop)
+//   "open"         — connected and receiving
+//   "reconnecting" — dropped; a retry is scheduled
+//   "closed"       — intentionally stopped (logout / no shop selected)
+let _sseStatus = "closed";
+let _onSseStatus = null;
+
+function setSseStatusNotifier(cb) {
+	_onSseStatus = cb;
+}
+
+function getSseStatus() {
+	return _sseStatus;
+}
+
+function _setSseStatus(status) {
+	if (_sseStatus === status) return;
+	_sseStatus = status;
+	console.log("[SSE] status:", status);
+	if (_onSseStatus) _onSseStatus(status);
+}
+
 function startJobsSse(onJobsUpdate) {
 	_onJobsUpdate = onJobsUpdate;
 	_connectSse();
@@ -454,6 +480,7 @@ function stopJobsSse() {
 		_sse.close();
 		_sse = null;
 	}
+	_setSseStatus("closed");
 }
 
 function _connectSse() {
@@ -465,8 +492,11 @@ function _connectSse() {
 	const shopId = getShopId();
 	if (!shopId) {
 		console.warn("[SSE] no shop selected — not connecting");
+		_setSseStatus("closed");
 		return;
 	}
+
+	_setSseStatus("connecting");
 
 	const endpoint = `${API_BASE_URL}/api/events/${shopId}`;
 
@@ -476,6 +506,7 @@ function _connectSse() {
 
 	_sse.onopen = () => {
 		console.log("[SSE] Connected");
+		_setSseStatus("open");
 		_reconcile();
 	};
 
@@ -508,7 +539,10 @@ function _connectSse() {
 		_sse.close();
 		_sse = null;
 		if (_onJobsUpdate) {
+			_setSseStatus("reconnecting");
 			_sseTimer = setTimeout(_connectSse, 5000);
+		} else {
+			_setSseStatus("closed");
 		}
 	};
 }
@@ -548,4 +582,6 @@ module.exports = {
 	acknowledgeNewJobs,
 	startJobsSse,
 	stopJobsSse,
+	setSseStatusNotifier,
+	getSseStatus,
 };
