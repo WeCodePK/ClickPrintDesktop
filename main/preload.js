@@ -22,26 +22,42 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		return () => ipcRenderer.removeListener("sse:status", handler);
 	},
 
-	// Jobs
+	// Jobs — the list is pushed authoritatively from main; operator actions are
+	// commands handled entirely by the main-process print engine.
 	fetchJobs: () => ipcRenderer.invoke("jobs:fetch"),
 	fetchHistory: () => ipcRenderer.invoke("history:fetch"),
-	updateJobStatus: (jobId, status) => ipcRenderer.invoke("jobs:update-status", jobId, status),
-	// Marks a job "failed" — every document failed to print (or the operator
-	// forced it from the per-document failure banner). The customer is refunded
-	// on the backend for a "failed" status.
-	markJobFailed: (jobId, currentStatus) => ipcRenderer.invoke("jobs:mark-failed", jobId, currentStatus),
+	declineJob: (jobId) => ipcRenderer.invoke("jobs:decline", jobId),
+	completeJob: (jobId, opts) => ipcRenderer.invoke("jobs:complete", jobId, opts),
+	// Operator "mark as failed" via the per-document failure banner. The customer
+	// is refunded on the backend for a "failed" status.
+	markJobFailed: (jobId) => ipcRenderer.invoke("jobs:mark-failed", jobId),
 	onJobsUpdate: (callback) => {
 		const handler = (_event, jobs) => callback(jobs);
 		ipcRenderer.on("jobs:updated", handler);
 		return () => ipcRenderer.removeListener("jobs:updated", handler);
 	},
-	// Fired when a job is marked failed — its file download failed unrecoverably,
-	// or every document failed to print. `reason` is "download" or "print".
-	onJobFailed: (callback) => {
-		const handler = (_event, jobId, reason) => callback(jobId, reason);
-		ipcRenderer.on("jobs:file-failed", handler);
-		return () => ipcRenderer.removeListener("jobs:file-failed", handler);
+
+	// Print engine — consolidated state snapshot + commands. All orchestration
+	// (routing, queueing, spooler verification, backend transitions) is in main.
+	getEngineState: () => ipcRenderer.invoke("engine:get-state"),
+	onEngineState: (callback) => {
+		const handler = (_event, snapshot) => callback(snapshot);
+		ipcRenderer.on("engine:state", handler);
+		return () => ipcRenderer.removeListener("engine:state", handler);
 	},
+	// Semantic notification events (renderer owns the copy).
+	onEngineToast: (callback) => {
+		const handler = (_event, payload) => callback(payload);
+		ipcRenderer.on("engine:toast", handler);
+		return () => ipcRenderer.removeListener("engine:toast", handler);
+	},
+	printJob: (jobId, deviceName) => ipcRenderer.invoke("engine:print-job", jobId, deviceName),
+	printJobFile: (jobId, fileId, deviceName) => ipcRenderer.invoke("engine:print-file", jobId, fileId, deviceName),
+	setQueuePaused: (paused) => ipcRenderer.invoke("engine:set-paused", paused),
+	setAutoPrint: (enabled) => ipcRenderer.invoke("engine:set-autoprint", enabled),
+	resolveRequeue: (accept) => ipcRenderer.invoke("engine:requeue-decision", accept),
+	refreshRouting: () => ipcRenderer.invoke("engine:refresh-routing"),
+	migratePrintProgress: (printedFiles) => ipcRenderer.invoke("engine:migrate-progress", printedFiles),
 
 	// Files (downloaded + cached in the main process)
 	getFilesStatus: () => ipcRenderer.invoke("files:status"),
@@ -54,26 +70,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	fileUrl: (fileId) => `clickfile://file/${fileId}`,
 	// Open a cached file in the OS default viewer / native print dialog.
 	openFile: (fileId) => ipcRenderer.invoke("files:open", fileId),
-	// Removes cached files for a job once it reaches a terminal state.
-	deleteJobFiles: (fileIds) => ipcRenderer.invoke("files:delete-job-files", fileIds),
-	printFile: (fileId, settings, deviceName, fileName) => ipcRenderer.invoke("files:print", fileId, settings, deviceName, fileName),
 
 	// Shop printers (registered on the backend)
 	fetchPrinters: () => ipcRenderer.invoke("printers:fetch"),
 	createPrinter: (name) => ipcRenderer.invoke("printers:create", name),
 	deletePrinter: (printerId) => ipcRenderer.invoke("printers:delete", printerId),
+	setPrinterDisabled: (printerId, isDisabled) => ipcRenderer.invoke("printers:setDisabled", printerId, isDisabled),
 
 	// Local printers (reachable right now on this machine)
 	listPrinters: (force) => ipcRenderer.invoke("printers:list", force),
 	// All installed printers (online + offline) for the add-printer picker
 	listAllPrinters: (force) => ipcRenderer.invoke("printers:list-all", force),
 	testPrinter: (deviceName) => ipcRenderer.invoke("printers:test", deviceName),
-	getSelectedPrinter: () => ipcRenderer.invoke("printers:get-selected"),
-	setSelectedPrinter: (printer) => ipcRenderer.invoke("printers:set-selected", printer),
-
-	// Automated printing toggle (persisted in the main-process store)
-	getAutoPrint: () => ipcRenderer.invoke("settings:get-autoprint"),
-	setAutoPrint: (enabled) => ipcRenderer.invoke("settings:set-autoprint", enabled),
 
 	// Shop
 	updateShop: (shopId, data) => ipcRenderer.invoke("shop:update", shopId, data),
@@ -86,6 +94,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	createService: (service) => ipcRenderer.invoke("services:create", service),
 	updateService: (serviceId, service) => ipcRenderer.invoke("services:update", serviceId, service),
 	deleteService: (serviceId) => ipcRenderer.invoke("services:delete", serviceId),
+	setServiceDisabled: (serviceId, isDisabled) => ipcRenderer.invoke("services:setDisabled", serviceId, isDisabled),
 
 	// Window controls
 	minimizeWindow: () => ipcRenderer.send("window:minimize"),

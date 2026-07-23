@@ -126,7 +126,7 @@ function ShopProfileSettings() {
 
 			<div style={{ display: "flex", justifyContent: "center", width: "100%" }}>
 				<form
-					className="price-form"
+					className="service-form"
 					onSubmit={handleSubmit}
 					style={{
 						width: "100%",

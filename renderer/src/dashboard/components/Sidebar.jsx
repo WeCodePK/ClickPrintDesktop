@@ -7,20 +7,20 @@ import {
 	HistoryIcon,
 	WalletIcon,
 	StoreIcon,
-	BoltIcon,
 	LogoutIcon,
 } from "../icons";
 import ConnectionSwitcher from "./ConnectionSwitcher";
+import AutoPrintSwitcher from "./AutoPrintSwitcher";
 
-// The Settings screen's former sub-sections (Pricing, Shop Profile, Automated
-// Printing) are now first-class nav items alongside the core tabs.
+// The Settings screen's former sub-sections (Services, Shop Profile) are now
+// first-class nav items alongside the core tabs. Automated Printing lives in a
+// popover next to the connection indicator instead of a tab.
 const TABS = [
-	{ to: "jobs", label: "Print Jobs", Icon: PrintJobsIcon },
+	{ to: "jobs", label: "Jobs", Icon: PrintJobsIcon },
 	{ to: "printers", label: "Printers", Icon: PrinterIcon },
 	{ to: "history", label: "History", Icon: HistoryIcon },
-	{ to: "pricing", label: "Pricing", Icon: WalletIcon },
+	{ to: "services", label: "Services", Icon: WalletIcon },
 	{ to: "profile", label: "Shop Profile", Icon: StoreIcon },
-	{ to: "automation", label: "Automated Printing", Icon: BoltIcon },
 ];
 
 // ── Leaf icon (matches the Claude Code reference) ────────────────────────────
@@ -143,6 +143,9 @@ function Sidebar() {
 			<div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "auto", width: "100%", alignItems: "center" }}>
 				{/* ── Update banner (shown only when an update is available) ── */}
 				<UpdateBanner />
+
+				{/* ── Automated-printing toggle ── */}
+				<AutoPrintSwitcher />
 
 				{/* ── SSE connection status + shop switcher ── */}
 				<ConnectionSwitcher />

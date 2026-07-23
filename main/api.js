@@ -150,8 +150,8 @@ function clearAuthState() {
 // Jobs currently being transitioned to "failed". The backend only allows
 // queued → printing → failed, so we must step through "printing" — but the UI
 // must never show that intermediate state. Jobs flagged here are filtered out of
-// every push to the renderer (see isJobFailing); the UI removes them via the
-// explicit jobs:file-failed event instead.
+// every push to the renderer (see isJobFailing); the print engine's status
+// override + toast event inform the UI instead.
 const _failingJobs = new Set();
 
 function isJobFailing(jobId) {
@@ -270,11 +270,11 @@ async function fetchShop() {
 
 // ── Shop services CRUD ────────────────────────────────────────────────────────
 // A "service" is a priced print configuration: { rate, keys, printers }. These
-// live under /api/services (the shop is resolved from the auth token).
+// live under /api/services/:shopId.
 
 async function fetchServices() {
 	try {
-		const response = await fetch(`${API_BASE_URL}/api/services`, {
+		const response = await fetch(`${API_BASE_URL}/api/services/${getAuth().shopId}`, {
 			headers: authHeaders(),
 		});
 		return unwrap(await readJson(response), "services");
@@ -286,7 +286,7 @@ async function fetchServices() {
 
 async function createService(service) {
 	try {
-		const response = await fetch(`${API_BASE_URL}/api/services`, {
+		const response = await fetch(`${API_BASE_URL}/api/services/${getAuth().shopId}`, {
 			method: "POST",
 			headers: authHeaders(),
 			body: JSON.stringify(service),
@@ -300,7 +300,7 @@ async function createService(service) {
 
 async function updateService(serviceId, service) {
 	try {
-		const response = await fetch(`${API_BASE_URL}/api/services/${serviceId}`, {
+		const response = await fetch(`${API_BASE_URL}/api/services/${getAuth().shopId}/${serviceId}`, {
 			method: "PUT",
 			headers: authHeaders(),
 			body: JSON.stringify(service),
@@ -314,7 +314,7 @@ async function updateService(serviceId, service) {
 
 async function deleteService(serviceId) {
 	try {
-		const response = await fetch(`${API_BASE_URL}/api/services/${serviceId}`, {
+		const response = await fetch(`${API_BASE_URL}/api/services/${getAuth().shopId}/${serviceId}`, {
 			method: "DELETE",
 			headers: authHeaders(),
 		});
@@ -325,13 +325,27 @@ async function deleteService(serviceId) {
 	}
 }
 
+async function setServiceDisabled(serviceId, isDisabled) {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/services/${getAuth().shopId}/${serviceId}/isDisabled`, {
+			method: "PATCH",
+			headers: authHeaders(),
+			body: JSON.stringify({ isDisabled }),
+		});
+		return unwrap(await readJson(response), "service");
+	} catch (error) {
+		console.error("[API] setServiceDisabled error:", error);
+		return apiError(error);
+	}
+}
+
 // ── Shop printers CRUD ────────────────────────────────────────────────────────
 // The printers a shop has registered with the backend. Distinct from the local
 // OS printer list (printers.js), which only says what's reachable right now.
 
 async function fetchPrinters() {
 	try {
-		const response = await fetch(`${API_BASE_URL}/api/printers`, {
+		const response = await fetch(`${API_BASE_URL}/api/printers/${getAuth().shopId}`, {
 			headers: authHeaders(),
 		});
 		return unwrap(await readJson(response), "printers");
@@ -343,7 +357,7 @@ async function fetchPrinters() {
 
 async function createPrinter(name) {
 	try {
-		const response = await fetch(`${API_BASE_URL}/api/printers`, {
+		const response = await fetch(`${API_BASE_URL}/api/printers/${getAuth().shopId}`, {
 			method: "POST",
 			headers: authHeaders(),
 			body: JSON.stringify({ name }),
@@ -357,13 +371,27 @@ async function createPrinter(name) {
 
 async function deletePrinter(printerId) {
 	try {
-		const response = await fetch(`${API_BASE_URL}/api/printers/${printerId}`, {
+		const response = await fetch(`${API_BASE_URL}/api/printers/${getAuth().shopId}/${printerId}`, {
 			method: "DELETE",
 			headers: authHeaders(),
 		});
 		return unwrap(await readJson(response), "printer");
 	} catch (error) {
 		console.error("[API] deletePrinter error:", error);
+		return apiError(error);
+	}
+}
+
+async function setPrinterDisabled(printerId, isDisabled) {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/printers/${getAuth().shopId}/${printerId}/isDisabled`, {
+			method: "PATCH",
+			headers: authHeaders(),
+			body: JSON.stringify({ isDisabled }),
+		});
+		return unwrap(await readJson(response), "printer");
+	} catch (error) {
+		console.error("[API] setPrinterDisabled error:", error);
 		return apiError(error);
 	}
 }
@@ -568,9 +596,11 @@ module.exports = {
 	createService,
 	updateService,
 	deleteService,
+	setServiceDisabled,
 	fetchPrinters,
 	createPrinter,
 	deletePrinter,
+	setPrinterDisabled,
 	fetchJobs,
 	fetchHistory,
 	fetchFileBuffer,

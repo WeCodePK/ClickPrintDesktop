@@ -10,31 +10,31 @@ import PrintSplitButton from "../components/PrintSplitButton";
 import { CheckIcon, TrashIcon, SearchIcon, PrinterIcon, PauseIcon, PlayIcon } from "../icons";
 
 // Statuses from which the backend won't allow a direct jump to "completed" — the
-// job must pass through "printing" first. Marking one of these complete needs the
-// step-through path (see handleForceComplete).
+// job must pass through "printing" first. The main-process engine performs the
+// step-through when asked to force-complete.
 const PRE_PRINT_STATUSES = new Set(["draft", "submitted", "queued"]);
 
-// Print Jobs tab: active job queue on the left, job details on the right. Print
-// execution + progress live in AutoPrintContext (shared with the auto queue);
-// this tab renders the UI and drives the manual actions.
+// Print Jobs tab: active job queue on the left, job details on the right. All
+// print execution/orchestration lives in the main-process engine (mirrored via
+// AutoPrintContext); this tab renders the UI and sends commands.
 function PrintJobsTab() {
-	const { printJobs, setPrintJobs, jobsLoading } = useJobs();
+	const { printJobs, jobsLoading } = useJobs();
 	const {
 		autoPrintEnabled,
 		paused,
 		setPaused,
 		queueCount,
 		queueInfoFor,
-		current,
-		isFilePrinted,
 		printedFiles,
-		failedFiles,
+		fileStates,
+		failedFilesFor,
+		jobBusy,
+		jobPrintingNow,
 		failJob,
-		busyJobs,
+		declineJob,
+		completeJob,
 		printFileManual,
 		printAllManual,
-		cleanupJobFiles,
-		selectedPrinter: defaultPrinter,
 		refreshPrinterState,
 	} = useAutoPrint();
 
@@ -43,9 +43,9 @@ function PrintJobsTab() {
 	const [pendingComplete, setPendingComplete] = useState(null);
 	const [query, setQuery] = useState("");
 
-	// Available printers for the manual print dropdowns; the saved default comes
-	// from AutoPrintContext (selectedPrinter), the single source of truth kept in
-	// sync with the Printers tab and the 15s reachability poll.
+	// Available printers for the manual print dropdowns. Printing without an
+	// explicit pick routes each document to its service's automated printer
+	// (resolved in AutoPrintContext) — there is no app-wide default printer.
 	const [printers, setPrinters] = useState([]);
 
 	const refreshPrinters = useCallback(async (force = false) => {
@@ -84,32 +84,16 @@ function PrintJobsTab() {
 	// changes (e.g. the auto queue) are reflected in the detail pane immediately.
 	const selectedEntry = entries.find((e) => e._id === selectedId) || null;
 
-	// Optimistic status change on the shared job list. Returns a revert function.
-	const applyStatus = (jobId, status, rawStatus) => {
-		const prevJob = printJobs.find((j) => j._id === jobId);
-		setPrintJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, status, rawStatus } : j)));
-		return () => {
-			if (!prevJob) return;
-			setPrintJobs((prev) =>
-				prev.map((j) => (j._id === jobId ? { ...j, status: prevJob.status, rawStatus: prevJob.rawStatus } : j))
-			);
-		};
-	};
-
+	// Job actions are commands to the main-process engine; the engine applies the
+	// status change to its authoritative job list and re-pushes it, so no
+	// renderer-side optimism is needed.
 	const handleConfirmCancel = async () => {
 		const job = pendingCancel;
 		if (!job) return;
 		setPendingCancel(null);
 		setSelectedId(null);
-		const revert = applyStatus(job._id, "completed", "cancelled");
-		try {
-			const result = await window.electronAPI.updateJobStatus(job._id, "cancelled");
-			if (!result?.success) throw new Error(result?.message || "request failed");
-			await cleanupJobFiles(job);
-		} catch (err) {
-			console.error("[Renderer] failed to cancel job:", err);
-			revert();
-		}
+		const result = await declineJob(job._id);
+		if (!result?.success) console.error("[Renderer] failed to cancel job:", result?.message);
 	};
 
 	const handleConfirmComplete = async () => {
@@ -117,36 +101,19 @@ function PrintJobsTab() {
 		if (!job) return;
 		setPendingComplete(null);
 		setSelectedId(null);
-		const revert = applyStatus(job._id, "completed", "completed");
-		try {
-			const result = await window.electronAPI.updateJobStatus(job._id, "completed");
-			if (!result?.success) throw new Error(result?.message || "request failed");
-			await cleanupJobFiles(job);
-		} catch (err) {
-			console.error("[Renderer] failed to mark job complete:", err);
-			revert();
-		}
+		const result = await completeJob(job._id);
+		if (!result?.success) console.error("[Renderer] failed to mark job complete:", result?.message);
 	};
 
-	// Completes a never-printed (queued) job. The backend requires
-	// queued → printing → completed, so we step through "printing". The UI jumps
-	// straight to completed (optimistically) so the intermediate state never shows.
+	// Completes a never-printed (queued) job — the engine steps it through the
+	// backend's required queued → printing → completed sequence.
 	const handleForceComplete = async () => {
 		const job = pendingComplete;
 		if (!job) return;
 		setPendingComplete(null);
 		setSelectedId(null);
-		const revert = applyStatus(job._id, "completed", "completed");
-		try {
-			const printing = await window.electronAPI.updateJobStatus(job._id, "printing");
-			if (!printing?.success) throw new Error(printing?.message || "printing transition failed");
-			const result = await window.electronAPI.updateJobStatus(job._id, "completed");
-			if (!result?.success) throw new Error(result?.message || "request failed");
-			await cleanupJobFiles(job);
-		} catch (err) {
-			console.error("[Renderer] failed to force-complete job:", err);
-			revert();
-		}
+		const result = await completeJob(job._id, { force: true });
+		if (!result?.success) console.error("[Renderer] failed to force-complete job:", result?.message);
 	};
 
 	const handlePreviewFile = async (file) => {
@@ -176,20 +143,23 @@ function PrintJobsTab() {
 			);
 		}
 		if (info.state === "paused") {
-			return <span className="db-entry__queue db-entry__queue--paused">Paused (next up)</span>;
+			return <span className="db-entry__queue db-entry__queue--paused">Paused</span>;
+		}
+		if (info.state === "waiting") {
+			return <span className="db-entry__queue db-entry__queue--paused">Waiting for printer…</span>;
 		}
 		return <span className="db-entry__queue">In queue · Nº{info.place}</span>;
 	};
 
 	return (
 		<>
-			<ListColumn title="Print Jobs" count={visible.length}>
+			<ListColumn title="Jobs" count={visible.length}>
 				<div className="db-search">
 					<SearchIcon />
 					<input
 						className="db-search__input"
 						type="text"
-						placeholder="Search any print job…"
+						placeholder="Search jobs"
 						value={query}
 						onChange={(e) => setQuery(e.target.value)}
 					/>
@@ -270,12 +240,13 @@ function PrintJobsTab() {
 			<div className="db-detail">
 				{selectedEntry ? (() => {
 					const jobPrinted = printedFiles[selectedEntry._id] || {};
-					const jobFailed = failedFiles[selectedEntry._id] || {};
-					const isPrintingAll = !!busyJobs[selectedEntry._id];
-					const isThisJobPrinting = current?.jobId === selectedEntry._id;
-					const currentFileId = isThisJobPrinting ? current.fileId : null;
+					const jobFailed = failedFilesFor(selectedEntry._id);
+					const jobStates = fileStates[selectedEntry._id] || {};
+					const busy = jobBusy(selectedEntry._id);
 					const remainingCount = (selectedEntry.files || []).filter((f) => !jobPrinted[f.fileId]).length;
-					const actionsLocked = isPrintingAll || isThisJobPrinting;
+					// Destructive actions stay available while documents merely wait in
+					// the queue (declining drops them) — only an in-flight print locks them.
+					const actionsLocked = jobPrintingNow(selectedEntry._id);
 
 					return (
 						<JobDetailCard
@@ -284,13 +255,12 @@ function PrintJobsTab() {
 							onPrintFile={handlePrintFile}
 							printedFileIds={jobPrinted}
 							failedFileIds={jobFailed}
+							fileStates={jobStates}
 							onMarkJobFailed={() => failJob(selectedEntry)}
-							printingAll={isPrintingAll}
+							printingAll={busy}
 							printers={printers}
-							selectedPrinterName={defaultPrinter?.name}
 							onPrinterMenuOpen={() => refreshPrinters(true)}
 							autoPrintOn={autoPrintEnabled}
-							currentFileId={currentFileId}
 							headerActions={
 								selectedEntry.status !== "completed" ? (
 									<>
@@ -323,8 +293,7 @@ function PrintJobsTab() {
 												onPrint={handlePrintAll}
 												onOpen={() => refreshPrinters(true)}
 												printers={printers}
-												selectedName={defaultPrinter?.name}
-												busy={isPrintingAll}
+												busy={busy}
 												disabled={remainingCount === 0}
 												showInfo
 												label={

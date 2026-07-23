@@ -1475,7 +1475,7 @@ body,
 	text-overflow: ellipsis;
 }
 
-/* ── Printer rows inside price cards ── */
+/* ── Printer rows inside service cards ── */
 .db-entry__meta--printers {
 	display: flex;
 	flex-direction: column;
@@ -2229,7 +2229,7 @@ body,
 	to { opacity: 1; }
 }
 
-/* ── Pricing / settings ── */
+/* ── Services / settings ── */
 .db-list__action {
 	margin-left: auto;
 }
@@ -2272,22 +2272,11 @@ body,
 	width: auto;
 }
 
-.price-list {
-	display: flex;
-	flex-direction: column;
-	gap: 8px;
-}
-
 /* Wider modal variant for forms that don't fit the default confirm width. */
 .modal-card--wide {
 	max-width: 560px;
 	max-height: 85vh;
 	overflow-y: auto;
-}
-
-/* Price list row: name + meta on the left, rate + delete icon on the right. */
-.db-entry--price {
-	justify-content: space-between;
 }
 
 .db-entry__price-actions {
@@ -2308,7 +2297,8 @@ body,
 	font-size: 14px;
 }
 
-.price-form {
+/* Shared settings-form layout (service form, shop profile form). */
+.service-form {
 	max-width: 520px;
 }
 
@@ -3734,36 +3724,6 @@ body,
 }
 
 /* Settings toggle switch. */
-.automation-row {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 16px;
-	margin-top: 8px;
-	padding: 18px;
-	border-radius: var(--radius-lg);
-	background: var(--color-bg-card);
-	border: 1px solid var(--border-light);
-	box-shadow: var(--shadow-sm);
-}
-
-.automation-row__text {
-	display: flex;
-	flex-direction: column;
-	gap: 4px;
-}
-
-.automation-row__title {
-	font-size: 14px;
-	font-weight: 700;
-	color: var(--color-text-primary);
-}
-
-.automation-row__hint {
-	font-size: 12px;
-	color: var(--color-text-secondary);
-}
-
 .toggle {
 	position: relative;
 	flex-shrink: 0;
@@ -4018,4 +3978,25 @@ body,
 	line-height: 1.5;
 	color: var(--color-text-muted);
 	padding: 10px 4px 2px;
+}
+
+/* ── Automated-printing popover (shares .conn-popover chrome) ── */
+.autoprint-popover__row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 4px 4px 2px;
+}
+
+.autoprint-popover__text {
+	display: flex;
+	flex-direction: column;
+	gap: 3px;
+	min-width: 0;
+}
+
+.autoprint-popover__hint {
+	font-size: 12px;
+	color: var(--color-text-secondary);
 }

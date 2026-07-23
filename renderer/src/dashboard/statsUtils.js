@@ -140,7 +140,7 @@ export function buildEarningsSeries(earningsByDate, range, ref = new Date(), com
 // falling back to copies across files.
 function jobPages(job) {
 	const lines = job.cost?.lines || [];
-	const fromLines = lines.reduce((sum, l) => sum + (Number(l[1]) || 0), 0);
+	const fromLines = lines.reduce((sum, l) => sum + (Number(l.quantity) || 0), 0);
 	if (fromLines > 0) return fromLines;
 	return (job.files || []).reduce((sum, f) => sum + (Number(f.settings?.numberOfCopies) || 1), 0);
 }
@@ -172,8 +172,8 @@ export function computeStats(history = []) {
 
 		// Service demand — weight by charged units across every cost line.
 		for (const line of job.cost?.lines || []) {
-			const code = line[0];
-			const qty = Number(line[1]) || 1;
+			const code = line.item;
+			const qty = Number(line.quantity) || 1;
 			if (!code) continue;
 			if (!serviceCounts[code]) serviceCounts[code] = { code, units: 0, jobs: 0 };
 			serviceCounts[code].units += qty;

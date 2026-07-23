@@ -1,0 +1,13 @@
+Lets fix the Printers management. The routes have changed on the backend.
+
+Old route: GET /api/printers/:printerId
+New route: GET /api/printers/:shopId/:printerId
+
+Old route: GET /api/printers
+New route: GET /api/printers/:shopId
+
+Old route: POST /api/printers
+New route: POST /api/printers/:shopId
+
+Old route: PUT /api/printers/:printerId
+New route: PUT /api/printers/:shopId/:printerId

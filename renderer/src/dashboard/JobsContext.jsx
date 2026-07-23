@@ -78,8 +78,10 @@ export function JobsProvider({ children }) {
 		};
 	}, []);
 
+	// The list is authoritative from main (jobs:updated carries the engine's own
+	// status transitions) — consumers only read, never mutate.
 	return (
-		<JobsContext.Provider value={{ printJobs, setPrintJobs, jobsLoading }}>
+		<JobsContext.Provider value={{ printJobs, jobsLoading }}>
 			{children}
 		</JobsContext.Provider>
 	);

@@ -3,7 +3,7 @@ const fsp = require("fs/promises");
 const path = require("path");
 const { app, protocol, shell, BrowserWindow, dialog } = require("electron");
 const { fetchFileBuffer } = require("./api");
-const store = require("./store");
+const spooler = require("./spooler");
 
 // Job files are downloaded once and cached on disk under userData. All files are
 // treated as PDFs (per product spec) and served to the renderer through a
@@ -36,9 +36,17 @@ function isReady(fileId) {
 const _status = {};
 const _inflight = new Set();
 let _notify = null; // (updates: {fileId: status}) => void
+const _statusListeners = []; // in-process listeners (e.g. the print engine)
 
 function setNotifier(fn) {
 	_notify = fn;
+}
+
+// In-process subscription to per-file status changes (in addition to the
+// renderer notifier). The print engine uses this to re-schedule tasks that
+// were waiting on a download.
+function addStatusListener(fn) {
+	_statusListeners.push(fn);
 }
 
 function getStatusMap() {
@@ -48,6 +56,13 @@ function getStatusMap() {
 function _setStatus(fileId, status) {
 	_status[fileId] = status;
 	if (_notify) _notify({ [fileId]: status });
+	for (const listener of _statusListeners) {
+		try {
+			listener(fileId, status);
+		} catch (err) {
+			console.error("[Files] status listener error:", err);
+		}
+	}
 }
 
 // Ensures a single file is present on disk, downloading it if needed. Retries
@@ -257,26 +272,16 @@ async function savePdfCopy(fileId, fileName) {
 	console.log(`[Files] saved PDF copy ${fileId} → ${dest}`);
 }
 
-// Loads a cached PDF into an offscreen window and prints it silently to a
-// printer with the document's own settings applied. `deviceName`, when given,
-// overrides the operator's saved default for this one job. Resolves once the
-// print job is spooled; rejects if printing fails. If the resolved target is
-// Microsoft Print to PDF — or nothing was ever selected, which is treated the
-// same way — the document is saved via a Save dialog instead of printed.
-async function printFile(fileId, settings, deviceName, fileName) {
+// Loads a cached PDF into an offscreen window and spools it silently to a
+// real printer with the document's own settings applied. Resolves once the job
+// is handed to the Windows spooler; rejects if spooling fails. This says
+// nothing about the physical outcome — printAndVerify layers spooler tracking
+// on top. Callers must not pass a Print-to-PDF pseudo-printer here (use
+// savePdfCopy for that).
+async function spoolFile(fileId, settings, deviceName, fileName) {
 	await ensureFile(fileId);
 	if (!isReady(fileId)) throw new Error("file not ready");
-
-	// Route the job to the explicitly-requested printer, else the operator's
-	// saved choice. We never ask Windows what its own default is — if the operator
-	// hasn't picked a printer in the app, the app's default is Microsoft Print to
-	// PDF, full stop.
-	const target = deviceName || store.get("selectedPrinter")?.name || "";
-
-	if (!target || /print to pdf/i.test(target)) {
-		await savePdfCopy(fileId, fileName);
-		return;
-	}
+	if (!deviceName) throw new Error("no printer specified");
 
 	// `plugins: true` is required so Chromium's PDF viewer actually renders the
 	// document — without it the print job comes out blank.
@@ -286,8 +291,8 @@ async function printFile(fileId, settings, deviceName, fileName) {
 		// Give the PDF plugin a moment to lay the document out before printing.
 		await new Promise((resolve) => setTimeout(resolve, 400));
 		const options = buildPrintOptions(settings);
-		if (target) options.deviceName = target;
-		console.log(`[Files] printing ${fileId} → ${options.deviceName || "default printer"}`, options);
+		options.deviceName = deviceName;
+		console.log(`[Files] spooling ${fileId} ("${fileName || ""}") → ${deviceName}`, options);
 
 		await new Promise((resolve, reject) => {
 			let settled = false;
@@ -315,6 +320,25 @@ async function printFile(fileId, settings, deviceName, fileName) {
 	} finally {
 		if (!win.isDestroyed()) win.destroy();
 	}
+}
+
+// The engine's print primitive: spool the document, then watch the Windows
+// spooler until the job actually completes (or dies). Throws on any real
+// failure — spool rejection, queue cancellation, persistent error state, or a
+// stuck job — so the caller's retry/auto-fail policy treats them uniformly.
+// `onPhase("verifying")` fires once the job is being tracked post-spool.
+async function printAndVerify(fileId, settings, deviceName, fileName, { onPhase } = {}) {
+	// Snapshot the queue BEFORE spooling so the new job id can be identified.
+	// A failed snapshot makes the print untrackable (fall back to trusting the
+	// spool callback) rather than blocking printing altogether.
+	const before = await spooler.snapshotPrinter(deviceName);
+	await spoolFile(fileId, settings, deviceName, fileName);
+	const result = await spooler.trackPrintJob(deviceName, before, { onPhase });
+	if (result.outcome === "aborted") return result; // engine stopped; outcome discarded upstream
+	if (result.outcome !== "success") {
+		throw new Error(`print ${result.outcome}${result.detail ? `: ${result.detail}` : ""}`);
+	}
+	return result;
 }
 
 // Registers the privileged scheme. Must be called before app `ready`.
@@ -354,8 +378,11 @@ module.exports = {
 	syncJobFiles,
 	getStatusMap,
 	setNotifier,
+	addStatusListener,
+	isReady,
 	openFile,
-	printFile,
+	savePdfCopy,
+	printAndVerify,
 	deleteJobFiles,
 	registerFileSchemePrivileges,
 	registerFileProtocol,

@@ -1,494 +1,227 @@
-import { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { ACTIVE_STATUSES } from "./jobUtils";
-import { useJobs } from "./JobsContext";
 import ConfirmDialog from "./components/ConfirmDialog";
 
-// Owns all print execution (manual + automated) and the per-file print progress
-// that both share. When Auto-Print is ON, every new job arriving via SSE is fed
-// into a sequential FIFO queue and printed silently, file by file, with no
-// operator interaction. Lives at the dashboard level so it keeps running across
-// tab switches.
+// Thin mirror of the main-process print engine. ALL orchestration — service
+// routing, the per-printer queue, spooler verification, retries, backend
+// status transitions, file cleanup, persisted progress — lives in main
+// (main/printEngine.js). This context only:
+//   1. mirrors the engine's state snapshot (engine:state),
+//   2. exposes command wrappers over IPC,
+//   3. renders engine notifications (engine:toast) and the requeue dialog.
 
-const PRINTED_STORAGE_KEY = "clickprint:printedFiles";
+const EMPTY_SNAPSHOT = {
+	running: false,
+	autoPrint: false,
+	paused: false,
+	routingLoaded: false,
+	autoRouteReady: false,
+	requeuePrompt: null,
+	queuedJobIds: [],
+	printedFiles: {},
+	files: {},
+	printers: {},
+};
 
-function loadPrintedFiles() {
-	try {
-		return JSON.parse(localStorage.getItem(PRINTED_STORAGE_KEY)) || {};
-	} catch {
-		return {};
+// Legacy localStorage progress (pre-engine builds) — pushed to main once, then
+// removed. Safe to delete this block after a release cycle.
+const LEGACY_PROGRESS_KEY = "clickprint:printedFiles";
+
+// Copy for the engine's semantic toast events.
+function toastMessage({ kind, who, fileName }) {
+	switch (kind) {
+		case "job-failed-print":
+			return `Job (${who}) marked failed — a document couldn't be printed. The customer will be refunded.`;
+		case "job-failed-download":
+			return `Job (${who}) failed — files couldn't be downloaded.`;
+		case "pdf-cancel":
+			return `Saving “${fileName}” as PDF was cancelled. To cancel the job, use the Decline Job button.`;
+		case "fail-report-error":
+			return "Couldn't mark the job as failed — please try again.";
+		default:
+			return null;
 	}
 }
 
 const AutoPrintContext = createContext(null);
 
 export function AutoPrintProvider({ children }) {
-	const { printJobs, setPrintJobs, jobsLoading } = useJobs();
+	const [snapshot, setSnapshot] = useState(EMPTY_SNAPSHOT);
 
-	const [autoPrintEnabled, setEnabled] = useState(false);
-	const [hydrated, setHydrated] = useState(false); // autoprint value loaded from store
-	const [paused, setPaused] = useState(false);
-	const [queueIds, setQueueIds] = useState([]); // FIFO of jobIds awaiting/printing
-	const [current, setCurrent] = useState(null); // { jobId, fileId } printing right now
-	const [printedFiles, setPrintedFiles] = useState(loadPrintedFiles); // { jobId: { fileId: true } }
-	const [failedFiles, setFailedFiles] = useState({}); // ephemeral, per session
-	const [busyJobs, setBusyJobs] = useState({}); // manual "print all" in flight
-	const [requeuePrompt, setRequeuePrompt] = useState(null); // jobIds pending launch re-queue
-	const [selectedPrinter, setSelectedPrinter] = useState(null); // validated saved default
-	const [printersReady, setPrintersReady] = useState(false); // first printer check done
-
-	const busyRef = useRef(false); // guards the auto processor against re-entrancy
-	const seenRef = useRef(new Set()); // jobIds already considered for enqueue
-	const initedRef = useRef(false); // launch handling done
-	const firstCheckRef = useRef(true); // gates one-time auto-print hydration
-	const [tick, setTick] = useState(0); // nudges the processor after async work
-
-	// Live mirror of printJobs, so event listeners can read the current list
-	// without being re-subscribed on every job update.
-	const printJobsRef = useRef(printJobs);
-	printJobsRef.current = printJobs;
-
-	// Transient toast notifications (e.g. a job whose files failed to download).
-	const [toasts, setToasts] = useState([]);
-	const pushToast = useCallback((message) => {
-		const id = Date.now() + Math.random();
-		setToasts((t) => [...t, { id, message }]);
-		setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6000);
+	// Seed (for a late mount) + live subscription.
+	useEffect(() => {
+		let active = true;
+		window.electronAPI.getEngineState()
+			.then((s) => { if (active && s) setSnapshot(s); })
+			.catch(() => {});
+		const unsubscribe = window.electronAPI.onEngineState((s) => setSnapshot(s));
+		return () => {
+			active = false;
+			if (unsubscribe) unsubscribe();
+		};
 	}, []);
+
+	// One-time migration of pre-engine print progress out of localStorage.
+	useEffect(() => {
+		try {
+			const raw = localStorage.getItem(LEGACY_PROGRESS_KEY);
+			if (!raw) return;
+			const parsed = JSON.parse(raw);
+			window.electronAPI.migratePrintProgress(parsed)
+				.then(() => localStorage.removeItem(LEGACY_PROGRESS_KEY))
+				.catch(() => {});
+		} catch {
+			localStorage.removeItem(LEGACY_PROGRESS_KEY);
+		}
+	}, []);
+
+	// ── toasts (engine notifications) ───────────────────────────────────────────
+	const [toasts, setToasts] = useState([]);
 	const dismissToast = useCallback((id) => setToasts((t) => t.filter((x) => x.id !== id)), []);
 
-	// ── printed-progress persistence + reconciliation ──────────────────────────
 	useEffect(() => {
-		try {
-			localStorage.setItem(PRINTED_STORAGE_KEY, JSON.stringify(printedFiles));
-		} catch (err) {
-			console.warn("[AutoPrint] failed to persist print progress:", err.message);
-		}
-	}, [printedFiles]);
+		return window.electronAPI.onEngineToast((payload) => {
+			const message = toastMessage(payload || {});
+			if (!message) return;
+			const id = Date.now() + Math.random();
+			setToasts((t) => [...t, { id, message }]);
+			setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6000);
+		});
+	}, []);
 
-	useEffect(() => {
-		if (printJobs.length === 0) return;
-		const present = new Set(printJobs.map((j) => j._id));
-		setPrintedFiles((prev) => {
-			let changed = false;
-			const next = {};
-			for (const id of Object.keys(prev)) {
-				if (present.has(id)) next[id] = prev[id];
-				else changed = true;
+	// ── derived state ───────────────────────────────────────────────────────────
+	const { autoPrint, paused, queuedJobIds, printedFiles, files: fileStates } = snapshot;
+
+	const isFilePrinted = useCallback(
+		(jobId, fileId) => !!printedFiles[jobId]?.[fileId],
+		[printedFiles]
+	);
+
+	const isFileFailed = useCallback(
+		(jobId, fileId) => fileStates[jobId]?.[fileId]?.status === "failed",
+		[fileStates]
+	);
+
+	// Per-job map of failed fileIds (shape kept from the old context: truthy per file).
+	const failedFilesFor = useCallback(
+		(jobId) => {
+			const out = {};
+			for (const [fileId, state] of Object.entries(fileStates[jobId] || {})) {
+				if (state.status === "failed") out[fileId] = state.failureReason || true;
 			}
-			return changed ? next : prev;
-		});
-	}, [printJobs]);
+			return out;
+		},
+		[fileStates]
+	);
 
-	// Keep the auto-print queue in sync with the live job list. A job that's no
-	// longer active — a customer cancelled it from their app, or it completed /
-	// failed — is dropped from the queue immediately so it never reaches the
-	// printer. (The processor also drops queue[0] when it turns terminal; this
-	// prunes jobs deeper in the queue too.)
-	useEffect(() => {
-		const activeIds = new Set(
-			printJobs.filter((j) => ACTIVE_STATUSES.has(j.rawStatus)).map((j) => j._id)
-		);
-		setQueueIds((q) => {
-			const next = q.filter((id) => activeIds.has(id));
-			return next.length === q.length ? q : next;
-		});
-	}, [printJobs]);
+	// Any of the job's documents queued or in flight — locks destructive actions
+	// and drives the Print button's busy state.
+	const jobBusy = useCallback(
+		(jobId) => {
+			const states = Object.values(fileStates[jobId] || {});
+			return states.some((s) => s.status === "waiting" || s.status === "printing" || s.status === "verifying");
+		},
+		[fileStates]
+	);
 
-	// ── printer validation + auto-print hydration ───────────────────────────────
-	// Polls the live printer list and the saved default. If the selected printer
-	// has gone (disconnected / offline), it is cleared and automated printing is
-	// forced off — auto-print can't run without a real printer. Also the single
-	// source of truth for the currently-selected printer across the dashboard.
-	const checkPrinters = useCallback(async () => {
-		try {
-			const [list, saved, ap] = await Promise.all([
-				window.electronAPI.listPrinters(),
-				window.electronAPI.getSelectedPrinter(),
-				window.electronAPI.getAutoPrint(),
-			]);
-			const online = list?.success ? list.data || [] : [];
-			// Only treat the printer as gone when we have an authoritative list.
-			const gone = list?.success && saved && !online.some((p) => p.name === saved.name);
+	const jobPrintingNow = useCallback(
+		(jobId) => {
+			const states = Object.values(fileStates[jobId] || {});
+			return states.some((s) => s.status === "printing" || s.status === "verifying");
+		},
+		[fileStates]
+	);
 
-			if (gone) {
-				console.warn("[AutoPrint] selected printer offline — clearing:", saved.name);
-				await window.electronAPI.setSelectedPrinter(null);
-				await window.electronAPI.setAutoPrint(false);
-				setSelectedPrinter(null);
-				setEnabled(false);
-				setPaused(false);
-				setQueueIds([]); // nothing to auto-print without a printer
-			} else {
-				setSelectedPrinter(saved || null);
-				// Hydrate the enabled flag from the store once; after that it's owned
-				// by the toggle + gone-detection so polling can't clobber a toggle.
-				if (firstCheckRef.current) setEnabled(!!ap);
-			}
-		} catch (err) {
-			console.error("[AutoPrint] printer check failed:", err);
-		} finally {
-			firstCheckRef.current = false;
-			setPrintersReady(true);
-			setHydrated(true);
-		}
-	}, []);
+	// Queue-position line for the jobs list.
+	const queueInfoFor = useCallback(
+		(jobId) => {
+			const idx = queuedJobIds.indexOf(jobId);
+			if (idx === -1) return null;
+			if (jobPrintingNow(jobId)) return { state: "printing", place: idx };
+			const states = Object.values(fileStates[jobId] || {});
+			const allBlocked =
+				states.length > 0 &&
+				states.every(
+					(s) =>
+						s.status !== "waiting" ||
+						s.waitReason === "no-free-printer" ||
+						s.waitReason === "no-online-printer" ||
+						s.waitReason === "route"
+				) &&
+				states.some((s) => s.status === "waiting");
+			if (paused) return { state: "paused", place: idx };
+			if (allBlocked) return { state: "waiting", place: idx };
+			return { state: "queued", place: idx };
+		},
+		[queuedJobIds, paused, fileStates, jobPrintingNow]
+	);
 
-	useEffect(() => {
-		checkPrinters();
-		const id = setInterval(checkPrinters, 15000);
-		return () => clearInterval(id);
-	}, [checkPrinters]);
+	// ── commands ────────────────────────────────────────────────────────────────
+	const setPaused = useCallback(
+		(value) => {
+			const next = typeof value === "function" ? value(snapshot.paused) : value;
+			window.electronAPI.setQueuePaused(!!next);
+		},
+		[snapshot.paused]
+	);
 
-	// ── shared print progress helpers ───────────────────────────────────────────
-	const isFilePrinted = useCallback((jobId, fileId) => !!printedFiles[jobId]?.[fileId], [printedFiles]);
+	const enableAutoPrint = useCallback(() => window.electronAPI.setAutoPrint(true), []);
+	const disableAutoPrint = useCallback(() => window.electronAPI.setAutoPrint(false), []);
 
-	const markFilePrinted = useCallback((jobId, fileId) => {
-		setPrintedFiles((prev) => ({ ...prev, [jobId]: { ...(prev[jobId] || {}), [fileId]: true } }));
-	}, []);
+	const printFileManual = useCallback(
+		(job, file, deviceName) => window.electronAPI.printJobFile(job._id, file.fileId, deviceName),
+		[]
+	);
+	const printAllManual = useCallback(
+		(job, deviceName) => window.electronAPI.printJob(job._id, deviceName),
+		[]
+	);
 
-	const clearJobPrinted = useCallback((jobId) => {
-		setPrintedFiles((prev) => {
-			if (!prev[jobId]) return prev;
-			const next = { ...prev };
-			delete next[jobId];
-			return next;
-		});
-	}, []);
+	const failJob = useCallback((job) => window.electronAPI.markJobFailed(job._id), []);
+	const declineJob = useCallback((jobId) => window.electronAPI.declineJob(jobId), []);
+	const completeJob = useCallback((jobId, opts) => window.electronAPI.completeJob(jobId, opts), []);
 
-	// A file that failed to print (any printer, any reason) shows a failure
-	// banner in the UI until either a retry succeeds (cleared) or the operator
-	// force-fails the whole job. `isFileFailed` drives that banner directly.
-	const isFileFailed = useCallback((jobId, fileId) => !!failedFiles[jobId]?.[fileId], [failedFiles]);
-
-	const markFileFailed = useCallback((jobId, fileId) => {
-		setFailedFiles((prev) => ({ ...prev, [jobId]: { ...(prev[jobId] || {}), [fileId]: true } }));
-	}, []);
-
-	const clearFileFailed = useCallback((jobId, fileId) => {
-		setFailedFiles((prev) => {
-			if (!prev[jobId]?.[fileId]) return prev;
-			const nextJob = { ...prev[jobId] };
-			delete nextJob[fileId];
-			const next = { ...prev, [jobId]: nextJob };
-			if (Object.keys(nextJob).length === 0) delete next[jobId];
-			return next;
-		});
-	}, []);
-
-	const clearJobFailed = useCallback((jobId) => {
-		setFailedFiles((prev) => {
-			if (!prev[jobId]) return prev;
-			const next = { ...prev };
-			delete next[jobId];
-			return next;
-		});
-	}, []);
-
-	// A job's cached files are only ever read while it's active (previews, print).
-	// Once it reaches a terminal state (completed/cancelled) they're never touched
-	// again — History shows metadata only — so delete them from disk to avoid
-	// piling up in userData indefinitely. Best-effort: logged, never surfaced.
-	const cleanupJobFiles = useCallback(async (job) => {
-		clearJobPrinted(job._id);
-		const fileIds = (job.files || []).map((f) => f.fileId).filter(Boolean);
-		if (fileIds.length === 0) return;
-		try {
-			const result = await window.electronAPI.deleteJobFiles(fileIds);
-			if (!result?.success) throw new Error(result?.message || "delete failed");
-		} catch (err) {
-			console.error("[AutoPrint] failed to delete job files:", err);
-		}
-	}, [clearJobPrinted]);
-
-	const setJobStatus = useCallback((jobId, status, rawStatus) => {
-		setPrintJobs((prev) => prev.map((j) => (j._id === jobId ? { ...j, status, rawStatus } : j)));
-	}, [setPrintJobs]);
-
-	// A job that can't be fulfilled — its file download failed unrecoverably, or
-	// every document failed to print — is marked "failed" on the backend by the
-	// main process (either automatically, see the effect below, or via the
-	// operator's "click here" in the per-document failure banner). React here:
-	// drop it from the queue and mark it failed locally so it leaves the active
-	// list immediately (the next reconcile confirms it).
-	useEffect(() => {
-		if (!window.electronAPI.onJobFailed) return;
-		return window.electronAPI.onJobFailed((jobId, reason) => {
-			console.warn(`[AutoPrint] job ${reason === "print" ? "print" : "download"} failed — removing:`, jobId);
-			const job = printJobsRef.current.find((j) => j._id === jobId);
-			const who = job?.createdBy?.name || job?.createdBy?.number || `#${String(jobId).slice(-6)}`;
-			pushToast(
-				reason === "print"
-					? `Job (${who}) marked failed — every document failed to print.`
-					: `Job (${who}) failed — files couldn’t be downloaded.`
-			);
-			setQueueIds((q) => q.filter((id) => id !== jobId));
-			clearJobFailed(jobId);
-			clearJobPrinted(jobId);
-			setJobStatus(jobId, "completed", "failed");
-		});
-	}, [clearJobFailed, clearJobPrinted, setJobStatus, pushToast]);
-
-	// Once every document in an active job has failed to print, mark it "failed"
-	// on the backend automatically (customer is refunded there) — except when
-	// printing to Microsoft Print to PDF (see the effect below). Guarded by a
-	// ref so a job is only ever sent through this once per session, even though
-	// the effect re-runs on every printedFiles/failedFiles change.
-	const autoFailedRef = useRef(new Set());
-
-	const failJob = useCallback(async (job) => {
-		if (!job || autoFailedRef.current.has(job._id)) return;
-		autoFailedRef.current.add(job._id);
-		try {
-			const result = await window.electronAPI.markJobFailed(job._id, job.rawStatus);
-			if (!result?.success) throw new Error(result?.message || "request failed");
-			// The main process's jobs:file-failed event (fired on success) drives the
-			// toast + local cleanup above — nothing else to do here.
-		} catch (err) {
-			console.error("[AutoPrint] failed to mark job failed:", err);
-			pushToast("Couldn't mark the job as failed — please try again.");
-			autoFailedRef.current.delete(job._id); // allow retrying
-		}
-	}, [pushToast]);
-
-	useEffect(() => {
-		// Microsoft Print to PDF is excluded from auto-fail: a failure there is
-		// usually just the operator cancelling the save dialog, not a real printer
-		// problem, so it shouldn't auto-refund the customer. They can still force
-		// it via the per-document "click here" link, which calls failJob directly.
-		const isPdfTarget = !selectedPrinter || /print to pdf/i.test(selectedPrinter?.name || "");
-		if (isPdfTarget) return;
-
-		for (const job of printJobs) {
-			if (!ACTIVE_STATUSES.has(job.rawStatus)) continue;
-			const files = job.files || [];
-			if (files.length === 0) continue;
-			const jobFailed = failedFiles[job._id] || {};
-			const jobPrinted = printedFiles[job._id] || {};
-			const allFailed = files.every((f) => jobFailed[f.fileId] && !jobPrinted[f.fileId]);
-			if (allFailed) failJob(job);
-		}
-	}, [printJobs, failedFiles, printedFiles, failJob, selectedPrinter]);
-
-	// ── print primitives (used by both manual and auto paths) ───────────────────
-	const ensurePrintingStatus = useCallback(async (job) => {
-		if (job.rawStatus === "printing") return;
-		setJobStatus(job._id, "processing", "printing");
-		try {
-			const result = await window.electronAPI.updateJobStatus(job._id, "printing");
-			if (!result?.success) throw new Error(result?.message || "request failed");
-		} catch (err) {
-			console.error("[AutoPrint] failed to set job printing:", err);
-		}
-	}, [setJobStatus]);
-
-	const completeJob = useCallback(async (job) => {
-		setJobStatus(job._id, "completed", "completed");
-		try {
-			const result = await window.electronAPI.updateJobStatus(job._id, "completed");
-			if (!result?.success) throw new Error(result?.message || "request failed");
-			await cleanupJobFiles(job);
-		} catch (err) {
-			console.error("[AutoPrint] failed to complete job:", err);
-			setJobStatus(job._id, job.status, job.rawStatus); // revert
-		}
-	}, [setJobStatus, cleanupJobFiles]);
-
-	// Shared by every print path (manual per-doc, manual print-all, and the auto
-	// queue) so failure tracking behaves identically regardless of printer or
-	// trigger. A failure marks the file failed (driving its banner in the UI);
-	// a retry that succeeds clears it.
-	const printOneFile = useCallback(async (jobId, file, deviceName) => {
-		setCurrent({ jobId, fileId: file.fileId });
-		try {
-			const result = await window.electronAPI.printFile(file.fileId, file.settings, deviceName, file.name);
-			if (!result?.success) throw new Error(result?.message || "print failed");
-			clearFileFailed(jobId, file.fileId);
-			return true;
-		} catch (err) {
-			console.error("[AutoPrint] failed to print file:", err);
-			// Only the PDF save-dialog cancellation gets this specific toast — every
-			// other failure (any printer, any reason) still gets the generic
-			// per-document failure banner via markFileFailed below.
-			if (err.message === "pdf save cancelled") {
-				pushToast("Failure in printing through Microsoft Print to PDF. To cancel the job, click the Decline Job button above.");
-			}
-			markFileFailed(jobId, file.fileId);
-			return false;
-		} finally {
-			setCurrent(null);
-		}
-	}, [pushToast, markFileFailed, clearFileFailed]);
-
-	// ── manual actions (used by the Print Jobs buttons when auto-print is OFF) ───
-	const printFileManual = useCallback(async (job, file, deviceName) => {
-		if (!job || isFilePrinted(job._id, file.fileId) || busyJobs[job._id]) return;
-		await ensurePrintingStatus(job);
-		const ok = await printOneFile(job._id, file, deviceName);
-		if (!ok) return;
-		markFilePrinted(job._id, file.fileId);
-		const printedForJob = { ...(printedFiles[job._id] || {}), [file.fileId]: true };
-		const files = job.files || [];
-		if (files.length && files.every((f) => printedForJob[f.fileId])) await completeJob(job);
-	}, [isFilePrinted, busyJobs, ensurePrintingStatus, printOneFile, markFilePrinted, printedFiles, completeJob]);
-
-	const printAllManual = useCallback(async (job, deviceName) => {
-		if (!job || busyJobs[job._id]) return;
-		setBusyJobs((prev) => ({ ...prev, [job._id]: true }));
-		await ensurePrintingStatus(job);
-		const files = job.files || [];
-		const printedForJob = { ...(printedFiles[job._id] || {}) };
-		for (const file of files) {
-			if (printedForJob[file.fileId]) continue;
-			const ok = await printOneFile(job._id, file, deviceName);
-			if (ok) {
-				printedForJob[file.fileId] = true;
-				markFilePrinted(job._id, file.fileId);
-			}
-		}
-		setBusyJobs((prev) => ({ ...prev, [job._id]: false }));
-		if (files.length && files.every((f) => printedForJob[f.fileId])) await completeJob(job);
-	}, [busyJobs, ensurePrintingStatus, printedFiles, printOneFile, markFilePrinted, completeJob]);
-
-	// ── enqueue helpers ─────────────────────────────────────────────────────────
-	const enqueue = useCallback((ids) => {
-		setQueueIds((prev) => [...prev, ...ids.filter((id) => !prev.includes(id))]);
-	}, []);
-
-	// Launch handling (edge case 2): once jobs have loaded, prompt to re-queue any
-	// unprinted active jobs if auto-print was left on.
-	useEffect(() => {
-		if (!hydrated || jobsLoading || initedRef.current) return;
-		initedRef.current = true;
-		const active = printJobs.filter((j) => ACTIVE_STATUSES.has(j.rawStatus));
-		active.forEach((j) => seenRef.current.add(j._id));
-		if (autoPrintEnabled) {
-			const candidates = active
-				.filter((j) => (j.files || []).some((f) => !isFilePrinted(j._id, f.fileId)))
-				.map((j) => j._id);
-			if (candidates.length) setRequeuePrompt(candidates);
-		}
-	}, [hydrated, jobsLoading, printJobs, autoPrintEnabled, isFilePrinted]);
-
-	// Auto-enqueue jobs that arrive after launch while enabled.
-	useEffect(() => {
-		if (!initedRef.current || !autoPrintEnabled) return;
-		const active = printJobs.filter((j) => ACTIVE_STATUSES.has(j.rawStatus));
-		const fresh = active.filter((j) => !seenRef.current.has(j._id));
-		if (fresh.length === 0) return;
-		fresh.forEach((j) => seenRef.current.add(j._id));
-		enqueue(fresh.map((j) => j._id));
-	}, [printJobs, autoPrintEnabled, enqueue]);
-
-	// ── the FIFO auto processor ──────────────────────────────────────────────────
-	// Prints one file per pass, checking `paused` between files so a pause lets the
-	// in-flight document finish but halts before the next. Drains even when
-	// disabled (so toggling off lets the queue finish — edge case 1).
-	useEffect(() => {
-		if (paused || busyRef.current || queueIds.length === 0) return;
-
-		const jobId = queueIds[0];
-		const job = printJobs.find((j) => j._id === jobId);
-		if (!job || !ACTIVE_STATUSES.has(job.rawStatus)) {
-			setQueueIds((q) => q.filter((id) => id !== jobId)); // gone/terminal → drop
-			return;
-		}
-
-		const files = job.files || [];
-		const jobFailed = failedFiles[jobId] || {};
-		const nextFile = files.find((f) => !isFilePrinted(jobId, f.fileId) && !jobFailed[f.fileId]);
-
-		busyRef.current = true;
-		(async () => {
-			if (!nextFile) {
-				// Nothing left to print for this job.
-				const allPrinted = files.length > 0 && files.every((f) => isFilePrinted(jobId, f.fileId));
-				if (allPrinted) await completeJob(job);
-				setQueueIds((q) => q.filter((id) => id !== jobId));
-			} else {
-				await ensurePrintingStatus(job);
-				const ok = await printOneFile(jobId, nextFile);
-				if (ok) markFilePrinted(jobId, nextFile.fileId); // failure tracking happens inside printOneFile
-			}
-			busyRef.current = false;
-			setTick((t) => t + 1);
-		})();
-	}, [queueIds, paused, printedFiles, printJobs, failedFiles, tick, isFilePrinted, ensurePrintingStatus, printOneFile, markFilePrinted, completeJob]);
-
-	// ── toggle + pause API ───────────────────────────────────────────────────────
-	const enableAutoPrint = useCallback(async () => {
-		await window.electronAPI.setAutoPrint(true);
-		setEnabled(true);
-		// Enqueue the current backlog immediately (chosen behavior).
-		const active = printJobs.filter((j) => ACTIVE_STATUSES.has(j.rawStatus));
-		active.forEach((j) => seenRef.current.add(j._id));
-		enqueue(active.filter((j) => (j.files || []).some((f) => !isFilePrinted(j._id, f.fileId))).map((j) => j._id));
-	}, [printJobs, isFilePrinted, enqueue]);
-
-	const disableAutoPrint = useCallback(async () => {
-		await window.electronAPI.setAutoPrint(false);
-		setEnabled(false); // existing queue keeps draining; new jobs won't enqueue
-		setPaused(false); // ensure the queue actually drains (edge case 1)
-	}, []);
-
-	// "Re-queue & print now" — enqueue the leftovers and let them run.
-	const confirmRequeue = useCallback(() => {
-		if (requeuePrompt) enqueue(requeuePrompt);
-		setRequeuePrompt(null);
-	}, [requeuePrompt, enqueue]);
-
-	// "Not now" — still enqueue the leftovers, but start the queue paused so the
-	// operator can review/decline before anything prints. Resume kicks it off.
-	const dismissRequeue = useCallback(() => {
-		if (requeuePrompt) enqueue(requeuePrompt);
-		setPaused(true);
-		setRequeuePrompt(null);
-	}, [requeuePrompt, enqueue]);
-
-	// State line for a job in the queue (for the list UI).
-	const queueInfoFor = useCallback((jobId) => {
-		const idx = queueIds.indexOf(jobId);
-		if (idx === -1) return null;
-		if (idx === 0) return { state: paused ? "paused" : "printing", place: 0 };
-		return { state: "queued", place: idx };
-	}, [queueIds, paused]);
+	const refreshPrinterState = useCallback(() => window.electronAPI.refreshRouting(), []);
 
 	const value = {
-		autoPrintEnabled,
+		autoPrintEnabled: autoPrint,
 		paused,
 		setPaused,
-		queueIds,
-		queueCount: queueIds.length,
-		current,
+		queueCount: queuedJobIds.length,
+		queuedJobIds,
 		printedFiles,
+		fileStates,
 		isFilePrinted,
-		failedFiles,
 		isFileFailed,
-		failJob,
-		busyJobs,
+		failedFilesFor,
+		jobBusy,
+		jobPrintingNow,
+		queueInfoFor,
 		enableAutoPrint,
 		disableAutoPrint,
 		printFileManual,
 		printAllManual,
-		clearJobPrinted,
-		cleanupJobFiles,
-		queueInfoFor,
-		selectedPrinter,
-		printersReady,
-		refreshPrinterState: checkPrinters,
+		failJob,
+		declineJob,
+		completeJob,
+		autoRouteReady: snapshot.autoRouteReady,
+		printersReady: snapshot.routingLoaded,
+		refreshPrinterState,
 	};
+
+	const requeueCount = snapshot.requeuePrompt?.jobIds?.length || 0;
 
 	return (
 		<AutoPrintContext.Provider value={value}>
 			{children}
-			{requeuePrompt && (
+			{requeueCount > 0 && (
 				<ConfirmDialog
 					title="Resume automated printing?"
-					message={`Automated printing is on and ${requeuePrompt.length} unprinted ${requeuePrompt.length === 1 ? "job" : "jobs"} ${requeuePrompt.length === 1 ? "was" : "were"} left over. Start printing ${requeuePrompt.length === 1 ? "it" : "them"} now? Choosing “Not now” keeps ${requeuePrompt.length === 1 ? "it" : "them"} in the queue but pauses automated printing — press Resume in Print Jobs when you’re ready.`}
+					message={`Automated printing is on and ${requeueCount} unprinted ${requeueCount === 1 ? "job" : "jobs"} ${requeueCount === 1 ? "was" : "were"} left over. Start printing ${requeueCount === 1 ? "it" : "them"} now? Some documents may have printed just before the app closed — review first if unsure. Choosing “Not now” keeps ${requeueCount === 1 ? "it" : "them"} in the queue but pauses automated printing — press Resume in Print Jobs when you're ready.`}
 					confirmLabel="Re-queue & print"
 					cancelLabel="Not now (pause)"
-					onConfirm={confirmRequeue}
-					onCancel={dismissRequeue}
+					onConfirm={() => window.electronAPI.resolveRequeue(true)}
+					onCancel={() => window.electronAPI.resolveRequeue(false)}
 				/>
 			)}
 			{toasts.length > 0 && createPortal(

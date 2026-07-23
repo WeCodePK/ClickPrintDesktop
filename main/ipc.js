@@ -11,12 +11,13 @@ const {
 	createService,
 	updateService,
 	deleteService,
+	setServiceDisabled,
 	fetchPrinters,
 	createPrinter,
 	deletePrinter,
+	setPrinterDisabled,
 	fetchJobs,
 	fetchHistory,
-	updateJobStatus,
 	markJobFailed,
 	isJobFailing,
 	acknowledgeNewJobs,
@@ -25,38 +26,61 @@ const {
 	setSseStatusNotifier,
 	getSseStatus,
 } = require("./api");
-const { syncJobFiles, getStatusMap, setNotifier, openFile, printFile, deleteJobFiles } = require("./files");
+const { syncJobFiles, getStatusMap, setNotifier, openFile } = require("./files");
 const { listPrinters, listAllPrinters, printTestPage } = require("./printers");
-const store = require("./store");
+const { getJobs } = require("./state");
+const engine = require("./printEngine");
 
 function registerIpcHandlers(getMainWindow) {
-	// A job that can't be fulfilled — its file download failed unrecoverably, or
-	// every one of its documents failed to print — is marked "failed" on the
-	// backend and the renderer is told so it can drop it from the list/queue at
-	// once. `reason` lets the renderer show the right toast copy.
-	const handleJobFailed = async (jobId, reason = "download", currentStatus) => {
-		const result = await markJobFailed(jobId, currentStatus);
-		if (!result?.success) return false; // let the next reconcile retry
+	const send = (channel, ...args) => {
 		const win = getMainWindow();
-		if (win && !win.isDestroyed()) win.webContents.send("jobs:file-failed", jobId, reason);
+		if (win && !win.isDestroyed()) win.webContents.send(channel, ...args);
+	};
+
+	// The print engine owns all orchestration; ipc just wires its outputs to the
+	// renderer (state snapshots, semantic toast events, refreshed job pushes).
+	engine.init({
+		getMainWindow,
+		onSnapshot: (snapshot) => send("engine:state", snapshot),
+		onToast: (payload) => send("engine:toast", payload),
+		onJobsChanged: () => pushJobs(getJobs()),
+	});
+
+	// Pushes a job list to the renderer with the engine's locally-known status
+	// transitions applied and mid-fail jobs hidden (their forced "printing" step
+	// must never surface).
+	const pushJobs = (jobs) => {
+		const visible = engine.applyOverrides(jobs || []).filter((j) => !isJobFailing(j._id));
+		console.log(`[IPC] Pushing jobs:updated — ${visible.length} jobs`);
+		send("jobs:updated", visible);
+	};
+
+	// A job whose file download failed unrecoverably is marked "failed" on the
+	// backend (the customer is refunded there) and dropped from the engine.
+	const handleJobFailed = async (jobId) => {
+		const job = getJobs().find((j) => j._id === jobId);
+		const result = await markJobFailed(jobId, job?.status);
+		if (!result?.success) return false; // let the next reconcile retry
+		engine.dropJob(jobId);
+		send("engine:toast", {
+			kind: "job-failed-download",
+			jobId,
+			who: job?.createdBy?.name || job?.createdBy?.number || `#${String(jobId).slice(-6)}`,
+		});
 		return true;
 	};
 
-	// Starts the live jobs SSE stream and pushes every update to the renderer.
-	// Shared by fresh logins (auth:verify-otp) and restored sessions (startup).
+	// Starts the live jobs SSE stream, the print engine, and pushes every update
+	// to the renderer. Shared by fresh logins and restored sessions.
 	const beginJobsSync = () => {
+		engine.start();
 		startJobsSse((jobs) => {
-			const win = getMainWindow();
-			// Hide jobs mid-transition to "failed" so their forced "printing" step
-			// never surfaces in the UI (they're removed via jobs:file-failed).
-			const visible = jobs.filter((j) => !isJobFailing(j._id));
-			console.log(`[IPC] Pushing jobs:updated — ${visible.length} jobs, window=${win ? "open" : "null"}`);
-			if (win && !win.isDestroyed()) {
-				win.webContents.send("jobs:updated", visible);
-			}
+			pushJobs(jobs);
 			// Acknowledge new jobs to the backend and download their files.
 			acknowledgeNewJobs(jobs);
 			syncJobFiles(jobs, handleJobFailed);
+			// Feed the engine last — downloads are already kicking off.
+			engine.onJobsReconciled(jobs);
 		});
 	};
 
@@ -114,6 +138,7 @@ function registerIpcHandlers(getMainWindow) {
 	});
 
 	ipcMain.handle("auth:logout", async () => {
+		engine.stop();
 		stopJobsSse();
 		clearAuthState();
 		return { success: true };
@@ -131,8 +156,9 @@ function registerIpcHandlers(getMainWindow) {
 		if (result.success) {
 			acknowledgeNewJobs(result.data);
 			syncJobFiles(result.data, handleJobFailed);
-			// Hide any jobs mid-transition to "failed" (see beginJobsSync).
-			return { ...result, data: result.data.filter((j) => !isJobFailing(j._id)) };
+			// Hide any jobs mid-transition to "failed" (see beginJobsSync) and apply
+			// the engine's local status overrides.
+			return { ...result, data: engine.applyOverrides(result.data).filter((j) => !isJobFailing(j._id)) };
 		}
 		return result;
 	});
@@ -167,33 +193,30 @@ function registerIpcHandlers(getMainWindow) {
 		return await deleteService(serviceId);
 	});
 
-	ipcMain.handle("jobs:update-status", async (_event, jobId, status) => {
-		console.log(`[IPC] jobs:update-status → ${jobId} = ${status}`);
-		return await updateJobStatus(jobId, status);
+	ipcMain.handle("services:setDisabled", async (_event, serviceId, isDisabled) => {
+		console.log(`[IPC] services:setDisabled → ${serviceId} (${isDisabled})`);
+		return await setServiceDisabled(serviceId, isDisabled);
 	});
 
-	// Renderer-triggered "mark as failed" — every document in the job failed to
-	// print (or the operator forced it via the per-document failure banner).
-	// Reuses the same printing→failed step-through as a download failure.
-	ipcMain.handle("jobs:mark-failed", async (_event, jobId, currentStatus) => {
+	// Operator actions on a job — all orchestration lives in the engine.
+	ipcMain.handle("jobs:decline", async (_event, jobId) => {
+		console.log(`[IPC] jobs:decline → ${jobId}`);
+		return await engine.declineJob(jobId);
+	});
+
+	ipcMain.handle("jobs:complete", async (_event, jobId, opts) => {
+		console.log(`[IPC] jobs:complete → ${jobId}${opts?.force ? " (force)" : ""}`);
+		return await engine.completeJob(jobId, opts || {});
+	});
+
+	// Operator "mark as failed" via the per-document failure banner.
+	ipcMain.handle("jobs:mark-failed", async (_event, jobId) => {
 		console.log(`[IPC] jobs:mark-failed → ${jobId}`);
-		const handled = await handleJobFailed(jobId, "print", currentStatus);
-		return handled ? { success: true } : { success: false, message: "request failed" };
+		return await engine.forceFailJob(jobId);
 	});
 
 	ipcMain.handle("files:status", async () => {
 		return getStatusMap();
-	});
-
-	ipcMain.handle("files:delete-job-files", async (_event, fileIds) => {
-		console.log(`[IPC] files:delete-job-files → ${(fileIds || []).length} file(s)`);
-		try {
-			await deleteJobFiles(fileIds);
-			return { success: true };
-		} catch (error) {
-			console.error("[IPC] files:delete-job-files error:", error.message);
-			return { success: false, message: error.message };
-		}
 	});
 
 	ipcMain.handle("files:open", async (_event, fileId) => {
@@ -203,17 +226,6 @@ function registerIpcHandlers(getMainWindow) {
 			return { success: true };
 		} catch (error) {
 			console.error(`[IPC] files:open ${fileId} error:`, error.message);
-			return { success: false, message: error.message };
-		}
-	});
-
-	ipcMain.handle("files:print", async (_event, fileId, settings, deviceName, fileName) => {
-		console.log(`[IPC] files:print → ${fileId}${deviceName ? ` (@${deviceName})` : ""}`);
-		try {
-			await printFile(fileId, settings, deviceName, fileName);
-			return { success: true };
-		} catch (error) {
-			console.error(`[IPC] files:print ${fileId} error:`, error.message);
 			return { success: false, message: error.message };
 		}
 	});
@@ -232,6 +244,11 @@ function registerIpcHandlers(getMainWindow) {
 	ipcMain.handle("printers:delete", async (_event, printerId) => {
 		console.log("[IPC] printers:delete →", printerId);
 		return await deletePrinter(printerId);
+	});
+
+	ipcMain.handle("printers:setDisabled", async (_event, printerId, isDisabled) => {
+		console.log(`[IPC] printers:setDisabled → ${printerId} (${isDisabled})`);
+		return await setPrinterDisabled(printerId, isDisabled);
 	});
 
 	// ── Local printers (what this machine can reach right now) ────────────────
@@ -267,24 +284,44 @@ function registerIpcHandlers(getMainWindow) {
 		}
 	});
 
-	ipcMain.handle("printers:get-selected", async () => {
-		return store.get("selectedPrinter") || null;
+	// ── Print engine (all orchestration/state lives in main) ───────────────────
+	ipcMain.handle("engine:get-state", async () => {
+		return engine.getSnapshot();
 	});
 
-	ipcMain.handle("printers:set-selected", async (_event, printer) => {
-		console.log("[IPC] printers:set-selected →", printer?.name);
-		store.set("selectedPrinter", printer);
+	ipcMain.handle("engine:print-job", async (_event, jobId, deviceName) => {
+		console.log(`[IPC] engine:print-job → ${jobId}${deviceName ? ` (@${deviceName})` : ""}`);
+		return engine.printJob(jobId, deviceName || null);
+	});
+
+	ipcMain.handle("engine:print-file", async (_event, jobId, fileId, deviceName) => {
+		console.log(`[IPC] engine:print-file → ${jobId}:${fileId}${deviceName ? ` (@${deviceName})` : ""}`);
+		return engine.printFile(jobId, fileId, deviceName || null);
+	});
+
+	ipcMain.handle("engine:set-paused", async (_event, paused) => {
+		console.log("[IPC] engine:set-paused →", !!paused);
+		return engine.setPaused(paused);
+	});
+
+	ipcMain.handle("engine:set-autoprint", async (_event, enabled) => {
+		console.log("[IPC] engine:set-autoprint →", !!enabled);
+		return engine.setAutoPrint(enabled);
+	});
+
+	ipcMain.handle("engine:requeue-decision", async (_event, accept) => {
+		console.log("[IPC] engine:requeue-decision →", !!accept);
+		return engine.resolveRequeue(!!accept);
+	});
+
+	ipcMain.handle("engine:refresh-routing", async () => {
+		await engine.refreshRouting(true);
 		return { success: true };
 	});
 
-	// ── Automated printing toggle (persisted) ──────────────────────────────────
-	ipcMain.handle("settings:get-autoprint", async () => {
-		return store.get("autoPrint") === true;
-	});
-
-	ipcMain.handle("settings:set-autoprint", async (_event, enabled) => {
-		console.log("[IPC] settings:set-autoprint →", !!enabled);
-		store.set("autoPrint", !!enabled);
+	// One-time import of the legacy renderer-localStorage print progress.
+	ipcMain.handle("engine:migrate-progress", async (_event, printedFiles) => {
+		engine.migrateProgress(printedFiles);
 		return { success: true };
 	});
 

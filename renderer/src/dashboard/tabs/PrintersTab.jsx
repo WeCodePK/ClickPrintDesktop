@@ -4,7 +4,7 @@ import ListColumn from "../components/ListColumn";
 import WelcomePane from "../components/WelcomePane";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { useAutoPrint } from "../AutoPrintContext";
-import { PrinterIcon, PaperIcon, CheckIcon, RefreshIcon, TrashIcon } from "../icons";
+import { PrinterIcon, PaperIcon, CheckIcon, TrashIcon } from "../icons";
 
 // How often the tab re-checks which registered printers are still reachable.
 const ONLINE_POLL_MS = 15000;
@@ -20,10 +20,9 @@ function PrintersTab() {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState(null);
 	const [selectedId, setSelectedId] = useState(null);
-	const [chosen, setChosen] = useState(null); // app's saved default printer name
 	const [testState, setTestState] = useState({}); // name -> "testing" | "success" | "error"
-	const [saving, setSaving] = useState(false);
 	const [confirmDelete, setConfirmDelete] = useState(null);
+	const [togglingId, setTogglingId] = useState(null); // printer whose enable/disable is in flight
 
 	// Add-printer picker
 	const [addOpen, setAddOpen] = useState(false);
@@ -35,13 +34,9 @@ function PrintersTab() {
 
 	const loadRegistered = useCallback(async () => {
 		try {
-			const [result, selected] = await Promise.all([
-				window.electronAPI.fetchPrinters(),
-				window.electronAPI.getSelectedPrinter(),
-			]);
+			const result = await window.electronAPI.fetchPrinters();
 			if (result?.success) setRegistered(result.data || []);
 			else setError(result?.message || "Failed to load printers.");
-			setChosen(selected?.name || null);
 		} catch (err) {
 			console.error("[Renderer] failed to load printers:", err);
 			setError("Failed to load printers.");
@@ -136,15 +131,28 @@ function PrintersTab() {
 			const result = await window.electronAPI.deletePrinter(printer._id);
 			if (!result?.success) throw new Error(result?.message || "delete failed");
 			if (selectedId === printer._id) setSelectedId(null);
-			// If it was the app's default, clear that too so nothing points at it.
-			if (chosen === printer.name) {
-				await window.electronAPI.setSelectedPrinter(null);
-				setChosen(null);
-				refreshPrinterState();
-			}
 			await loadRegistered();
+			refreshPrinterState(); // services may have routed to this printer
 		} catch (err) {
 			console.error("[Renderer] failed to remove printer:", err);
+		}
+	};
+
+	// ── Enable / disable ───────────────────────────────────────────────────────
+	const handleToggleDisabled = async (entry) => {
+		if (togglingId) return;
+		setTogglingId(entry._id);
+		try {
+			const result = await window.electronAPI.setPrinterDisabled(entry._id, !entry.isDisabled);
+			if (!result?.success) throw new Error(result?.message || "update failed");
+			// Prefer the server's returned printer; fall back to flipping locally.
+			const updated = result.data && result.data._id ? result.data : { ...entry, isDisabled: !entry.isDisabled };
+			setRegistered((prev) => prev.map((p) => (p._id === entry._id ? { ...p, ...updated } : p)));
+			refreshPrinterState(); // disabling affects service routing + the auto-print gate
+		} catch (err) {
+			console.error("[Renderer] failed to toggle printer disabled state:", err);
+		} finally {
+			setTogglingId(null);
 		}
 	};
 
@@ -161,23 +169,6 @@ function PrintersTab() {
 			setTestState((prev) => ({ ...prev, [entry.name]: "error" }));
 		}
 		setTimeout(() => setTestState((prev) => ({ ...prev, [entry.name]: null })), 3500);
-	};
-
-	const handleSelect = async (entry) => {
-		setSaving(true);
-		try {
-			const result = await window.electronAPI.setSelectedPrinter({
-				name: entry.name,
-				displayName: entry.local?.displayName || entry.name,
-			});
-			if (!result?.success) throw new Error(result?.message || "save failed");
-			setChosen(entry.name);
-			refreshPrinterState(); // propagate the new default to the dashboard/auto-print
-		} catch (err) {
-			console.error("[Renderer] failed to save selected printer:", err);
-		} finally {
-			setSaving(false);
-		}
 	};
 
 	return (
@@ -211,7 +202,7 @@ function PrintersTab() {
 					entries.map((entry) => (
 						<div
 							key={entry._id}
-							className={`db-entry ${selectedId === entry._id ? "db-entry--active" : ""} ${entry.online ? "" : "db-entry--offline"}`}
+							className={`db-entry ${selectedId === entry._id ? "db-entry--active" : ""} ${entry.online && !entry.isDisabled ? "" : "db-entry--offline"}`}
 							role="button"
 							tabIndex={0}
 							onClick={() => setSelectedId(entry._id)}
@@ -222,33 +213,33 @@ function PrintersTab() {
 								}
 							}}
 						>
-							<div className={`db-entry__avatar ${chosen === entry.name ? "db-entry__avatar--chosen" : "db-entry__avatar--muted"}`}>
+							<div className={`db-entry__avatar ${entry.online && !entry.isDisabled ? "db-entry__avatar--chosen" : "db-entry__avatar--muted"}`}>
 								<PrinterIcon />
 							</div>
 							<div className="db-entry__info">
 								<span className="db-entry__name">{entry.local?.displayName || entry.name}</span>
 								<span className="db-entry__meta">
-									{entry.online
-										? `Ready${entry.local?.isDefault ? " · System default" : ""}`
-										: "Offline"}
+									{entry.isDisabled
+										? "Disabled"
+										: entry.online
+											? `Ready${entry.local?.isDefault ? " · System default" : ""}`
+											: "Offline"}
 								</span>
 							</div>
 							<div className="db-entry__price-actions">
-								{chosen === entry.name && (
-									<span className="db-status db-status--processing" style={{ fontSize: "9px", padding: "2px 6px" }}>
-										Selected
-									</span>
-								)}
 								<button
 									type="button"
-									className="db-entry__delete-btn db-entry__delete-btn--accent"
-									title="Remove this printer"
+									className={`toggle ${entry.isDisabled ? "" : "toggle--on"}`}
+									role="switch"
+									aria-checked={!entry.isDisabled}
+									title={entry.isDisabled ? "Enable this printer" : "Disable this printer"}
+									disabled={togglingId === entry._id}
 									onClick={(e) => {
 										e.stopPropagation();
-										setConfirmDelete(entry);
+										handleToggleDisabled(entry);
 									}}
 								>
-									<TrashIcon />
+									<span className="toggle__knob" />
 								</button>
 							</div>
 						</div>
@@ -274,8 +265,8 @@ function PrintersTab() {
 									<div className="printer-grid-item-icon"><CheckIcon /></div>
 									<div className="printer-grid-item-details">
 										<span className="printer-grid-item-label">Status</span>
-										<span className="printer-grid-item-value" style={selectedEntry.online ? undefined : { color: "var(--color-accent)" }}>
-											{selectedEntry.online ? "Ready" : "Offline"}
+										<span className="printer-grid-item-value" style={selectedEntry.online && !selectedEntry.isDisabled ? undefined : { color: "var(--color-accent)" }}>
+											{selectedEntry.isDisabled ? "Disabled" : selectedEntry.online ? "Ready" : "Offline"}
 										</span>
 									</div>
 								</div>
@@ -284,13 +275,6 @@ function PrintersTab() {
 									<div className="printer-grid-item-details">
 										<span className="printer-grid-item-label">System Default</span>
 										<span className="printer-grid-item-value">{selectedEntry.local?.isDefault ? "Yes" : "No"}</span>
-									</div>
-								</div>
-								<div className="printer-grid-item">
-									<div className="printer-grid-item-icon"><RefreshIcon /></div>
-									<div className="printer-grid-item-details">
-										<span className="printer-grid-item-label">App Selection</span>
-										<span className="printer-grid-item-value">{chosen === selectedEntry.name ? "Selected" : "Not selected"}</span>
 									</div>
 								</div>
 							</div>
@@ -320,16 +304,24 @@ function PrintersTab() {
 								)}
 							</button>
 							<button
-								className="btn-gradient"
-								onClick={() => handleSelect(selectedEntry)}
-								disabled={!selectedEntry.online || saving || chosen === selectedEntry.name}
+								className="btn-outline"
+								style={{ color: "var(--color-accent)", borderColor: "var(--color-accent)" }}
+								onClick={() => setConfirmDelete(selectedEntry)}
 							>
-								<CheckIcon />
-								{chosen === selectedEntry.name ? "Selected Printer" : "Select This Printer"}
+								<TrashIcon />
+								Remove Printer
 							</button>
 						</div>
 
 						{/* Status messages */}
+
+						{selectedEntry.isDisabled && (
+							<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(255, 87, 10, 0.08)", borderColor: "var(--color-accent)" }}>
+								<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-accent)" }}>
+									This printer is disabled. Use its toggle in the list to enable it again.
+								</span>
+							</div>
+						)}
 
 						{!selectedEntry.online && (
 							<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(255, 87, 10, 0.08)", borderColor: "var(--color-accent)" }}>

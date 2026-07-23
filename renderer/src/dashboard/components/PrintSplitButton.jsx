@@ -1,12 +1,14 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDownIcon, CheckIcon } from "../icons";
+import { ChevronDownIcon } from "../icons";
 
+// The main button prints without an explicit device — each document is routed
+// to its service's automated printer (resolved in AutoPrintContext). The
+// dropdown overrides that with a specific printer for this one print.
 function PrintSplitButton({
 	onPrint,
 	onOpen,
 	printers = [],
-	selectedName,
 	disabled = false,
 	busy = false,
 	label,
@@ -18,14 +20,6 @@ function PrintSplitButton({
 	const [pos, setPos] = useState(null);
 	const rowRef = useRef(null);
 	const menuRef = useRef(null);
-
-	// The app's own default — never Windows' — is Microsoft Print to PDF, so an
-	// unselected printer always displays as that, regardless of what the OS
-	// reports as its default.
-	const selectedDisplay =
-		printers.find((p) => p.name === selectedName)?.displayName ||
-		selectedName ||
-		"Sys. default (Microsoft Print to PDF)";
 
 	const openMenu = () => {
 		onOpen?.();
@@ -90,8 +84,8 @@ function PrintSplitButton({
 			</div>
 
 			{showInfo && (
-				<span className="print-split__info" title={selectedDisplay}>
-					{selectedDisplay}
+				<span className="print-split__info" title="Each document prints to the automated printer of its matching service">
+					Routed by service
 				</span>
 			)}
 
@@ -110,7 +104,6 @@ function PrintSplitButton({
 							onClick={() => pick(p.name)}
 						>
 							<span className="print-split__item-name">{p.displayName}</span>
-							{p.name === selectedName && <CheckIcon />}
 						</button>
 					))}
 				</div>,

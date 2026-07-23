@@ -68,8 +68,28 @@ function FileThumb({ file }) {
 	);
 }
 
-function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, failed, onMarkJobFailed, printingAll, printers, selectedPrinterName, onPrinterMenuOpen, autoPrintOn, printingNow }) {
+// Human hint for why a queued document hasn't started printing yet.
+function waitHint(waitReason) {
+	switch (waitReason) {
+		case "downloading":
+			return "Queued · downloading…";
+		case "no-free-printer":
+			return "Queued · waiting for a free printer";
+		case "no-online-printer":
+			return "Queued · printer offline";
+		case "route":
+			return "Queued · no matching service printer";
+		default:
+			return "Queued";
+	}
+}
+
+function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, failed, onMarkJobFailed, printingAll, printers, onPrinterMenuOpen, autoPrintOn, state }) {
 	const settings = file.settings || {};
+	// Per-file engine state: "waiting" | "printing" | "verifying" | "printed" | "failed".
+	const printingNow = state?.status === "printing" || state?.status === "verifying";
+	const queued = state?.status === "waiting";
+	const routeGap = queued && state?.waitReason === "route";
 	return (
 		<div className={`file-preview ${printed ? "file-preview--printed" : ""} ${printingNow ? "file-preview--printing" : ""}`}>
 			<div className="file-preview__heading">
@@ -84,6 +104,10 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 					<span className="file-preview__badge file-preview__badge--printing">
 						<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)", width: "11px", height: "11px" }} />
 						Printing…
+					</span>
+				) : queued ? (
+					<span className="file-preview__badge file-preview__badge--printing" title={waitHint(state?.waitReason)}>
+						{waitHint(state?.waitReason)}
 					</span>
 				) : null}
 			</div>
@@ -131,6 +155,10 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 								<div className="spinner spinner--dark" style={{ borderTopColor: "#111b21", width: "14px", height: "14px" }} />
 								Printing…
 							</button>
+						) : queued ? (
+							<button className="btn-gradient btn-sm" disabled>
+								Queued
+							</button>
 						) : autoPrintOn ? (
 							<span className="autoprint-tip" title="Automated printing is on — printing is handled automatically">
 								<button className="btn-gradient btn-sm" disabled style={{ pointerEvents: "none", width: "100%" }}>
@@ -144,7 +172,6 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 								onPrint={(deviceName) => onPrint(file, deviceName)}
 								onOpen={onPrinterMenuOpen}
 								printers={printers}
-								selectedName={selectedPrinterName}
 								disabled={printingAll}
 								label={
 									<>
@@ -155,6 +182,14 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 							/>
 						)
 					)}
+				</div>
+			)}
+			{routeGap && (
+				<div className="file-preview__failure">
+					<span>
+						No service printer matches this document's settings. Assign a printer to a
+						matching service in the Services tab, or print it manually via the dropdown.
+					</span>
 				</div>
 			)}
 			{failed && !printed && !printingNow && (
@@ -181,7 +216,7 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 //   │    Cost    │                  │
 //   └────────────┴──────────────────┘
 
-function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showPreview = true, printedFileIds, failedFileIds, onMarkJobFailed, printingAll, printers, selectedPrinterName, onPrinterMenuOpen, autoPrintOn, currentFileId }) {
+function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showPreview = true, printedFileIds, failedFileIds, fileStates, onMarkJobFailed, printingAll, printers, onPrinterMenuOpen, autoPrintOn }) {
 	const files = entry.files || [];
 	const cost = entry.cost;
 	const totalPages = getJobTotalPages(entry);
@@ -247,26 +282,20 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showP
 					<div className="detail-tile__body detail-tile__body--scroll">
 						{cost ? (
 							<>
-								{(cost.lines || []).map((line, i) => {
-									const [code, qty, unit, amount] = line;
-									return (
-										<div key={`line-${i}`} className="receipt-row">
-											<span className="receipt-label">
-												{code} <span style={{ color: "var(--color-text-muted)" }}>({qty} × Rs. {unit})</span>
-											</span>
-											<span className="receipt-value">Rs. {amount}</span>
-										</div>
-									);
-								})}
-								{(cost.extra || []).map((line, i) => {
-									const [label, amount] = line;
-									return (
-										<div key={`extra-${i}`} className="receipt-row">
-											<span className="receipt-label">{label}</span>
-											<span className="receipt-value">Rs. {amount}</span>
-										</div>
-									);
-								})}
+								{(cost.lines || []).map((line, i) => (
+									<div key={`line-${i}`} className="receipt-row">
+										<span className="receipt-label">
+											{line.item} <span style={{ color: "var(--color-text-muted)" }}>({line.quantity} × Rs. {line.rate})</span>
+										</span>
+										<span className="receipt-value">Rs. {line.subtotal}</span>
+									</div>
+								))}
+								{(cost.extra || []).map((line, i) => (
+									<div key={`extra-${i}`} className="receipt-row">
+										<span className="receipt-label">{line.item}</span>
+										<span className="receipt-value">Rs. {line.subtotal}</span>
+									</div>
+								))}
 								<div className="receipt-divider" />
 							</>
 						) : null}
@@ -293,10 +322,9 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showP
 								onMarkJobFailed={onMarkJobFailed}
 								printingAll={printingAll}
 								printers={printers}
-								selectedPrinterName={selectedPrinterName}
 								onPrinterMenuOpen={onPrinterMenuOpen}
 								autoPrintOn={autoPrintOn}
-								printingNow={currentFileId === file.fileId}
+								state={fileStates?.[file.fileId]}
 							/>
 						))}
 					</div>

@@ -3,7 +3,8 @@ const path = require("path");
 const { app } = require("electron");
 
 // Tiny JSON-file persistence under userData. Used to remember the auth session
-// (so the operator stays logged in across restarts) and the selected printer.
+// (so the operator stays logged in across restarts) and app settings like the
+// automated-printing flag.
 // Reads/writes are synchronous and best-effort — a corrupt/missing file is
 // treated as empty rather than throwing.
 
