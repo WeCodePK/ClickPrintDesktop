@@ -76,7 +76,6 @@ async function verifyOtp(code, number) {
 				phoneNumber: number,
 				shopId: null,
 				shopName: null,
-				shops: Array.isArray(data.data.shops) ? data.data.shops : [],
 			});
 			console.log("[API] Auth token stored;", (data.data.shops?.length ?? 0), "shop(s) to choose from");
 		}

@@ -7,7 +7,9 @@ import PrintJobsTab from "../dashboard/tabs/PrintJobsTab";
 import PrintersTab from "../dashboard/tabs/PrintersTab";
 import HistoryTab from "../dashboard/tabs/HistoryTab";
 import DashboardTab from "../dashboard/tabs/DashboardTab";
-import SettingsTab from "../dashboard/tabs/SettingsTab";
+import PricingSettings from "../dashboard/components/settings/PricingSettings";
+import ShopProfileSettings from "../dashboard/components/settings/ShopProfileSettings";
+import AutomationSettings from "../dashboard/components/settings/AutomationSettings";
 import LogoutTab from "../dashboard/tabs/LogoutTab";
 
 function DashboardScreen({ shopProfile, onLogout }) {
@@ -23,7 +25,12 @@ function DashboardScreen({ shopProfile, onLogout }) {
 								<Route path="printers" element={<PrintersTab />} />
 								<Route path="history" element={<HistoryTab />} />
 								<Route path="home" element={<DashboardTab />} />
-								<Route path="settings" element={<SettingsTab />} />
+								{/* Former Settings sub-sections, now top-level tabs. Each settings
+								    panel renders a .db-detail__view, so it needs the .db-detail
+								    pane wrapper the old SettingsTab used to provide. */}
+								<Route path="pricing" element={<div className="db-detail"><PricingSettings /></div>} />
+								<Route path="profile" element={<div className="db-detail"><ShopProfileSettings /></div>} />
+								<Route path="automation" element={<div className="db-detail"><AutomationSettings /></div>} />
 								<Route path="logout" element={<LogoutTab onLogout={onLogout} />} />
 								<Route path="*" element={<Navigate to="jobs" replace />} />
 							</Route>

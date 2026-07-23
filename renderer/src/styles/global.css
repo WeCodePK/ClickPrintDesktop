@@ -286,7 +286,10 @@ body {
 	flex: 1;
 	display: flex;
 	flex-direction: column;
-	padding: 20px 32px 32px;
+	/* Percentage padding is computed from the container's width, so this gives
+	   an even 10% inset on all four sides and keeps the form from stretching
+	   edge-to-edge on wide windows. */
+	padding: 3% 10% 5% 10%;
 	animation: fadeSlideIn var(--transition-slow) both;
 }
 
@@ -3986,22 +3989,6 @@ body,
 	background: rgba(0, 230, 173, 0.1);
 }
 
-.conn-shop--option {
-	border: none;
-	background: none;
-	cursor: pointer;
-	transition: background var(--transition-fast);
-}
-
-.conn-shop--option:hover:not(:disabled) {
-	background: rgba(134, 150, 160, 0.12);
-}
-
-.conn-shop--option:disabled {
-	cursor: not-allowed;
-	opacity: 0.6;
-}
-
 .conn-shop__avatar {
 	flex-shrink: 0;
 	width: 30px;
@@ -4026,23 +4013,9 @@ body,
 	text-overflow: ellipsis;
 }
 
-.conn-shop__check {
-	flex-shrink: 0;
-	display: inline-flex;
-	color: var(--color-primary);
-}
-
-.conn-popover__empty {
-	font-size: 12px;
+.conn-popover__hint {
+	font-size: 11.5px;
+	line-height: 1.5;
 	color: var(--color-text-muted);
-	padding: 6px 4px 2px;
-}
-
-.conn-popover__error {
-	margin-top: 8px;
-	padding: 8px 10px;
-	border-radius: var(--radius-sm);
-	background: rgba(255, 79, 0, 0.1);
-	font-size: 12px;
-	color: var(--color-accent);
+	padding: 10px 4px 2px;
 }

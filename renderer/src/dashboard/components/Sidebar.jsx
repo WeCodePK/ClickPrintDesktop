@@ -5,15 +5,22 @@ import {
 	PrintJobsIcon,
 	PrinterIcon,
 	HistoryIcon,
-	SettingsIcon,
+	WalletIcon,
+	StoreIcon,
+	BoltIcon,
 	LogoutIcon,
 } from "../icons";
 import ConnectionSwitcher from "./ConnectionSwitcher";
 
+// The Settings screen's former sub-sections (Pricing, Shop Profile, Automated
+// Printing) are now first-class nav items alongside the core tabs.
 const TABS = [
 	{ to: "jobs", label: "Print Jobs", Icon: PrintJobsIcon },
 	{ to: "printers", label: "Printers", Icon: PrinterIcon },
 	{ to: "history", label: "History", Icon: HistoryIcon },
+	{ to: "pricing", label: "Pricing", Icon: WalletIcon },
+	{ to: "profile", label: "Shop Profile", Icon: StoreIcon },
+	{ to: "automation", label: "Automated Printing", Icon: BoltIcon },
 ];
 
 // ── Leaf icon (matches the Claude Code reference) ────────────────────────────
@@ -132,25 +139,13 @@ function Sidebar() {
 				</div>
 			</div>
 
-			{/* Bottom settings & logout icon */}
+			{/* Bottom utility icons */}
 			<div style={{ display: "flex", flexDirection: "column", gap: "8px", marginTop: "auto", width: "100%", alignItems: "center" }}>
 				{/* ── Update banner (shown only when an update is available) ── */}
 				<UpdateBanner />
 
 				{/* ── SSE connection status + shop switcher ── */}
 				<ConnectionSwitcher />
-
-				<div className="tooltip-wrapper">
-					<NavLink
-						to="settings"
-						className={({ isActive }) => `db-tab ${isActive ? "db-tab--active" : ""}`}
-					>
-						<span className="db-tab__icon">
-							<SettingsIcon />
-						</span>
-					</NavLink>
-					<span className="tooltip-text">Settings</span>
-				</div>
 
 				<div className="tooltip-wrapper">
 					<NavLink

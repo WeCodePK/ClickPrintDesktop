@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-import { CheckIcon } from "../icons";
 
 // Broadcast/signal glyph for the connection indicator.
 const SignalIcon = () => (
@@ -20,19 +19,16 @@ const STATUS = {
 };
 
 /**
- * Sidebar item next to Settings/Logout that (1) shows the live status of the
- * jobs SSE stream — a spinner while connecting/reconnecting so the operator
- * knows there's a problem — and (2) on click reveals the current shop plus any
- * other shops the user owns, letting them switch without re-authenticating.
+ * Sidebar item next to Logout that shows the live status of the jobs SSE stream
+ * — a spinner while connecting/reconnecting so the operator knows there's a
+ * problem. Clicking it reveals the connection state and which shop this session
+ * is bound to. Switching shops mid-session is intentionally not offered: to
+ * change shops the operator logs out and back in.
  */
 function ConnectionSwitcher() {
 	const [status, setStatus] = useState("closed");
-	const [shops, setShops] = useState([]);
-	const [currentId, setCurrentId] = useState(null);
-	const [currentName, setCurrentName] = useState("");
+	const [shopName, setShopName] = useState("");
 	const [open, setOpen] = useState(false);
-	const [switchingId, setSwitchingId] = useState(null);
-	const [error, setError] = useState("");
 	const wrapRef = useRef(null);
 
 	// Seed status (replay for a late mount) and keep it live.
@@ -48,15 +44,13 @@ function ConnectionSwitcher() {
 		};
 	}, []);
 
-	// Load the current shop + the list to switch between.
+	// Load the shop this session is bound to.
 	useEffect(() => {
 		let active = true;
 		window.electronAPI?.getAuthState?.()
 			.then((auth) => {
 				if (!active || !auth) return;
-				setShops(Array.isArray(auth.shops) ? auth.shops : []);
-				setCurrentId(auth.shopId ?? null);
-				setCurrentName(auth.shopName ?? "");
+				setShopName(auth.shopName ?? "");
 			})
 			.catch(() => {});
 		return () => { active = false; };
@@ -78,28 +72,6 @@ function ConnectionSwitcher() {
 	}, [open]);
 
 	const meta = STATUS[status] || STATUS.closed;
-
-	const handleSwitch = async (shop) => {
-		if (switchingId || shop._id === currentId) return;
-		setError("");
-		setSwitchingId(shop._id);
-		try {
-			const result = await window.electronAPI.switchShop(shop);
-			if (result?.success) {
-				setCurrentId(shop._id);
-				setCurrentName(shop.name ?? "");
-				setOpen(false);
-			} else {
-				setError(result?.message || "Couldn't switch shop. Please try again.");
-			}
-		} catch (err) {
-			setError("An unexpected error occurred. Please try again.");
-		} finally {
-			setSwitchingId(null);
-		}
-	};
-
-	const otherShops = shops.filter((s) => s._id !== currentId);
 
 	return (
 		<div className="conn-switcher" ref={wrapRef}>
@@ -135,44 +107,17 @@ function ConnectionSwitcher() {
 
 					<div className="conn-popover__divider" />
 
-					<div className="conn-popover__section-title">Current shop</div>
+					<div className="conn-popover__section-title">Shop</div>
 					<div className="conn-shop conn-shop--current">
 						<span className="conn-shop__avatar">
-							{(currentName || "?").trim().charAt(0).toUpperCase()}
+							{(shopName || "?").trim().charAt(0).toUpperCase()}
 						</span>
-						<span className="conn-shop__name">{currentName || "Unnamed shop"}</span>
-						<span className="conn-shop__check"><CheckIcon /></span>
+						<span className="conn-shop__name">{shopName || "Unnamed shop"}</span>
 					</div>
 
-					{otherShops.length > 0 && (
-						<>
-							<div className="conn-popover__section-title">Switch to</div>
-							{otherShops.map((shop) => {
-								const busy = switchingId === shop._id;
-								return (
-									<button
-										key={shop._id}
-										className="conn-shop conn-shop--option"
-										onClick={() => handleSwitch(shop)}
-										disabled={!!switchingId}
-										id={`conn-shop-${shop._id}`}
-									>
-										<span className="conn-shop__avatar">
-											{(shop.name || "?").trim().charAt(0).toUpperCase()}
-										</span>
-										<span className="conn-shop__name">{shop.name || "Unnamed shop"}</span>
-										{busy && <span className="conn-popover__spinner" />}
-									</button>
-								);
-							})}
-						</>
-					)}
-
-					{shops.length <= 1 && (
-						<div className="conn-popover__empty">You only have one shop.</div>
-					)}
-
-					{error && <div className="conn-popover__error">{error}</div>}
+					<div className="conn-popover__hint">
+						To switch shops, log out and sign in again.
+					</div>
 				</div>
 			)}
 		</div>

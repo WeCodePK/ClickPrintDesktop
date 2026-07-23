@@ -27,7 +27,6 @@ const {
 } = require("./api");
 const { syncJobFiles, getStatusMap, setNotifier, openFile, printFile, deleteJobFiles } = require("./files");
 const { listPrinters, listAllPrinters, printTestPage } = require("./printers");
-const { setJobs } = require("./state");
 const store = require("./store");
 
 function registerIpcHandlers(getMainWindow) {
@@ -101,21 +100,6 @@ function registerIpcHandlers(getMainWindow) {
 		if (result.success) {
 			beginJobsSync();
 		}
-		return result;
-	});
-
-	// Switch the active shop without re-authenticating (the token is unchanged).
-	// Tears down the current shop's SSE stream, clears its now-stale jobs from the
-	// renderer, records the new shop, and reconnects the stream against it.
-	ipcMain.handle("auth:switch-shop", async (_event, shop) => {
-		console.log("[IPC] auth:switch-shop →", shop?._id);
-		const result = selectShop(shop);
-		if (!result.success) return result;
-		stopJobsSse();
-		setJobs([]);
-		const win = getMainWindow();
-		if (win && !win.isDestroyed()) win.webContents.send("jobs:updated", []);
-		beginJobsSync();
 		return result;
 	});
 

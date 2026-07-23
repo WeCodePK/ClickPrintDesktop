@@ -7,10 +7,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.invoke("auth:verify-otp", code, number),
 	// Records which shop (of possibly several the user owns) to operate as; this
 	// is what actually starts the shop-scoped jobs stream. `shop` is { _id, name }.
+	// Chosen once at login — switching shops mid-session isn't supported (log out
+	// and back in to change shops).
 	selectShop: (shop) => ipcRenderer.invoke("auth:select-shop", shop),
-	// Switch the active shop mid-session without re-authenticating; reconnects the
-	// jobs stream to the new shop. `shop` is { _id, name }.
-	switchShop: (shop) => ipcRenderer.invoke("auth:switch-shop", shop),
 	getAuthState: () => ipcRenderer.invoke("auth:get-state"),
 	logout: () => ipcRenderer.invoke("auth:logout"),
 
