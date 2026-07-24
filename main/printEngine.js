@@ -734,14 +734,32 @@ function resolveRequeue(accept) {
 async function declineJob(jobId) {
 	dropJobTasks(jobId);
 	emit();
-	const result = await updateJobStatus(jobId, "cancelled");
+
+	const job = getJobs().find((j) => j._id === jobId);
+	// Effective backend status. Once the engine advances a job to "printing"
+	// (auto or manual dispatch calls ensureJobPrinting), that PATCH has already
+	// landed server-side — even if no file is in a printer slot right now
+	// (between documents, or waiting for a free printer).
+	const current = engine.jobsMarkedPrinting.has(jobId)
+		? "printing"
+		: engine.overrides.get(jobId) || job?.status;
+
+	// The backend state machine forbids printing → cancelled (returns 409). A job
+	// already in "printing" can only terminate as failed/completed, so declining
+	// it takes the printing → failed path — the SAME customer refund a cancel
+	// triggers (issueRefund + moveJobToHistory), just the terminal the state
+	// machine allows. A not-yet-printing job (submitted/queued) cancels as before.
+	const terminal = current === "printing" ? "failed" : "cancelled";
+	const result = await updateJobStatus(jobId, terminal);
+
 	if (result?.success) {
-		engine.overrides.set(jobId, "cancelled");
-		const job = getJobs().find((j) => j._id === jobId);
+		engine.overrides.set(jobId, terminal);
 		finalizeJob(jobId, jobFileList(job).map((f) => f.fileId));
 		jobsChanged();
+		return { success: true };
 	}
-	return result?.success ? { success: true } : { success: false, message: result?.message || "request failed" };
+	console.error(`[Engine] failed to decline job ${jobId} (→ ${terminal}):`, result?.message);
+	return { success: false, message: result?.message || "request failed" };
 }
 
 // `force` steps a never-printed job through the backend's required
