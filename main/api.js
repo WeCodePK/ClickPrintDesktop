@@ -1,5 +1,7 @@
 const EventSource = require("eventsource");
+const { BrowserWindow } = require("electron");
 const { getAuth, setAuth, setJobs, clearAuth } = require("./state");
+const { listPrinters } = require("./printers");
 
 const API_BASE_URL = "https://clickprintbackend.wckd.pk"
 
@@ -443,12 +445,29 @@ async function updateShop(shopId, data) {
 
 async function pingShopStatus(shopId){
 	try {
+		const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
+		const localPrinters = win ? await listPrinters(win) : [];
+		const onlineNames = new Set(localPrinters.map((p) => p.name));
+
+		const registeredRes = await fetchPrinters();
+		const registeredPrinters = registeredRes?.success && Array.isArray(registeredRes.data) ? registeredRes.data : [];
+
+		const onlinePrinterIds = registeredPrinters
+			.filter((p) => onlineNames.has(p.name))
+			.map((p) => p._id);
+
+		//to log the online the printers id, just to check the output of this until confident of the behaviour
+		console.log(onlinePrinterIds)
+
 		const response = await fetch(`${API_BASE_URL}/api/shops/${shopId}/isOnline`, {
 			method: "PATCH",
 			headers: {
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${getAuth().token}`,
-			}
+			},
+			body: JSON.stringify({
+				printers: onlinePrinterIds,
+			}),
 		});
 		return await readJson(response);
 	} 
