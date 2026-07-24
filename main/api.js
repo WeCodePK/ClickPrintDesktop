@@ -106,7 +106,7 @@ function selectShop(shop) {
 
 async function fetchJobs() {
 	try {
-		const response = await fetch(`${API_BASE_URL}/api/jobs/shop/${getAuth().shopId}`, {
+		const response = await fetch(`${API_BASE_URL}/api/jobs/shops/${getAuth().shopId}`, {
 			headers: {
 		"Content-Type": "application/json",
 		Authorization: `Bearer ${getAuth().token}`,
@@ -400,7 +400,7 @@ async function setPrinterDisabled(printerId, isDisabled) {
 
 async function fetchHistory() {
 	try {
-		const response = await fetch(`${API_BASE_URL}/api/history`, {
+		const response = await fetch(`${API_BASE_URL}/api/history/shops/${getAuth().shopId}`, {
 			headers: {
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${getAuth().token}`,
