@@ -174,12 +174,21 @@ async function markJobFailed(jobId, currentStatus) {
 		const printing = await updateJobStatus(jobId, "printing");
 		if (!printing?.success) {
 			console.error(`[API] job ${jobId}: could not transition to printing —`, printing?.message);
+			// Un-hide it: the job is NOT failing after all. Leaving the flag set
+			// would filter it out of every renderer push until the app restarts,
+			// stranding the operator with no control to retry from.
+			_failingJobs.delete(jobId);
 			return printing;
 		}
 	}
 	const result = await updateJobStatus(jobId, "failed");
-	if (result?.success) console.log(`[API] job ${jobId} marked failed`);
-	else console.error(`[API] job ${jobId}: could not transition to failed —`, result?.message);
+	if (result?.success) {
+		console.log(`[API] job ${jobId} marked failed`);
+	} else {
+		console.error(`[API] job ${jobId}: could not transition to failed —`, result?.message);
+		// Same reasoning: the job stays visible so it can be retried.
+		_failingJobs.delete(jobId);
+	}
 	return result;
 }
 
@@ -496,8 +505,18 @@ let _onJobsUpdate = null;
 let _sseStatus = "closed";
 let _onSseStatus = null;
 
+// Fired on every SSE "ping" (~5s). The print engine hangs its printer-queue
+// reconcile off this — the same beat that refreshes online printers also sweeps
+// each printer's spool queue. Set by ipc.js; api.js must not import the engine
+// (the engine imports api).
+let _onPing = null;
+
 function setSseStatusNotifier(cb) {
 	_onSseStatus = cb;
+}
+
+function setPingNotifier(cb) {
+	_onPing = cb;
 }
 
 function getSseStatus() {
@@ -568,6 +587,17 @@ function _connectSse() {
 
 	_sse.addEventListener("ping", async () => {
 		console.log("[SSE] ping");
+
+		// Sweep every printer's spool queue on the same beat: documents that have
+		// finished (or died) leave the registry, foreign load is re-counted.
+		if (_onPing) {
+			try {
+				await _onPing();
+			} catch (err) {
+				console.error("[SSE] ping handler error:", err.message);
+			}
+		}
+
 		const shopId = getShopId();
 		if (shopId) {
 			const result = await pingShopStatus(shopId);
@@ -630,5 +660,6 @@ module.exports = {
 	startJobsSse,
 	stopJobsSse,
 	setSseStatusNotifier,
+	setPingNotifier,
 	getSseStatus,
 };

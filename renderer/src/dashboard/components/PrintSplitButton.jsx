@@ -15,6 +15,9 @@ function PrintSplitButton({
 	busyLabel = "Printing…",
 	size = "md",
 	showInfo = false,
+	// "default" = the green print action; "retry" = accent orange, used once the
+	// document has failed and this button re-attempts it.
+	tone = "default",
 }) {
 	const [open, setOpen] = useState(false);
 	const [pos, setPos] = useState(null);
@@ -54,7 +57,7 @@ function PrintSplitButton({
 	};
 
 	return (
-		<div className={`print-split print-split--${size}`}>
+		<div className={`print-split print-split--${size} ${tone === "retry" ? "print-split--retry" : ""}`}>
 			<div className="print-split__row" ref={rowRef}>
 				<button
 					type="button"

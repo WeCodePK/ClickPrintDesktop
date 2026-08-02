@@ -24,6 +24,7 @@ const {
 	startJobsSse,
 	stopJobsSse,
 	setSseStatusNotifier,
+	setPingNotifier,
 	getSseStatus,
 } = require("./api");
 const { syncJobFiles, getStatusMap, setNotifier, openFile } = require("./files");
@@ -91,6 +92,11 @@ function registerIpcHandlers(getMainWindow) {
 			win.webContents.send("files:updated", updates);
 		}
 	});
+
+	// Every SSE ping (~5s) sweeps each printer's spool queue: finished/failed
+	// documents leave the registry and foreign load is re-counted, keeping load
+	// balancing honest.
+	setPingNotifier(() => engine.reconcilePrinterQueues());
 
 	// Push live SSE connection-state changes to the renderer (drives the
 	// connection indicator next to the settings/logout icons).

@@ -11,6 +11,11 @@ const spooler = require("./spooler");
 
 const FILE_SCHEME = "clickfile";
 
+// Upper bound on rendering a cached PDF into the offscreen window before we
+// spool it. The print engine holds the target printer's spool lock for the whole
+// of spoolFile, so this must never be unbounded.
+const LOAD_TIMEOUT_MS = 30000;
+
 let _filesDir = null;
 function getFilesDir() {
 	if (!_filesDir) {
@@ -287,7 +292,15 @@ async function spoolFile(fileId, settings, deviceName, fileName) {
 	// document — without it the print job comes out blank.
 	const win = new BrowserWindow({ show: false, webPreferences: { plugins: true } });
 	try {
-		await win.loadFile(localPath(fileId));
+		// Bound the load: a PDF that makes Chromium's viewer never finish would
+		// otherwise hang here forever, and the engine holds this printer's spool
+		// lock across the call — every document queued behind it would stall.
+		await Promise.race([
+			win.loadFile(localPath(fileId)),
+			new Promise((_, reject) =>
+				setTimeout(() => reject(new Error("pdf load timed out")), LOAD_TIMEOUT_MS)
+			),
+		]);
 		// Give the PDF plugin a moment to lay the document out before printing.
 		await new Promise((resolve) => setTimeout(resolve, 400));
 		const options = buildPrintOptions(settings);
@@ -327,13 +340,21 @@ async function spoolFile(fileId, settings, deviceName, fileName) {
 // failure — spool rejection, queue cancellation, persistent error state, or a
 // stuck job — so the caller's retry/auto-fail policy treats them uniformly.
 // `onPhase("verifying")` fires once the job is being tracked post-spool.
-async function printAndVerify(fileId, settings, deviceName, fileName, { onPhase } = {}) {
+// `onIdentified(spoolId)` fires as soon as our Windows spool job id is pinned
+// down (or null if it never appeared) — the engine releases that printer's
+// spool lock there, letting the next document start spooling behind ours.
+async function printAndVerify(fileId, settings, deviceName, fileName, { onPhase, onIdentified } = {}) {
 	// Snapshot the queue BEFORE spooling so the new job id can be identified.
 	// A failed snapshot makes the print untrackable (fall back to trusting the
 	// spool callback) rather than blocking printing altogether.
 	const before = await spooler.snapshotPrinter(deviceName);
-	await spoolFile(fileId, settings, deviceName, fileName);
-	const result = await spooler.trackPrintJob(deviceName, before, { onPhase });
+	try {
+		await spoolFile(fileId, settings, deviceName, fileName);
+	} catch (err) {
+		if (onIdentified) onIdentified(null); // spooling failed — don't hold the lock
+		throw err;
+	}
+	const result = await spooler.trackPrintJob(deviceName, before, { onPhase, onIdentified });
 	if (result.outcome === "aborted") return result; // engine stopped; outcome discarded upstream
 	if (result.outcome !== "success") {
 		throw new Error(`print ${result.outcome}${result.detail ? `: ${result.detail}` : ""}`);

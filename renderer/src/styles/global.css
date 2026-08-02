@@ -1794,6 +1794,69 @@ body,
 	color: var(--color-text-secondary);
 }
 
+/* The ONLY control that fails (and refunds) the whole job. Deliberately styled
+   as a distinct, weighty action rather than an inline link. */
+.file-preview__failure-btn {
+	align-self: flex-start;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin-top: 2px;
+	padding: 7px 13px;
+	border: 1px solid var(--color-accent);
+	border-radius: var(--radius-pill);
+	background: transparent;
+	font: inherit;
+	font-size: 12px;
+	font-weight: 700;
+	color: var(--color-accent-hover);
+	cursor: pointer;
+	transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.file-preview__failure-btn:hover {
+	background: var(--color-accent);
+	color: #fff;
+}
+
+.file-preview__failure-btn svg {
+	width: 13px;
+	height: 13px;
+}
+
+/* Per-document outcome mark, inline beside the copies count. */
+.doc-mark {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	margin-left: 5px;
+	vertical-align: -2px;
+}
+
+.doc-mark svg {
+	width: 13px;
+	height: 13px;
+}
+
+.doc-mark--printed {
+	color: var(--color-primary-dark);
+}
+
+.doc-mark--failed {
+	color: var(--color-accent);
+}
+
+/* A document that failed to print — mirrors file-preview--printed's treatment
+   but in the accent colour. */
+.file-preview--failed {
+	border-color: var(--color-accent-light);
+}
+
+.file-preview__badge--failed {
+	background: rgba(255, 79, 0, 0.12);
+	color: var(--color-accent-hover);
+}
+
 .btn-sm {
 	padding: 8px 16px;
 	font-size: 13px;
@@ -2073,6 +2136,20 @@ body,
 .print-split__toggle:disabled {
 	opacity: 0.6;
 	cursor: not-allowed;
+}
+
+/* Retry tone — after a document has failed, the same split button re-attempts
+   the print. Accent orange (never the go-green) so a retry is never mistaken
+   for a fresh, healthy print action. */
+.print-split--retry .print-split__main,
+.print-split--retry .print-split__toggle {
+	background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-light) 100%);
+	color: #fff;
+	box-shadow: var(--shadow-accent);
+}
+
+.print-split--retry .print-split__toggle {
+	border-left: 1px solid rgba(255, 255, 255, 0.35);
 }
 
 .print-split__info {

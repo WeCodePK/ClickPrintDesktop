@@ -87,6 +87,24 @@ export const CheckIcon = () => (
 	</svg>
 );
 
+// Failure counterpart to CheckIcon — same 16px box and stroke weight so the two
+// sit identically in the per-document status mark.
+export const AlertIcon = () => (
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round">
+		<circle cx="12" cy="12" r="9" />
+		<line x1="12" y1="7.5" x2="12" y2="13" />
+		<line x1="12" y1="16.5" x2="12.01" y2="16.5" />
+	</svg>
+);
+
+// Circular arrow for the post-failure "Retry" action.
+export const RetryIcon = () => (
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+		<path d="M21 12a9 9 0 1 1-2.64-6.36" />
+		<polyline points="21 3 21 9 15 9" />
+	</svg>
+);
+
 export const WalletIcon = () => (
 	<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
 		<path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" />

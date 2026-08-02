@@ -7,6 +7,7 @@ const {
 const { listPrinters } = require("./printers");
 const files = require("./files");
 const spooler = require("./spooler");
+const registry = require("./printerRegistry");
 const store = require("./store");
 const { getJobs } = require("./state");
 
@@ -18,25 +19,32 @@ const { getJobs } = require("./state");
 // Model:
 //  - Every printable document is a task {jobId, fileId}. Tasks live in a FIFO
 //    list; each is matched to a service by its print settings and dispatched to
-//    a free printer among that service's printers.
-//  - A printer holds AT MOST one of our files at a time (the Windows spooler is
-//    never used as a queue). Busy/offline candidates → the task waits, visibly.
+//    the least-loaded printer of that service (printerRegistry.choosePrinter).
+//  - A printer holds a QUEUE of our documents (printerRegistry), so work is
+//    spread across a service's printers instead of waiting for one to go idle.
+//    Only the spool step is serialised per printer — see withSpoolLock — because
+//    the spooler identifies our job by diffing the queue around a single spool.
 //  - "Printed" means verified against the Windows spooler (files.printAndVerify),
-//    not merely spooled. A real print failure is retried once (preferring a
-//    different candidate printer); a second failure auto-fails the WHOLE job on
-//    the backend (customer refund) — money is involved, silent loss is not OK.
-//    Exceptions that never auto-fail: a cancelled Print-to-PDF save dialog and
+//    not merely spooled.
+//  - Failure policy differs by mode, deliberately:
+//      manual ("Print" on a document) — a permanent failure NEVER fails the job.
+//        The document is flagged, the operator gets a Retry button and an
+//        explicit "mark job failed" control. Only that control refunds.
+//      auto  — a permanent failure auto-fails the WHOLE job (customer refund);
+//        unattended printing can't leave money silently lost.
+//    Never auto-failed in either mode: a cancelled Print-to-PDF save dialog and
 //    routing gaps (operator-side config issues).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ACTIVE_STATUSES = new Set(["draft", "submitted", "queued", "processing", "printing"]);
 const ROUTING_POLL_MS = 20000;
 const PRINTED_STORE_KEY = "printedFiles";
-const MAX_ATTEMPTS = 2; // 1 initial + 1 automatic retry
+// One attempt, full stop. A failed print is never retried automatically — the
+// operator decides, via the document's Retry button. Retrying behind their back
+// risks a second sheet coming out of a printer they're already attending to.
+const MAX_ATTEMPTS = 1;
 
-function isPdfDevice(name) {
-	return /print to pdf/i.test(name || "");
-}
+const isPdfDevice = registry.isPdfDevice;
 
 // Normalises a raw backend job's files: [{fileId, name, settings}].
 function jobFileList(job) {
@@ -58,15 +66,14 @@ function jobWho(job) {
 	return job?.createdBy?.name || job?.createdBy?.number || `#${String(job?._id || "").slice(-6)}`;
 }
 
-// A document routes to a printer through its service: match the file's settings
-// to a service's keys. File settings use sidedness "none"|"long"|"short";
-// service keys use a boolean (double-sided or not).
-function matchesService(settings = {}, keys = {}) {
-	return (
-		keys.pageType === settings.pageType &&
-		!!keys.color === !!settings.color &&
-		!!keys.sidedness === (!!settings.sidedness && settings.sidedness !== "none")
-	);
+// A promise plus its resolver — used to hold a printer's spool lock until the
+// spooler has identified the job we just submitted.
+function deferred() {
+	let resolve;
+	const promise = new Promise((r) => {
+		resolve = r;
+	});
+	return { promise, resolve };
 }
 
 // ── engine state ─────────────────────────────────────────────────────────────
@@ -76,14 +83,12 @@ const engine = {
 	paused: false,
 	requeuePrompt: null, // null | { jobIds: [...] }
 
-	// Routing table.
+	// Routing table (the resolved service → printer structure and each printer's
+	// queue live in printerRegistry; these are the raw inputs it's built from).
 	services: [],
 	registeredPrinters: [],
 	localPrinters: [], // online local printers [{name, displayName}]
 	routingLoaded: false,
-
-	// device -> { taskId, jobId, fileId, phase: "printing"|"verifying" }
-	slots: new Map(),
 
 	// FIFO task list; one task per (jobId, fileId). See dispatch/schedule.
 	tasks: [],
@@ -129,21 +134,20 @@ function getSnapshot() {
 			queuedJobIds.push(task.jobId);
 		}
 	}
-	const printers = {};
-	for (const [device, slot] of engine.slots) {
-		printers[device] = { jobId: slot.jobId, fileId: slot.fileId, phase: slot.phase };
-	}
 	return {
 		running: engine.running,
 		autoPrint: engine.autoPrint,
 		paused: engine.paused,
 		routingLoaded: engine.routingLoaded,
-		autoRouteReady: computeAutoRouteReady(),
+		autoRouteReady: registry.hasAutoRoute(),
 		requeuePrompt: engine.requeuePrompt,
 		queuedJobIds,
 		printedFiles: engine.printedFiles,
 		files: fileMap,
-		printers,
+		// Live per-printer load: { device: { load, foreign, online, queue: [...] } }
+		printers: registry.getDeviceLoads(),
+		// The services → printers → queue structure, for the printer/queue views.
+		registry: registry.getSnapshot(),
 	};
 }
 
@@ -235,6 +239,15 @@ async function refreshRouting(force = false) {
 		if (Array.isArray(local)) engine.localPrinters = local;
 		if (regs?.success) engine.registeredPrinters = regs.data || [];
 		if (svcs?.success) engine.services = svcs.data || [];
+
+		// Rebuild the service → printer structure. Queues are keyed by device and
+		// survive this, so in-flight documents aren't disturbed by a service edit
+		// or a printer blipping offline.
+		registry.rebuild({
+			services: engine.services,
+			registeredPrinters: engine.registeredPrinters,
+			localPrinters: engine.localPrinters,
+		});
 	} catch (err) {
 		console.error("[Engine] routing refresh failed:", err);
 	} finally {
@@ -244,60 +257,13 @@ async function refreshRouting(force = false) {
 	}
 }
 
-// Resolves a service-printer entry to the registered printer record.
-function resolveRegistered(entry) {
-	const id = typeof entry.printer === "string" ? entry.printer : entry.printer?._id;
-	return (
-		engine.registeredPrinters.find((p) => p._id === id) ||
-		(typeof entry.printer === "object" ? entry.printer : null)
-	);
-}
-
-// Ordered candidate device names for a task, or a wait reason.
-// Auto mode: the matched service's printers marked useAuto (PDF pseudo-printers
-// excluded — a Save dialog must never block the unattended queue).
-// Manual mode: ALL of the service's printers. Override: exactly that device.
-function resolveCandidates(task) {
-	const onlineNames = new Set(engine.localPrinters.map((p) => p.name));
-
-	if (task.overrideDevice) {
-		if (isPdfDevice(task.overrideDevice) || onlineNames.has(task.overrideDevice)) {
-			return { candidates: [task.overrideDevice], waitReason: null };
-		}
-		return { candidates: [], waitReason: "no-online-printer" };
-	}
-
-	const service = engine.services.find((s) => !s.isDisabled && matchesService(task.settings, s.keys));
-	if (!service) return { candidates: [], waitReason: "route" };
-
-	const configured = [];
-	for (const entry of service.printers || []) {
-		if (task.mode === "auto" && !entry.useAuto) continue;
-		const reg = resolveRegistered(entry);
-		if (!reg || reg.isDisabled) continue;
-		if (task.mode === "auto" && isPdfDevice(reg.name)) continue;
-		configured.push(reg.name);
-	}
-	if (configured.length === 0) return { candidates: [], waitReason: "route" };
-
-	const online = configured.filter((name) => onlineNames.has(name));
-	if (online.length === 0) return { candidates: [], waitReason: "no-online-printer" };
-	return { candidates: online, waitReason: null };
-}
-
-// Gate for the auto-print toggle: at least one enabled service has an automated
-// printer that is registered and enabled. Online-ness deliberately not required
-// (a printer being briefly off shouldn't flip the toggle's availability).
-function computeAutoRouteReady() {
-	return engine.services.some(
-		(s) =>
-			!s.isDisabled &&
-			(s.printers || []).some((entry) => {
-				if (!entry.useAuto) return false;
-				const reg = resolveRegistered(entry);
-				return reg && !reg.isDisabled && !isPdfDevice(reg.name);
-			})
-	);
+// Sweeps each printer's queue against the real Windows spooler, dropping our
+// documents that have left it (printed / failed / cancelled in the Windows UI)
+// and refreshing foreign-job counts. Driven by the SSE ping and by startup.
+async function reconcilePrinterQueues() {
+	await registry.reconcile();
+	if (engine.running) schedule();
+	emit();
 }
 
 // ── task helpers ─────────────────────────────────────────────────────────────
@@ -319,11 +285,14 @@ function addTasks(job, mode, overrideDevice = null, { onlyFileId = null, explici
 		if (existing) {
 			if (!explicit) continue;
 			if (existing.status === "printing" || existing.status === "verifying") continue;
-			// Re-issue: clear failure state, apply the new mode/override.
+			// Re-issue (the operator pressed Retry): clear the failure state and
+			// apply the new mode/override. `attempts` is deliberately KEPT — with no
+			// automatic retry it can no longer block anything, and it steers the
+			// load balancer away from the printer that just failed when the operator
+			// retries without picking one. An explicit dropdown choice overrides it.
 			existing.status = "waiting";
 			existing.waitReason = null;
 			existing.failureReason = null;
-			existing.attempts = [];
 			existing.mode = mode;
 			existing.overrideDevice = overrideDevice;
 			existing.device = null;
@@ -353,22 +322,51 @@ function addTasks(job, mode, overrideDevice = null, { onlyFileId = null, explici
 }
 
 // Drops a job's tasks. In-flight tasks are removed from the list too — dispatch
-// notices (the task is no longer listed) and discards the outcome.
+// notices (the task is no longer listed) and discards the outcome — and their
+// printer-queue entries go with them so load balancing stops counting them.
 function dropJobTasks(jobId) {
 	engine.tasks = engine.tasks.filter((t) => t.jobId !== jobId);
+	registry.dropJob(jobId);
 }
 
 // ── scheduler ────────────────────────────────────────────────────────────────
 
-// One synchronous pass: assign free printers to waiting tasks in FIFO order.
-// Slots are claimed synchronously before any await, so re-entrancy is safe.
-// Triggers: task added, slot freed, routing refreshed, file ready, reconcile,
-// unpause.
+// Serialises the spool+identify step per printer. The spooler pins our job down
+// by diffing that printer's queue around a single spool, so two documents must
+// never be mid-spool on the same device at once. Once ours is identified the
+// lock releases and the next document spools in behind it — the printer's queue
+// genuinely stacks, it just fills one document at a time.
+const _spoolLocks = new Map();
+
+function withSpoolLock(device, fn) {
+	const prev = _spoolLocks.get(device) || Promise.resolve();
+	const next = prev.then(fn, fn); // run regardless of how the previous one ended
+	_spoolLocks.set(
+		device,
+		next.then(
+			() => {},
+			() => {}
+		)
+	);
+	return next;
+}
+
+// One synchronous pass: route each waiting task to the least-loaded printer of
+// its service, in FIFO order. The registry slot is claimed synchronously before
+// any await, so later tasks in the same pass already see the added load and
+// re-entrancy is safe. Triggers: task added, print finished, routing refreshed,
+// file ready, queue reconcile, unpause.
 function schedule() {
-	if (!engine.running || engine.paused) return;
+	if (!engine.running) return;
 
 	for (const task of engine.tasks) {
 		if (task.status !== "waiting") continue;
+		// Pausing holds the automated queue only — an explicit operator print must
+		// still go through.
+		if (engine.paused && task.mode === "auto") {
+			task.waitReason = "paused";
+			continue;
+		}
 		if (task.notBefore && task.notBefore > Date.now()) continue; // backend backoff
 
 		if (!files.isReady(task.fileId)) {
@@ -376,23 +374,22 @@ function schedule() {
 			continue;
 		}
 
-		const { candidates, waitReason } = resolveCandidates(task);
-		if (waitReason) {
-			task.waitReason = waitReason;
+		// Load-balanced pick; a retry prefers a printer this document hasn't tried.
+		const { device, reason } = registry.choosePrinter(task.settings, {
+			mode: task.mode,
+			overrideDevice: task.overrideDevice,
+			exclude: task.attempts.map((a) => a.device),
+		});
+		if (!device) {
+			task.waitReason = reason;
 			continue;
 		}
 
-		// Retry policy prefers a candidate we haven't tried for this task.
-		const tried = new Set(task.attempts.map((a) => a.device));
-		const ordered = [...candidates.filter((d) => !tried.has(d)), ...candidates.filter((d) => tried.has(d))];
-		const free = ordered.find((d) => !engine.slots.has(d));
-		if (!free) {
-			task.waitReason = "no-free-printer";
-			continue;
-		}
-
-		console.log(`[Engine] dispatch ${task.id} → "${free}" (mode=${task.mode}${task.overrideDevice ? ", override" : ""})`);
-		claimAndDispatch(task, free);
+		console.log(
+			`[Engine] dispatch ${task.id} → "${device}" (mode=${task.mode}` +
+				`${task.overrideDevice ? ", override" : `, load=${registry.loadOf(device)}`})`
+		);
+		claimAndDispatch(task, device);
 	}
 	emit();
 }
@@ -401,18 +398,27 @@ function claimAndDispatch(task, device) {
 	task.status = "printing";
 	task.waitReason = null;
 	task.device = device;
-	const slot = { taskId: task.id, jobId: task.jobId, fileId: task.fileId, phase: "printing" };
-	engine.slots.set(device, slot);
+	// Occupy the printer's queue synchronously so the remainder of this pass
+	// balances around it.
+	registry.enqueue(device, {
+		taskId: task.id,
+		jobId: task.jobId,
+		fileId: task.fileId,
+		fileName: task.fileName,
+	});
 
-	dispatch(task, device, slot).catch((err) => {
+	dispatch(task, device).catch((err) => {
 		// dispatch handles its own failures; this only guards programmer error.
 		console.error(`[Engine] dispatch crashed for ${task.id}:`, err);
+		registry.dequeue(device, task.id);
+		emit();
 	});
 }
 
-async function dispatch(task, device, slot) {
+async function dispatch(task, device) {
 	try {
-		// Job → "printing" on the backend before its first document prints.
+		// Job → "printing" on the backend before its first document prints. A manual
+		// print already did this on click, so this is a no-op there.
 		const ok = await ensureJobPrinting(task.jobId);
 		if (!ok) {
 			// Backend refused/unreachable — back off so schedule() doesn't spin a
@@ -422,45 +428,81 @@ async function dispatch(task, device, slot) {
 				task.device = null;
 				task.notBefore = Date.now() + 15000;
 			}
+			registry.dequeue(device, task.id);
 			return;
 		}
 
 		// SSE race guard: the job may have been cancelled while we PATCHed.
-		if (!engine.running || !engine.tasks.includes(task)) return;
+		if (!engine.running || !engine.tasks.includes(task)) {
+			registry.dequeue(device, task.id);
+			return;
+		}
 
 		if (isPdfDevice(device)) {
 			// Manual override to Print-to-PDF: Save dialog + copy. Never auto-fails.
 			await files.savePdfCopy(task.fileId, task.fileName);
 		} else {
-			const result = await files.printAndVerify(task.fileId, task.settings, device, task.fileName, {
-				onPhase: () => {
-					task.status = "verifying";
-					slot.phase = "verifying";
-					emit();
-				},
+			let printing = null;
+			await withSpoolLock(device, async () => {
+				// Re-check INSIDE the lock. While queued behind other documents on
+				// this printer the engine may have stopped, or the job may have been
+				// cancelled/completed remotely — spooling now would put paper out for
+				// work nobody is waiting for any more.
+				if (!engine.running || !engine.tasks.includes(task)) return;
+
+				const gate = deferred();
+				printing = files.printAndVerify(task.fileId, task.settings, device, task.fileName, {
+					onPhase: () => {
+						task.status = "verifying";
+						emit();
+					},
+					onIdentified: (spoolId) => {
+						registry.setSpoolId(device, task.id, spoolId);
+						gate.resolve();
+					},
+				});
+				// Release the lock however this ends — one bad print must not wedge
+				// a printer for every document behind it.
+				printing.then(gate.resolve, gate.resolve);
+				await gate.promise;
 			});
+
+			if (!printing) {
+				// Never spooled — the guard inside the lock fired. Nothing printed.
+				registry.dequeue(device, task.id);
+				return;
+			}
+
+			const result = await printing;
 			if (result.outcome === "aborted") {
-				// Engine stopped (or the tracker was superseded) mid-flight — the
-				// outcome is unknowable; put the task back if it still exists.
+				// Engine stopped mid-flight — the physical outcome is unknowable, so
+				// put the task back only if the engine is somehow still running (it
+				// isn't, for abortAll; this just avoids losing the task either way).
 				if (engine.running && engine.tasks.includes(task)) {
 					task.status = "waiting";
 					task.device = null;
 				}
+				registry.dequeue(device, task.id);
 				return;
 			}
 		}
 
 		// Discard the outcome if the job vanished (remote cancel) meanwhile.
-		if (!engine.running || !engine.tasks.includes(task)) return;
+		if (!engine.running || !engine.tasks.includes(task)) {
+			registry.dequeue(device, task.id);
+			return;
+		}
 
 		task.status = "printed";
+		task.failureReason = null;
 		markFilePrinted(task.jobId, task.fileId);
+		registry.dequeue(device, task.id);
 		console.log(`[Engine] printed ${task.id} on "${device}"`);
 		await maybeCompleteJob(task.jobId);
 	} catch (err) {
+		registry.dequeue(device, task.id);
 		await handleDispatchFailure(task, device, err);
 	} finally {
-		engine.slots.delete(device);
 		emit();
 		schedule();
 	}
@@ -474,14 +516,16 @@ async function handleDispatchFailure(task, device, err) {
 		// Operator dismissed the Save dialog — operator-side, never a refund.
 		task.status = "failed";
 		task.failureReason = "pdf-cancel";
+		task.device = null;
 		toast({ kind: "pdf-cancel", jobId: task.jobId, fileName: task.fileName });
 		return;
 	}
 
 	task.attempts.push({ device, error: err.message, at: Date.now() });
 
+	// MAX_ATTEMPTS is 1, so this never fires today — kept so the policy lives in
+	// one constant rather than being baked into the control flow.
 	if (task.attempts.length < MAX_ATTEMPTS) {
-		// One automatic retry — schedule() prefers a printer we haven't tried.
 		console.log(`[Engine] retrying ${task.id} (attempt ${task.attempts.length + 1}/${MAX_ATTEMPTS})`);
 		task.status = "waiting";
 		task.waitReason = null;
@@ -489,9 +533,22 @@ async function handleDispatchFailure(task, device, err) {
 		return;
 	}
 
-	// Permanent print failure → the whole job fails (customer refund).
 	task.status = "failed";
 	task.failureReason = "print";
+	task.device = null;
+
+	// Manual print (Part 1): the DOCUMENT is flagged and the operator decides what
+	// happens next — retry, or explicitly mark the job failed. The job is never
+	// auto-failed here, not even when it's the job's only document; the refund
+	// PATCH belongs solely to forceFailJob.
+	if (task.mode !== "auto") {
+		console.log(`[Engine] ${task.id} failed permanently — awaiting operator (job left untouched)`);
+		toast({ kind: "doc-failed-print", jobId: task.jobId, fileName: task.fileName });
+		jobsChanged();
+		return;
+	}
+
+	// Unattended printing: a permanent failure fails the whole job (refund).
 	await autoFailJob(task.jobId);
 }
 
@@ -627,7 +684,12 @@ function onJobsReconciled(jobs) {
 	// yet confirmed over SSE) is already terminal for scheduling purposes.
 	const effectiveStatus = (j) => engine.overrides.get(j._id) || j.status;
 	const activeIds = new Set(jobs.filter((j) => ACTIVE_STATUSES.has(effectiveStatus(j))).map((j) => j._id));
+	const trackedJobIds = new Set(engine.tasks.map((t) => t.jobId));
 	engine.tasks = engine.tasks.filter((t) => activeIds.has(t.jobId));
+	// Release printer-queue entries for jobs that just went terminal or vanished.
+	for (const jobId of trackedJobIds) {
+		if (!activeIds.has(jobId)) registry.dropJob(jobId);
+	}
 	for (const set of [engine.jobsMarkedPrinting, engine.jobsCompleting, engine.jobsFailing, engine.seenJobs]) {
 		for (const jobId of [...set]) {
 			if (!byId.has(jobId)) set.delete(jobId);
@@ -673,17 +735,37 @@ function onJobsReconciled(jobs) {
 
 // ── commands (IPC surface) ───────────────────────────────────────────────────
 
-function printJob(jobId, deviceName = null) {
+// "Print all" / "Print (n docs)" — every unprinted document of the job.
+async function printJob(jobId, deviceName = null) {
 	const job = getJobs().find((j) => j._id === jobId);
 	if (!job) return { success: false, message: "job not found" };
+
+	const ok = await ensureJobPrinting(jobId);
+	if (!ok) {
+		toast({ kind: "job-printing-failed", jobId, who: jobWho(job) });
+		return { success: false, message: "could not move the job to printing" };
+	}
+
 	addTasks(job, "manual", deviceName, { explicit: true });
 	schedule();
 	return { success: true };
 }
 
-function printFile(jobId, fileId, deviceName = null) {
+// Part 1 — the per-document Print button. Clicking it moves the WHOLE job to
+// "printing" on the backend up front, then queues just this document: to the
+// printer chosen from the dropdown, or (no choice) to the least-loaded printer
+// of the service that matches the document's settings.
+async function printFile(jobId, fileId, deviceName = null) {
 	const job = getJobs().find((j) => j._id === jobId);
 	if (!job) return { success: false, message: "job not found" };
+
+	const ok = await ensureJobPrinting(jobId);
+	if (!ok) {
+		// Nothing was queued, so the UI would otherwise show no reaction at all.
+		toast({ kind: "job-printing-failed", jobId, who: jobWho(job) });
+		return { success: false, message: "could not move the job to printing" };
+	}
+
 	addTasks(job, "manual", deviceName, { onlyFileId: fileId, explicit: true });
 	schedule();
 	return { success: true };
@@ -732,33 +814,41 @@ function resolveRequeue(accept) {
 }
 
 async function declineJob(jobId) {
-	dropJobTasks(jobId);
-	emit();
-
 	const job = getJobs().find((j) => j._id === jobId);
+
 	// Effective backend status. Once the engine advances a job to "printing"
 	// (auto or manual dispatch calls ensureJobPrinting), that PATCH has already
-	// landed server-side — even if no file is in a printer slot right now
-	// (between documents, or waiting for a free printer).
+	// landed server-side — even if nothing is in a printer queue right now
+	// (between documents, or waiting for a printer).
 	const current = engine.jobsMarkedPrinting.has(jobId)
 		? "printing"
 		: engine.overrides.get(jobId) || job?.status;
 
-	// The backend state machine forbids printing → cancelled (returns 409). A job
-	// already in "printing" can only terminate as failed/completed, so declining
-	// it takes the printing → failed path — the SAME customer refund a cancel
-	// triggers (issueRefund + moveJobToHistory), just the terminal the state
-	// machine allows. A not-yet-printing job (submitted/queued) cancels as before.
-	const terminal = current === "printing" ? "failed" : "cancelled";
-	const result = await updateJobStatus(jobId, terminal);
+	// The backend state machine forbids printing → cancelled (409). The only
+	// terminals left are completed and failed — and "failed" refunds the customer,
+	// which is a materially different decision from cancelling. So refuse here
+	// and report why: the UI explains it and offers the refund explicitly. Nothing
+	// is dropped or PATCHed on this path — the job is left exactly as it was.
+	if (current === "printing") {
+		console.log(`[Engine] decline refused for job ${jobId}: already printing`);
+		return {
+			success: false,
+			reason: "already-printing",
+			message: "This job has already started printing, so it can no longer be cancelled.",
+		};
+	}
 
+	dropJobTasks(jobId);
+	emit();
+
+	const result = await updateJobStatus(jobId, "cancelled");
 	if (result?.success) {
-		engine.overrides.set(jobId, terminal);
+		engine.overrides.set(jobId, "cancelled");
 		finalizeJob(jobId, jobFileList(job).map((f) => f.fileId));
 		jobsChanged();
 		return { success: true };
 	}
-	console.error(`[Engine] failed to decline job ${jobId} (→ ${terminal}):`, result?.message);
+	console.error(`[Engine] failed to decline job ${jobId}:`, result?.message);
 	return { success: false, message: result?.message || "request failed" };
 }
 
@@ -806,6 +896,9 @@ function init({ getMainWindow, onSnapshot, onToast, onJobsChanged }) {
 	files.addStatusListener((fileId, status) => {
 		if (engine.running && status === "ready") schedule();
 	});
+	// Any change to a printer's queue (dispatch, spool id, sweep) re-publishes the
+	// engine snapshot, so the renderer's queue view is always live.
+	registry.setChangeNotifier(() => emit());
 }
 
 function start() {
@@ -816,7 +909,10 @@ function start() {
 	engine.paused = false;
 	engine.initialized = false;
 	loadPrintedFiles();
-	refreshRouting(true);
+	// Populate the registry, then take a first reading of every printer's real
+	// spool queue so load balancing starts from the machine's actual state
+	// (including work queued by other apps) rather than from zero.
+	refreshRouting(true).then(() => reconcilePrinterQueues());
 	_routingTimer = setInterval(() => refreshRouting(), ROUTING_POLL_MS);
 	if (_routingTimer.unref) _routingTimer.unref();
 	emit();
@@ -832,7 +928,8 @@ function stop() {
 		_routingTimer = null;
 	}
 	engine.tasks = [];
-	engine.slots.clear();
+	_spoolLocks.clear();
+	registry.reset();
 	engine.requeuePrompt = null;
 	engine.paused = false;
 	engine.initialized = false;
@@ -853,6 +950,8 @@ module.exports = {
 	applyOverrides,
 	getSnapshot,
 	refreshRouting,
+	reconcilePrinterQueues,
+	getRegistrySnapshot: registry.getSnapshot,
 	migrateProgress,
 	printJob,
 	printFile,

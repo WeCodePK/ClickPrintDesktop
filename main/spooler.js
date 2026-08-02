@@ -98,11 +98,29 @@ function removeSpoolJob(device, jobId) {
 }
 
 // ── active verifications ─────────────────────────────────────────────────────
-// device -> track. One per printer (engine enforces one in-flight file each).
+// trackId -> track. A printer holds a QUEUE of our documents, so several tracks
+// can be live on the same device at once: one still being identified (the engine
+// serialises that step per printer via its spool lock) and any number already
+// identified and being watched to completion. Keying by device instead would
+// make each new document abort the previous one's tracking — which the engine
+// reads as "outcome unknown" and re-prints. Hence a per-document key.
 const _tracks = new Map();
+let _nextTrackId = 1;
 let _timer = null;
 let _polling = false;
 let _pollFailures = 0;
+
+// Spool ids already owned by another live track on this printer, so two
+// documents can never latch onto the same Windows job.
+function _claimedIds(device, self) {
+	const claimed = new Set();
+	for (const track of _tracks.values()) {
+		if (track !== self && track.device === device && typeof track.jobId === "number") {
+			claimed.add(track.jobId);
+		}
+	}
+	return claimed;
+}
 
 function _ensureTimer() {
 	if (!_timer) _timer = setInterval(_poll, TICK_MS);
@@ -116,10 +134,27 @@ function _stopTimerIfIdle() {
 	}
 }
 
+// Fires the caller's onIdentified hook exactly once, with the Windows spool job
+// id (or null when the job could never be pinned down). The engine uses this to
+// release its per-device spool lock — the next document may start spooling as
+// soon as ours is unambiguously identified.
+function _identified(track, spoolId) {
+	if (track.identifiedFired) return;
+	track.identifiedFired = true;
+	if (track.onIdentified) {
+		try {
+			track.onIdentified(spoolId);
+		} catch (err) {
+			console.error("[Spooler] onIdentified handler error:", err.message);
+		}
+	}
+}
+
 function _finish(track, outcome, detail) {
 	if (track.settled) return;
 	track.settled = true;
-	_tracks.delete(track.device);
+	_identified(track, track.jobId); // never leave a spool lock held
+	_tracks.delete(track.id);
 	console.log(`[Spooler] "${track.device}" verdict: ${outcome}${detail ? ` (${detail})` : ""}`);
 	track.resolve({ outcome, detail: detail || null });
 	_stopTimerIfIdle();
@@ -128,12 +163,18 @@ function _finish(track, outcome, detail) {
 function _evaluate(track, rows, now) {
 	// ── identify phase: find the job id that wasn't in the pre-spool snapshot ──
 	if (track.phase === "identify") {
-		const fresh = rows.find((r) => r && typeof r.Id === "number" && !track.beforeIds.has(r.Id));
+		// Ours is the job that wasn't in the pre-spool snapshot and isn't already
+		// claimed by another document queued on this same printer.
+		const claimed = _claimedIds(track.device, track);
+		const fresh = rows.find(
+			(r) => r && typeof r.Id === "number" && !track.beforeIds.has(r.Id) && !claimed.has(r.Id)
+		);
 		if (fresh) {
 			track.phase = "tracking";
 			track.jobId = fresh.Id;
 			track.lastProgressAt = now;
 			console.log(`[Spooler] "${track.device}" tracking spool job ${fresh.Id}`);
+			_identified(track, fresh.Id);
 			if (track.onPhase) track.onPhase("verifying");
 			// fall through to tracking evaluation below
 		} else if (now - track.startedAt > IDENTIFY_TIMEOUT_MS) {
@@ -207,13 +248,17 @@ async function _poll() {
 		}
 		_pollFailures = 0;
 
-		for (const track of [..._tracks.values()]) {
-			const rows = queues[track.device] || [];
+		// Log once per printer, not once per tracked document.
+		for (const device of devices) {
+			const rows = queues[device] || [];
 			console.log(
-				`[Spooler] poll "${track.device}":`,
+				`[Spooler] poll "${device}":`,
 				rows.map((r) => `#${r.Id} s=0x${(r.S || 0).toString(16)} p=${r.PagesPrinted}/${r.TotalPages}`).join(" ") || "(empty)"
 			);
-			_evaluate(track, rows, now);
+		}
+
+		for (const track of [..._tracks.values()]) {
+			_evaluate(track, queues[track.device] || [], now);
 		}
 	} finally {
 		_polling = false;
@@ -238,17 +283,24 @@ async function snapshotPrinter(device) {
 // reaches a terminal state. Resolves { outcome: "success"|"cancelled"|"error"|
 // "stuck"|"aborted", detail }. Never rejects. `beforeIds === null` (snapshot
 // failed / non-Windows) resolves success immediately — trust the spool callback.
-function trackPrintJob(device, beforeIds, { onPhase } = {}) {
+function trackPrintJob(device, beforeIds, { onPhase, onIdentified } = {}) {
 	if (beforeIds === null || process.platform !== "win32") {
+		if (onIdentified) onIdentified(null);
 		return Promise.resolve({ outcome: "success", detail: "untracked" });
 	}
-	// One in-flight file per printer is enforced upstream; a stale track here
-	// means something went wrong — settle it as aborted and take over.
-	const existing = _tracks.get(device);
-	if (existing) _finish(existing, "aborted", "superseded");
+	// The engine's spool lock guarantees at most one document per printer is in
+	// the identify phase. If that ever slips, both would race for the same fresh
+	// spool id — warn loudly rather than silently mis-attributing a print.
+	for (const other of _tracks.values()) {
+		if (other.device === device && other.phase === "identify") {
+			console.warn(`[Spooler] "${device}": two documents identifying at once — spool lock violated`);
+		}
+	}
 
+	const id = _nextTrackId++;
 	return new Promise((resolve) => {
-		_tracks.set(device, {
+		_tracks.set(id, {
+			id,
 			device,
 			phase: "identify",
 			beforeIds,
@@ -259,7 +311,9 @@ function trackPrintJob(device, beforeIds, { onPhase } = {}) {
 			errorSince: null,
 			startedAt: Date.now(),
 			settled: false,
+			identifiedFired: false,
 			onPhase,
+			onIdentified,
 			resolve,
 		});
 		_ensureTimer();
@@ -273,4 +327,4 @@ function abortAll() {
 	for (const track of [..._tracks.values()]) _finish(track, "aborted", "engine stopped");
 }
 
-module.exports = { snapshotPrinter, trackPrintJob, abortAll, JOB_STATUS: JS };
+module.exports = { snapshotPrinter, trackPrintJob, abortAll, queryQueues, JOB_STATUS: JS };

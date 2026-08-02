@@ -34,10 +34,18 @@ function toastMessage({ kind, who, fileName }) {
 			return `Job (${who}) marked failed — a document couldn't be printed. The customer will be refunded.`;
 		case "job-failed-download":
 			return `Job (${who}) failed — files couldn't be downloaded.`;
+		// A manually-printed document failed. The job is deliberately left open —
+		// the operator retries, or fails the job explicitly from its failure box.
+		case "doc-failed-print":
+			return `“${fileName}” couldn't be printed. The job is still open — retry it, or mark the job as failed.`;
 		case "pdf-cancel":
 			return `Saving “${fileName}” as PDF was cancelled. To cancel the job, use the Decline Job button.`;
 		case "fail-report-error":
 			return "Couldn't mark the job as failed — please try again.";
+		// The click never got as far as queueing anything: the job couldn't be
+		// moved to "printing" on the backend.
+		case "job-printing-failed":
+			return `Couldn't start job (${who}) — the server wouldn't accept it. Check your connection and try again.`;
 		default:
 			return null;
 	}

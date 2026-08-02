@@ -1,4 +1,4 @@
-import { PdfGlyph, UserGlyph, PrinterIcon, EyeIcon, CheckIcon } from "../icons";
+import { PdfGlyph, UserGlyph, PrinterIcon, EyeIcon, CheckIcon, AlertIcon, RetryIcon } from "../icons";
 import { useFiles } from "../FilesContext";
 import { getJobPrintMode, getJobTotalPages } from "../jobUtils";
 import PrintSplitButton from "./PrintSplitButton";
@@ -31,6 +31,27 @@ function fileMinorFields(settings = {}) {
 		{ label: "Pages/Sheet", value: settings.pagesPerSheet || 1 },
 		{ label: "Range", value: settings.pageSelection || "All pages" },
 	];
+}
+
+// The per-document outcome mark, shown inline right after the copies count:
+// a tick once the document is verified printed, a warning glyph once it has
+// permanently failed. Nothing while it's untouched or still in flight.
+function DocumentMark({ printed, failed }) {
+	if (printed) {
+		return (
+			<span className="doc-mark doc-mark--printed" title="This document printed successfully">
+				<CheckIcon />
+			</span>
+		);
+	}
+	if (failed) {
+		return (
+			<span className="doc-mark doc-mark--failed" title="This document failed to print">
+				<AlertIcon />
+			</span>
+		);
+	}
+	return null;
 }
 
 function FileThumb({ file }) {
@@ -75,6 +96,8 @@ function waitHint(waitReason) {
 			return "Queued · downloading…";
 		case "no-free-printer":
 			return "Queued · waiting for a free printer";
+		case "paused":
+			return "Queued · automated printing paused";
 		case "no-online-printer":
 			return "Queued · printer offline";
 		case "route":
@@ -90,8 +113,16 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 	const printingNow = state?.status === "printing" || state?.status === "verifying";
 	const queued = state?.status === "waiting";
 	const routeGap = queued && state?.waitReason === "route";
+	// A permanent print failure for THIS document. The job itself is untouched —
+	// only the operator's explicit control below can fail (and refund) the job.
+	// A cancelled Print-to-PDF save dialog is operator-side, not a print failure.
+	const hardFailed = !!failed && !printed && !printingNow && !queued && state?.failureReason !== "pdf-cancel";
 	return (
-		<div className={`file-preview ${printed ? "file-preview--printed" : ""} ${printingNow ? "file-preview--printing" : ""}`}>
+		<div
+			className={`file-preview ${printed ? "file-preview--printed" : ""} ${printingNow ? "file-preview--printing" : ""} ${
+				hardFailed ? "file-preview--failed" : ""
+			}`}
+		>
 			<div className="file-preview__heading">
 				<span className="file-preview__index">{index + 1}</span>
 				<span className="file-preview__name" title={file.name}>{file.name}</span>
@@ -108,6 +139,11 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 				) : queued ? (
 					<span className="file-preview__badge file-preview__badge--printing" title={waitHint(state?.waitReason)}>
 						{waitHint(state?.waitReason)}
+					</span>
+				) : hardFailed ? (
+					<span className="file-preview__badge file-preview__badge--failed" title="This document failed to print">
+						<AlertIcon />
+						Failed
 					</span>
 				) : null}
 			</div>
@@ -131,6 +167,8 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 							<span key={f.label} className="file-preview__minor-item">
 								{i > 0 && <span className="file-preview__minor-sep">|</span>}
 								{f.label}: {f.value}
+								{/* Outcome mark sits beside the copies count. */}
+								{f.label === "Copies" && <DocumentMark printed={printed} failed={hardFailed} />}
 							</span>
 						))}
 					</div>
@@ -167,17 +205,26 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 								</button>
 							</span>
 						) : (
+							// After a permanent failure the same control becomes "Retry",
+							// in the system's accent orange rather than the go-green.
 							<PrintSplitButton
 								size="sm"
+								tone={hardFailed ? "retry" : "default"}
 								onPrint={(deviceName) => onPrint(file, deviceName)}
 								onOpen={onPrinterMenuOpen}
 								printers={printers}
-								disabled={printingAll}
 								label={
-									<>
-										<PrinterIcon />
-										Print
-									</>
+									hardFailed ? (
+										<>
+											<RetryIcon />
+											Retry
+										</>
+									) : (
+										<>
+											<PrinterIcon />
+											Print
+										</>
+									)
 								}
 							/>
 						)
@@ -192,16 +239,29 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 					</span>
 				</div>
 			)}
-			{failed && !printed && !printingNow && (
+			{state?.failureReason === "pdf-cancel" && !printed && !printingNow && (
 				<div className="file-preview__failure">
 					<span>
-						Failure in printing doc ({index + 1}). Retry or to mark the job as failed,{" "}
-						<button type="button" className="file-preview__failure-link" onClick={onMarkJobFailed}>
-							click here…
-						</button>
+						Saving document ({index + 1}) as a PDF was cancelled. Press <strong>Print</strong>{" "}
+						to try again — the job has not been changed.
 					</span>
+				</div>
+			)}
+
+			{/* A failed document never fails the job on its own. This box is the only
+			    place the whole job can be failed, and only via its button. */}
+			{hardFailed && (
+				<div className="file-preview__failure">
+					<span>
+						Document ({index + 1}) failed to print. The job is still open — press{" "}
+						<strong>Retry</strong> to print it again.
+					</span>
+					<button type="button" className="file-preview__failure-btn" onClick={onMarkJobFailed}>
+						<AlertIcon />
+						Mark entire job as failed
+					</button>
 					<span className="file-preview__failure-note">
-						NOTE: customer will be refunded in case of marked as failed
+						NOTE: the customer is refunded when the job is marked as failed
 					</span>
 				</div>
 			)}

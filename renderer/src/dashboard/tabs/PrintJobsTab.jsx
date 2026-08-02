@@ -41,6 +41,9 @@ function PrintJobsTab() {
 	const [selectedId, setSelectedId] = useState(null);
 	const [pendingCancel, setPendingCancel] = useState(null);
 	const [pendingComplete, setPendingComplete] = useState(null);
+	// Set when a decline was refused because the job is already printing — the
+	// backend can't cancel from there, so we explain it and offer the refund.
+	const [declineBlocked, setDeclineBlocked] = useState(null);
 	const [query, setQuery] = useState("");
 
 	// Available printers for the manual print dropdowns. Printing without an
@@ -91,9 +94,28 @@ function PrintJobsTab() {
 		const job = pendingCancel;
 		if (!job) return;
 		setPendingCancel(null);
-		setSelectedId(null);
 		const result = await declineJob(job._id);
-		if (!result?.success) console.error("[Renderer] failed to cancel job:", result?.message);
+		if (result?.success) {
+			setSelectedId(null);
+			return;
+		}
+		// Already printing: the backend won't cancel from there. Keep the job
+		// selected and explain, offering the refund as a separate, deliberate step.
+		if (result?.reason === "already-printing") {
+			setDeclineBlocked(job);
+			return;
+		}
+		console.error("[Renderer] failed to cancel job:", result?.message);
+	};
+
+	// The escape hatch from that dialog: fail the job, which refunds the customer.
+	const handleFailInstead = async () => {
+		const job = declineBlocked;
+		if (!job) return;
+		setDeclineBlocked(null);
+		setSelectedId(null);
+		const result = await failJob(job);
+		if (!result?.success) console.error("[Renderer] failed to mark job failed:", result?.message);
 	};
 
 	const handleConfirmComplete = async () => {
@@ -324,6 +346,24 @@ function PrintJobsTab() {
 					onConfirm={handleConfirmCancel}
 					onCancel={() => setPendingCancel(null)}
 				/>
+			)}
+
+			{declineBlocked && (
+				<div className="modal-overlay" onClick={() => setDeclineBlocked(null)}>
+					<div className="modal-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+						<h3 className="modal-title">Can’t cancel — already printing</h3>
+						<p className="modal-message">
+							“{declineBlocked.fileName}” has already started printing, so it can no longer be
+							marked as cancelled.
+						</p>
+						<div className="modal-actions">
+							<button className="btn-gradient" onClick={() => setDeclineBlocked(null)}>Got it</button>
+						</div>
+						<button type="button" className="modal-subtle" onClick={handleFailInstead}>
+							If you want to mark the job failed (customer refunded), click here…
+						</button>
+					</div>
+				</div>
 			)}
 
 			{pendingComplete && (
