@@ -1,4 +1,14 @@
-import { PdfGlyph, UserGlyph, PrinterIcon, EyeIcon, CheckIcon, AlertIcon, RetryIcon } from "../icons";
+import {
+	PdfGlyph,
+	UserGlyph,
+	PrinterIcon,
+	EyeIcon,
+	CheckIcon,
+	AlertIcon,
+	RetryIcon,
+	CheckFilledIcon,
+	AlertFilledIcon,
+} from "../icons";
 import { useFiles } from "../FilesContext";
 import { getJobPrintMode, getJobTotalPages } from "../jobUtils";
 import PrintSplitButton from "./PrintSplitButton";
@@ -54,27 +64,6 @@ function blockedTitle(reason) {
 		default:
 			return "This document failed to print";
 	}
-}
-
-// The per-document outcome mark, shown inline right after the copies count:
-// a tick once the document is verified printed, a warning glyph while it's
-// blocked. Nothing when it's untouched or still in flight.
-function DocumentMark({ printed, blocked, reason }) {
-	if (printed) {
-		return (
-			<span className="doc-mark doc-mark--printed" title="This document printed successfully">
-				<CheckIcon />
-			</span>
-		);
-	}
-	if (blocked) {
-		return (
-			<span className="doc-mark doc-mark--failed" title={blockedTitle(reason)}>
-				<AlertIcon />
-			</span>
-		);
-	}
-	return null;
 }
 
 function FileThumb({ file }) {
@@ -165,10 +154,7 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 				<span className="file-preview__index">{index + 1}</span>
 				<span className="file-preview__name" title={file.name}>{file.name}</span>
 				{printed ? (
-					<span className="file-preview__badge">
-						<CheckIcon />
-						Printed
-					</span>
+					<span className="file-preview__badge">Printed</span>
 				) : printingNow ? (
 					<span className="file-preview__badge file-preview__badge--printing">
 						<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)", width: "11px", height: "11px" }} />
@@ -176,7 +162,6 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 					</span>
 				) : blocked ? (
 					<span className="file-preview__badge file-preview__badge--failed" title={blockedTitle(blockedReason)}>
-						<AlertIcon />
 						{blockedBadge(blockedReason)}
 					</span>
 				) : queued ? (
@@ -189,8 +174,20 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 				{showPreview && <FileThumb file={file} />}
 				<div className="file-preview__settings">
 					<div className="file-preview__pages">
-						<span className="file-preview__pages-label">No. of Pages</span>
-						<span className="file-preview__pages-value">{file.numberOfPages ?? "—"}</span>
+						<div className="file-preview__pages-text">
+							<span className="file-preview__pages-label">No. of Pages</span>
+							<span className="file-preview__pages-value">{file.numberOfPages ?? "—"}</span>
+						</div>
+						{/* Outcome mark for the document — the one place it's shown. */}
+						{printed ? (
+							<span className="file-preview__mark file-preview__mark--printed" title="This document printed successfully">
+								<CheckFilledIcon />
+							</span>
+						) : blocked ? (
+							<span className="file-preview__mark file-preview__mark--failed" title={blockedTitle(blockedReason)}>
+								<AlertFilledIcon />
+							</span>
+						) : null}
 					</div>
 					{fileSettingRows(settings).map((row) => (
 						<div key={row.label} className="receipt-row">
@@ -205,10 +202,6 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 							<span key={f.label} className="file-preview__minor-item">
 								{i > 0 && <span className="file-preview__minor-sep">|</span>}
 								{f.label}: {f.value}
-								{/* Outcome mark sits beside the copies count. */}
-								{f.label === "Copies" && (
-									<DocumentMark printed={printed} blocked={blocked} reason={blockedReason} />
-								)}
 							</span>
 						))}
 					</div>

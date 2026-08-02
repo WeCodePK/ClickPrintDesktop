@@ -1824,25 +1824,20 @@ body,
 	height: 13px;
 }
 
-/* Per-document outcome mark, inline beside the copies count. */
-.doc-mark {
+/* Per-document outcome mark: a solid tick / warning sitting opposite the page
+   count. The single place a document's success or failure is marked. */
+.file-preview__mark {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	margin-left: 5px;
-	vertical-align: -2px;
+	flex: none;
 }
 
-.doc-mark svg {
-	width: 13px;
-	height: 13px;
-}
-
-.doc-mark--printed {
+.file-preview__mark--printed {
 	color: var(--color-primary-dark);
 }
 
-.doc-mark--failed {
+.file-preview__mark--failed {
 	color: var(--color-accent);
 }
 
@@ -2038,13 +2033,23 @@ body,
 
 /* Prominent per-file page count, filling the space freed by moving the minor
    settings into the pill below. */
+/* Page count on the left, the document's outcome mark on the right. */
 .file-preview__pages {
 	display: flex;
-	flex-direction: column;
-	gap: 2px;
+	flex-direction: row;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
 	margin-bottom: 6px;
 	padding-bottom: 10px;
 	border-bottom: 1px dashed var(--border-light);
+}
+
+.file-preview__pages-text {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
 }
 
 .file-preview__pages-label {
@@ -2161,10 +2166,67 @@ body,
 	white-space: nowrap;
 }
 
-/* Fill the per-file actions row like the sibling buttons. */
-.file-preview__actions .print-split { flex: 1; }
+/* ── Per-document action row ──────────────────────────────────────────────
+   Every state (Print / Retry / Printing… / Printed / Queued) must render an
+   identically sized block, so the row never grows, shrinks or re-flows as a
+   document moves between states.
+
+   Two things fought this before:
+     1. `.btn-sm` is declared earlier in this file than `.btn-gradient` and
+        `.btn-outline`, so its padding/font-size lost the cascade and the plain
+        buttons rendered full-size while the split buttons rendered small.
+     2. PrinterIcon is intrinsically 20px where every other icon here is 16px,
+        so icon choice alone changed a button's height.
+   Both are pinned below; the row is driven by min-height, not by content. */
+
+/* Preview stays sized to its content (the earlier rule pins the action-row
+   buttons to flex 0 0 auto); the ACTION slot beside it always fills the rest of
+   the row. Without this the plain disabled states (Printed / Printing… /
+   Queued) inherit that 0 0 auto and visibly shrink out of the split button's
+   footprint the moment a document finishes. Same specificity as that rule,
+   declared later, so this wins. */
+.file-preview__actions > .btn-gradient,
+.file-preview__actions > .autoprint-tip {
+	flex: 1 1 0;
+	min-width: 0;
+}
+
+.file-preview__actions .print-split { flex: 1 1 0; }
 .file-preview__actions .print-split__row { width: 100%; }
-.file-preview__actions .print-split__main { flex: 1; }
+.file-preview__actions .print-split__main { flex: 1 1 auto; min-width: 0; }
+.file-preview__actions .autoprint-tip > .btn-gradient { width: 100%; }
+
+/* One height for every button in the row, regardless of class or content. */
+.file-preview__actions .btn-sm,
+.file-preview__actions .print-split__main,
+.file-preview__actions .print-split__toggle {
+	box-sizing: border-box;
+	min-height: 38px;
+	padding-top: 0;
+	padding-bottom: 0;
+	font-size: 13px;
+	line-height: 1;
+}
+
+.file-preview__actions .btn-sm {
+	padding-left: 16px;
+	padding-right: 16px;
+}
+
+/* Pin icon size so it can never drive the button height. */
+.file-preview__actions .btn-sm svg,
+.file-preview__actions .print-split__main svg,
+.file-preview__actions .print-split__toggle svg {
+	width: 15px;
+	height: 15px;
+	flex: none;
+}
+
+/* Keep long labels on one line — a wrap would change the row height. */
+.file-preview__actions .btn-sm,
+.file-preview__actions .print-split__main {
+	white-space: nowrap;
+}
 
 .print-split__menu {
 	z-index: 1100;

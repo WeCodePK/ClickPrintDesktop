@@ -87,6 +87,20 @@ export const CheckIcon = () => (
 	</svg>
 );
 
+// Solid outcome marks for the per-document status badge beside the page count.
+// Filled (not stroked) so they read at a glance from across the counter.
+export const CheckFilledIcon = () => (
+	<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+		<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm5.03 7.53l-6.5 6.5a.75.75 0 0 1-1.06 0l-3.5-3.5a.75.75 0 1 1 1.06-1.06l2.97 2.97 5.97-5.97a.75.75 0 1 1 1.06 1.06z" />
+	</svg>
+);
+
+export const AlertFilledIcon = () => (
+	<svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+		<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 4.5a1 1 0 0 1 1 1V13a1 1 0 1 1-2 0V7.5a1 1 0 0 1 1-1zm0 9.25a1.15 1.15 0 1 1 0 2.3 1.15 1.15 0 0 1 0-2.3z" />
+	</svg>
+);
+
 // Failure counterpart to CheckIcon — same 16px box and stroke weight so the two
 // sit identically in the per-document status mark.
 export const AlertIcon = () => (
