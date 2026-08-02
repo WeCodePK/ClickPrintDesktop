@@ -43,18 +43,6 @@ function fileMinorFields(settings = {}) {
 	];
 }
 
-// Short badge text for each blocked cause.
-function blockedBadge(reason) {
-	switch (reason) {
-		case "pdf-cancel":
-			return "Save cancelled";
-		case "route":
-			return "Needs a printer";
-		default:
-			return "Failed";
-	}
-}
-
 function blockedTitle(reason) {
 	switch (reason) {
 		case "pdf-cancel":
@@ -153,16 +141,10 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 			<div className="file-preview__heading">
 				<span className="file-preview__index">{index + 1}</span>
 				<span className="file-preview__name" title={file.name}>{file.name}</span>
-				{printed ? (
-					<span className="file-preview__badge">Printed</span>
-				) : printingNow ? (
+				{printingNow ? (
 					<span className="file-preview__badge file-preview__badge--printing">
 						<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)", width: "11px", height: "11px" }} />
 						Printing…
-					</span>
-				) : blocked ? (
-					<span className="file-preview__badge file-preview__badge--failed" title={blockedTitle(blockedReason)}>
-						{blockedBadge(blockedReason)}
 					</span>
 				) : queued ? (
 					<span className="file-preview__badge file-preview__badge--printing" title={waitHint(state?.waitReason)}>
