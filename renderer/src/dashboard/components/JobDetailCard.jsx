@@ -33,10 +33,33 @@ function fileMinorFields(settings = {}) {
 	];
 }
 
+// Short badge text for each blocked cause.
+function blockedBadge(reason) {
+	switch (reason) {
+		case "pdf-cancel":
+			return "Save cancelled";
+		case "route":
+			return "Needs a printer";
+		default:
+			return "Failed";
+	}
+}
+
+function blockedTitle(reason) {
+	switch (reason) {
+		case "pdf-cancel":
+			return "The PDF save dialog was cancelled — this document has not printed";
+		case "route":
+			return "No service printer matches this document's settings";
+		default:
+			return "This document failed to print";
+	}
+}
+
 // The per-document outcome mark, shown inline right after the copies count:
-// a tick once the document is verified printed, a warning glyph once it has
-// permanently failed. Nothing while it's untouched or still in flight.
-function DocumentMark({ printed, failed }) {
+// a tick once the document is verified printed, a warning glyph while it's
+// blocked. Nothing when it's untouched or still in flight.
+function DocumentMark({ printed, blocked, reason }) {
 	if (printed) {
 		return (
 			<span className="doc-mark doc-mark--printed" title="This document printed successfully">
@@ -44,9 +67,9 @@ function DocumentMark({ printed, failed }) {
 			</span>
 		);
 	}
-	if (failed) {
+	if (blocked) {
 		return (
-			<span className="doc-mark doc-mark--failed" title="This document failed to print">
+			<span className="doc-mark doc-mark--failed" title={blockedTitle(reason)}>
 				<AlertIcon />
 			</span>
 		);
@@ -112,15 +135,30 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 	// Per-file engine state: "waiting" | "printing" | "verifying" | "printed" | "failed".
 	const printingNow = state?.status === "printing" || state?.status === "verifying";
 	const queued = state?.status === "waiting";
-	const routeGap = queued && state?.waitReason === "route";
-	// A permanent print failure for THIS document. The job itself is untouched —
-	// only the operator's explicit control below can fail (and refund) the job.
-	// A cancelled Print-to-PDF save dialog is operator-side, not a print failure.
-	const hardFailed = !!failed && !printed && !printingNow && !queued && state?.failureReason !== "pdf-cancel";
+
+	// A document is BLOCKED when it will not print without the operator doing
+	// something. Three causes, each with its own explanation, but all three get
+	// the same treatment: a warning glyph instead of the tick, the action button
+	// in accent orange, and the job-level "mark failed" escape hatch. None of
+	// them ever fails the job on its own.
+	//   "print"      — the print attempt failed outright.
+	//   "pdf-cancel" — the operator dismissed the Print-to-PDF save dialog.
+	//   "route"      — no enabled service printer matches these settings.
+	const blockedReason =
+		printed || printingNow
+			? null
+			: state?.status === "failed"
+				? state?.failureReason === "pdf-cancel"
+					? "pdf-cancel"
+					: "print"
+				: queued && state?.waitReason === "route"
+					? "route"
+					: null;
+	const blocked = !!blockedReason;
 	return (
 		<div
 			className={`file-preview ${printed ? "file-preview--printed" : ""} ${printingNow ? "file-preview--printing" : ""} ${
-				hardFailed ? "file-preview--failed" : ""
+				blocked ? "file-preview--failed" : ""
 			}`}
 		>
 			<div className="file-preview__heading">
@@ -136,14 +174,14 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 						<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)", width: "11px", height: "11px" }} />
 						Printing…
 					</span>
+				) : blocked ? (
+					<span className="file-preview__badge file-preview__badge--failed" title={blockedTitle(blockedReason)}>
+						<AlertIcon />
+						{blockedBadge(blockedReason)}
+					</span>
 				) : queued ? (
 					<span className="file-preview__badge file-preview__badge--printing" title={waitHint(state?.waitReason)}>
 						{waitHint(state?.waitReason)}
-					</span>
-				) : hardFailed ? (
-					<span className="file-preview__badge file-preview__badge--failed" title="This document failed to print">
-						<AlertIcon />
-						Failed
 					</span>
 				) : null}
 			</div>
@@ -168,7 +206,9 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 								{i > 0 && <span className="file-preview__minor-sep">|</span>}
 								{f.label}: {f.value}
 								{/* Outcome mark sits beside the copies count. */}
-								{f.label === "Copies" && <DocumentMark printed={printed} failed={hardFailed} />}
+								{f.label === "Copies" && (
+									<DocumentMark printed={printed} blocked={blocked} reason={blockedReason} />
+								)}
 							</span>
 						))}
 					</div>
@@ -193,6 +233,31 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 								<div className="spinner spinner--dark" style={{ borderTopColor: "#111b21", width: "14px", height: "14px" }} />
 								Printing…
 							</button>
+						) : blocked ? (
+							// Blocked for ANY reason — failed print, cancelled PDF save, or no
+							// matching service printer. Accent orange, never the go-green, and
+							// always with the dropdown so the operator can force a printer
+							// (the only way out of a routing gap without editing Services).
+							<PrintSplitButton
+								size="sm"
+								tone="retry"
+								onPrint={(deviceName) => onPrint(file, deviceName)}
+								onOpen={onPrinterMenuOpen}
+								printers={printers}
+								label={
+									blockedReason === "route" ? (
+										<>
+											<PrinterIcon />
+											Print
+										</>
+									) : (
+										<>
+											<RetryIcon />
+											Retry
+										</>
+									)
+								}
+							/>
 						) : queued ? (
 							<button className="btn-gradient btn-sm" disabled>
 								Queued
@@ -205,56 +270,45 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 								</button>
 							</span>
 						) : (
-							// After a permanent failure the same control becomes "Retry",
-							// in the system's accent orange rather than the go-green.
 							<PrintSplitButton
 								size="sm"
-								tone={hardFailed ? "retry" : "default"}
 								onPrint={(deviceName) => onPrint(file, deviceName)}
 								onOpen={onPrinterMenuOpen}
 								printers={printers}
 								label={
-									hardFailed ? (
-										<>
-											<RetryIcon />
-											Retry
-										</>
-									) : (
-										<>
-											<PrinterIcon />
-											Print
-										</>
-									)
+									<>
+										<PrinterIcon />
+										Print
+									</>
 								}
 							/>
 						)
 					)}
 				</div>
 			)}
-			{routeGap && (
+			{/* One box for every blocked cause. A blocked document never fails the
+			    job on its own — this is the only place the whole job can be failed,
+			    and only via its button. */}
+			{blocked && (
 				<div className="file-preview__failure">
 					<span>
-						No service printer matches this document's settings. Assign a printer to a
-						matching service in the Services tab, or print it manually via the dropdown.
-					</span>
-				</div>
-			)}
-			{state?.failureReason === "pdf-cancel" && !printed && !printingNow && (
-				<div className="file-preview__failure">
-					<span>
-						Saving document ({index + 1}) as a PDF was cancelled. Press <strong>Print</strong>{" "}
-						to try again — the job has not been changed.
-					</span>
-				</div>
-			)}
-
-			{/* A failed document never fails the job on its own. This box is the only
-			    place the whole job can be failed, and only via its button. */}
-			{hardFailed && (
-				<div className="file-preview__failure">
-					<span>
-						Document ({index + 1}) failed to print. The job is still open — press{" "}
-						<strong>Retry</strong> to print it again.
+						{blockedReason === "pdf-cancel" ? (
+							<>
+								Saving document ({index + 1}) as a PDF was cancelled — nothing was printed
+								and the job has not been changed. Press <strong>Retry</strong> to try again.
+							</>
+						) : blockedReason === "route" ? (
+							<>
+								No service printer matches document ({index + 1})'s settings, so it can't be
+								printed automatically. Assign a printer to a matching service in the Services
+								tab, or pick one now from the <strong>dropdown</strong> beside Print.
+							</>
+						) : (
+							<>
+								Document ({index + 1}) failed to print. The job is still open — press{" "}
+								<strong>Retry</strong> to print it again.
+							</>
+						)}
 					</span>
 					<button type="button" className="file-preview__failure-btn" onClick={onMarkJobFailed}>
 						<AlertIcon />
