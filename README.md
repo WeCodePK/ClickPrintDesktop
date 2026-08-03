@@ -107,9 +107,8 @@ This launches:
 
 ---
 
-## 👥 Authors & Maintainers
+## 👥 Developers [WeCode Team](https://wecode.com.pk)
 
-- **[WeCode Team](https://wecode.com.pk)**
-- https://github.com/kamal-hassan-1
-- https://github.com/ahad19n
-- https://github.com/devSohailK
+- **[Abdul Ahad](https://github.com/ahad19n)**,
+- **[Kamal Hassan](https://github.com/kamal-hassan-1)**,
+- **[Sohail Khan](https://github.com/devSohailK)**
