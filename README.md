@@ -107,7 +107,7 @@ This launches:
 
 ---
 
-## 👥 Developers [WeCode Team](https://wecode.com.pk)
+## 👥 [WeCode Team](https://wecode.com.pk)
 
 - **[Abdul Ahad](https://github.com/ahad19n)**,
 - **[Kamal Hassan](https://github.com/kamal-hassan-1)**,
