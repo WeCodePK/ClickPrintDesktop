@@ -543,15 +543,35 @@ async function dispatch(task, device) {
 	}
 }
 
+// Part 2: a failed document stops its print-all batch RIGHT THERE — the
+// remaining queued documents are withdrawn (they were never sent to a printer;
+// waiting tasks hold no registry slot). The next Print-all click re-issues
+// every unprinted document, the failed one included — and since it sits
+// earliest in document order, it is retried first, not skipped.
+function haltSequentialBatch(task) {
+	if (!task.sequential) return;
+	const remaining = engine.tasks.filter(
+		(t) => t !== task && t.jobId === task.jobId && t.sequential && t.status === "waiting"
+	);
+	if (remaining.length === 0) return;
+	const keep = new Set(remaining);
+	engine.tasks = engine.tasks.filter((t) => !keep.has(t));
+	console.log(
+		`[Engine] batch for job ${task.jobId} halted after ${task.id} failed — ${remaining.length} doc(s) withdrawn`
+	);
+}
+
 async function handleDispatchFailure(task, device, err) {
 	console.warn(`[Engine] print failed for ${task.id} on "${device}":`, err.message);
 	if (!engine.running || !engine.tasks.includes(task)) return; // job dropped meanwhile
 
 	if (err.message === "pdf save cancelled") {
-		// Operator dismissed the Save dialog — operator-side, never a refund.
+		// Operator dismissed the Save dialog — operator-side, never a refund. Still
+		// a failure for the batch: printing stops here ("whatever reason").
 		task.status = "failed";
 		task.failureReason = "pdf-cancel";
 		task.device = null;
+		haltSequentialBatch(task);
 		toast({ kind: "pdf-cancel", jobId: task.jobId, fileName: task.fileName });
 		return;
 	}
@@ -575,9 +595,11 @@ async function handleDispatchFailure(task, device, err) {
 	// Manual print (Part 1): the DOCUMENT is flagged and the operator decides what
 	// happens next — retry, or explicitly mark the job failed. The job is never
 	// auto-failed here, not even when it's the job's only document; the refund
-	// PATCH belongs solely to forceFailJob.
+	// PATCH belongs solely to forceFailJob. A print-all batch stops at the
+	// failure — nothing further prints until the operator acts.
 	if (task.mode !== "auto") {
 		console.log(`[Engine] ${task.id} failed permanently — awaiting operator (job left untouched)`);
+		haltSequentialBatch(task);
 		toast({ kind: "doc-failed-print", jobId: task.jobId, fileName: task.fileName });
 		jobsChanged();
 		return;
@@ -779,7 +801,10 @@ function onJobsReconciled(jobs) {
 //   • plain click             → each document, when its turn comes, is routed to
 //     the least-loaded printer of its matching service (registry.choosePrinter).
 // A mid-batch failure flags that document (Part 1 rules — never fails the job)
-// and the batch continues with the next one.
+// and STOPS the batch right there (haltSequentialBatch): the remaining
+// documents are withdrawn. Clicking Print-all again re-issues every unprinted
+// document — the failed one first, in document order — via addTasks' explicit
+// re-issue path.
 async function printJob(jobId, deviceName = null) {
 	const job = getJobs().find((j) => j._id === jobId);
 	if (!job) return { success: false, message: "job not found" };
