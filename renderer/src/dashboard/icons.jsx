@@ -111,6 +111,13 @@ export const AlertIcon = () => (
 	</svg>
 );
 
+// Solid stop square — the print-all button while its batch is running.
+export const StopIcon = () => (
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+		<rect x="5.5" y="5.5" width="13" height="13" rx="2.5" />
+	</svg>
+);
+
 // Circular arrow for the post-failure "Retry" action.
 export const RetryIcon = () => (
 	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">

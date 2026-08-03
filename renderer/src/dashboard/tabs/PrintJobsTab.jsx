@@ -35,6 +35,8 @@ function PrintJobsTab() {
 		completeJob,
 		printFileManual,
 		printAllManual,
+		stopPrintJob,
+		jobHasQueuedDocs,
 		refreshPrinterState,
 	} = useAutoPrint();
 
@@ -269,6 +271,9 @@ function PrintJobsTab() {
 					// Destructive actions stay available while documents merely wait in
 					// the queue (declining drops them) — only an in-flight print locks them.
 					const actionsLocked = jobPrintingNow(selectedEntry._id);
+					// Docs still queued → the header control renders as Stop; anything
+					// queued OR at a printer → the helper line reads "Printing…".
+					const hasQueued = jobHasQueuedDocs(selectedEntry._id);
 
 					return (
 						<JobDetailCard
@@ -310,14 +315,22 @@ function PrintJobsTab() {
 												</button>
 											</span>
 										) : (
+											// While the batch has queued docs the control is Stop; the
+											// running state lives in the helper line below the button
+											// (where "Routed by service" sits when idle). During the
+											// post-stop drain (in-flight doc finishing, nothing queued)
+											// it's Print-all again — clicking it simply resumes.
 											<PrintSplitButton
 												size="md"
 												onPrint={handlePrintAll}
 												onOpen={() => refreshPrinters(true)}
 												printers={printers}
-												busy={busy}
 												disabled={remainingCount === 0}
 												showInfo
+												info={hasQueued || actionsLocked ? "Printing…" : undefined}
+												infoActive={hasQueued || actionsLocked}
+												stopMode={hasQueued}
+												onStop={() => stopPrintJob(selectedEntry._id)}
 												label={
 													<>
 														<PrinterIcon />

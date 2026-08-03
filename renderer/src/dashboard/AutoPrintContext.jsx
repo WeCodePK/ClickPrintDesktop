@@ -140,6 +140,13 @@ export function AutoPrintProvider({ children }) {
 		[fileStates]
 	);
 
+	// Documents queued but not yet at a printer — what the Stop button withdraws.
+	// While true, the header's Print-all control renders as Stop.
+	const jobHasQueuedDocs = useCallback(
+		(jobId) => Object.values(fileStates[jobId] || {}).some((s) => s.status === "waiting"),
+		[fileStates]
+	);
+
 	// Queue-position line for the jobs list.
 	const queueInfoFor = useCallback(
 		(jobId) => {
@@ -184,6 +191,8 @@ export function AutoPrintProvider({ children }) {
 		(job, deviceName) => window.electronAPI.printJob(job._id, deviceName),
 		[]
 	);
+	// Stop a running print-all: queued docs withdrawn, in-flight doc finishes.
+	const stopPrintJob = useCallback((jobId) => window.electronAPI.stopPrintJob(jobId), []);
 
 	const failJob = useCallback((job) => window.electronAPI.markJobFailed(job._id), []);
 	const declineJob = useCallback((jobId) => window.electronAPI.declineJob(jobId), []);
@@ -204,6 +213,8 @@ export function AutoPrintProvider({ children }) {
 		failedFilesFor,
 		jobBusy,
 		jobPrintingNow,
+		jobHasQueuedDocs,
+		stopPrintJob,
 		queueInfoFor,
 		enableAutoPrint,
 		disableAutoPrint,

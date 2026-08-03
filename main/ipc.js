@@ -305,6 +305,13 @@ function registerIpcHandlers(getMainWindow) {
 		return engine.printFile(jobId, fileId, deviceName || null);
 	});
 
+	// Stop a running print-all batch: queued documents are withdrawn, the one
+	// currently at the printer finishes normally.
+	ipcMain.handle("engine:stop-job", async (_event, jobId) => {
+		console.log(`[IPC] engine:stop-job → ${jobId}`);
+		return engine.stopJobBatch(jobId);
+	});
+
 	ipcMain.handle("engine:set-paused", async (_event, paused) => {
 		console.log("[IPC] engine:set-paused →", !!paused);
 		return engine.setPaused(paused);

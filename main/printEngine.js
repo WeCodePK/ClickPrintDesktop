@@ -543,22 +543,33 @@ async function dispatch(task, device) {
 	}
 }
 
+// Withdraws a job's WAITING tasks — documents queued but not yet sent to any
+// printer (a waiting task holds no registry slot, so there is nothing to
+// unwind). In-flight tasks are untouched by design. Because the main process is
+// single-threaded and dispatching claims a task synchronously (claimAndDispatch
+// flips it to "printing" inside the same schedule() pass), a task is always
+// EITHER still waiting — and safely removable here — or already in flight and
+// left to finish: there is no window where a withdrawn document can also print.
+// `sequentialOnly` limits the sweep to print-all batch tasks.
+function withdrawWaitingTasks(jobId, { sequentialOnly = false } = {}) {
+	const drop = new Set(
+		engine.tasks.filter(
+			(t) => t.jobId === jobId && t.status === "waiting" && (!sequentialOnly || t.sequential)
+		)
+	);
+	if (drop.size === 0) return 0;
+	engine.tasks = engine.tasks.filter((t) => !drop.has(t));
+	return drop.size;
+}
+
 // Part 2: a failed document stops its print-all batch RIGHT THERE — the
-// remaining queued documents are withdrawn (they were never sent to a printer;
-// waiting tasks hold no registry slot). The next Print-all click re-issues
+// remaining queued documents are withdrawn. The next Print-all click re-issues
 // every unprinted document, the failed one included — and since it sits
 // earliest in document order, it is retried first, not skipped.
 function haltSequentialBatch(task) {
 	if (!task.sequential) return;
-	const remaining = engine.tasks.filter(
-		(t) => t !== task && t.jobId === task.jobId && t.sequential && t.status === "waiting"
-	);
-	if (remaining.length === 0) return;
-	const keep = new Set(remaining);
-	engine.tasks = engine.tasks.filter((t) => !keep.has(t));
-	console.log(
-		`[Engine] batch for job ${task.jobId} halted after ${task.id} failed — ${remaining.length} doc(s) withdrawn`
-	);
+	const n = withdrawWaitingTasks(task.jobId, { sequentialOnly: true });
+	if (n) console.log(`[Engine] batch for job ${task.jobId} halted after ${task.id} failed — ${n} doc(s) withdrawn`);
 }
 
 async function handleDispatchFailure(task, device, err) {
@@ -820,6 +831,21 @@ async function printJob(jobId, deviceName = null) {
 	return { success: true };
 }
 
+// The Stop button (shown while a print-all batch is running). Withdraws every
+// document of the job still WAITING; the document currently at the printer is
+// deliberately left to finish — its outcome (printed / failed) lands normally,
+// so no page is ever half-tracked. Race-free by construction: waiting tasks
+// are removed synchronously on the main thread, and dispatch claims tasks
+// synchronously, so a document is either withdrawn before it ever reaches a
+// printer or already in flight and allowed to complete — never both, never
+// neither. Clicking Print-all afterwards re-issues the withdrawn documents.
+function stopJobBatch(jobId) {
+	const n = withdrawWaitingTasks(jobId); // ALL waiting docs of the job, batch or not
+	console.log(`[Engine] stop requested for job ${jobId} — ${n} queued doc(s) withdrawn, in-flight doc (if any) finishing`);
+	emit();
+	return { success: true, withdrawn: n };
+}
+
 // Part 1 — the per-document Print button. Clicking it moves the WHOLE job to
 // "printing" on the backend up front, then queues just this document: to the
 // printer chosen from the dropdown, or (no choice) to the least-loaded printer
@@ -1024,6 +1050,7 @@ module.exports = {
 	migrateProgress,
 	printJob,
 	printFile,
+	stopJobBatch,
 	setPaused,
 	setAutoPrint,
 	resolveRequeue,

@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	},
 	printJob: (jobId, deviceName) => ipcRenderer.invoke("engine:print-job", jobId, deviceName),
 	printJobFile: (jobId, fileId, deviceName) => ipcRenderer.invoke("engine:print-file", jobId, fileId, deviceName),
+	// Stop a running print-all batch (queued docs withdrawn; in-flight doc finishes).
+	stopPrintJob: (jobId) => ipcRenderer.invoke("engine:stop-job", jobId),
 	setQueuePaused: (paused) => ipcRenderer.invoke("engine:set-paused", paused),
 	setAutoPrint: (enabled) => ipcRenderer.invoke("engine:set-autoprint", enabled),
 	resolveRequeue: (accept) => ipcRenderer.invoke("engine:requeue-decision", accept),

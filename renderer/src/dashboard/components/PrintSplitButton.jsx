@@ -1,10 +1,14 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDownIcon } from "../icons";
+import { ChevronDownIcon, StopIcon } from "../icons";
 
 // The main button prints without an explicit device — each document is routed
 // to its service's automated printer (resolved in AutoPrintContext). The
 // dropdown overrides that with a specific printer for this one print.
+//
+// While a print-all batch is running, `stopMode` turns the whole control into a
+// single Stop button (accent orange, no printer dropdown) wired to `onStop`;
+// the helper line under the button (`info`) carries the "Printing…" status.
 function PrintSplitButton({
 	onPrint,
 	onOpen,
@@ -15,6 +19,12 @@ function PrintSplitButton({
 	busyLabel = "Printing…",
 	size = "md",
 	showInfo = false,
+	// Replaces the default "Routed by service" helper line; `infoActive` gives it
+	// the live (primary-coloured) treatment while something is printing.
+	info = null,
+	infoActive = false,
+	stopMode = false,
+	onStop = null,
 	// "default" = the green print action; "retry" = accent orange, used once the
 	// document has failed and this button re-attempts it.
 	tone = "default",
@@ -56,39 +66,58 @@ function PrintSplitButton({
 		onPrint(deviceName);
 	};
 
+	const orange = stopMode || tone === "retry";
 	return (
-		<div className={`print-split print-split--${size} ${tone === "retry" ? "print-split--retry" : ""}`}>
+		<div className={`print-split print-split--${size} ${orange ? "print-split--retry" : ""}`}>
 			<div className="print-split__row" ref={rowRef}>
-				<button
-					type="button"
-					className="print-split__main"
-					onClick={() => onPrint(undefined)}
-					disabled={disabled || busy}
-				>
-					{busy ? (
-						<>
-							<div className="spinner spinner--dark" style={{ borderTopColor: "#111b21", width: "14px", height: "14px" }} />
-							{busyLabel}
-						</>
-					) : (
-						label
-					)}
-				</button>
-				<button
-					type="button"
-					className="print-split__toggle"
-					onClick={() => (open ? setOpen(false) : openMenu())}
-					disabled={disabled || busy || printers.length === 0}
-					aria-label="Print to a different printer"
-					title="Print to a different printer"
-				>
-					<ChevronDownIcon />
-				</button>
+				{stopMode ? (
+					// Stop is always clickable — it must work exactly while a batch runs.
+					<button
+						type="button"
+						className="print-split__main print-split__main--solo"
+						onClick={() => onStop && onStop()}
+						title="Stop after the current document finishes"
+					>
+						<StopIcon />
+						Stop
+					</button>
+				) : (
+					<>
+						<button
+							type="button"
+							className="print-split__main"
+							onClick={() => onPrint(undefined)}
+							disabled={disabled || busy}
+						>
+							{busy ? (
+								<>
+									<div className="spinner spinner--dark" style={{ borderTopColor: "#111b21", width: "14px", height: "14px" }} />
+									{busyLabel}
+								</>
+							) : (
+								label
+							)}
+						</button>
+						<button
+							type="button"
+							className="print-split__toggle"
+							onClick={() => (open ? setOpen(false) : openMenu())}
+							disabled={disabled || busy || printers.length === 0}
+							aria-label="Print to a different printer"
+							title="Print to a different printer"
+						>
+							<ChevronDownIcon />
+						</button>
+					</>
+				)}
 			</div>
 
 			{showInfo && (
-				<span className="print-split__info" title="Each document prints to the automated printer of its matching service">
-					Routed by service
+				<span
+					className={`print-split__info ${infoActive ? "print-split__info--active" : ""}`}
+					title={info || "Each document prints to the automated printer of its matching service"}
+				>
+					{info || "Routed by service"}
 				</span>
 			)}
 
