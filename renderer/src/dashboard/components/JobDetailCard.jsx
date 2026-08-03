@@ -98,6 +98,9 @@ function waitHint(waitReason) {
 			return "Queued · waiting for a free printer";
 		case "paused":
 			return "Queued · automated printing paused";
+		case "job-sequence":
+			// Print-all sends documents one at a time; this one is behind another.
+			return "Queued · next in line";
 		case "no-online-printer":
 			return "Queued · printer offline";
 		case "route":

@@ -24,6 +24,11 @@ const { getJobs } = require("./state");
 //    spread across a service's printers instead of waiting for one to go idle.
 //    Only the spool step is serialised per printer — see withSpoolLock — because
 //    the spooler identifies our job by diffing the queue around a single spool.
+//  - Print-all (Part 2) is SEQUENTIAL per job: its tasks carry `sequential` and
+//    the scheduler holds each one back until the job has nothing at a printer.
+//    The task list is the job's own queue — documents reach the Windows spooler
+//    one at a time, each picking its printer (override, or choosePrinter's
+//    least-loaded match) at ITS dispatch moment, not all up front.
 //  - "Printed" means verified against the Windows spooler (files.printAndVerify),
 //    not merely spooled.
 //  - Failure policy differs by mode, deliberately:
@@ -275,7 +280,7 @@ function findTask(jobId, fileId) {
 // Adds (or refreshes) tasks for a job's unprinted files. Explicit commands
 // reset failed tasks and apply overrides; auto-enqueue leaves existing tasks
 // alone. In-flight tasks are never touched.
-function addTasks(job, mode, overrideDevice = null, { onlyFileId = null, explicit = false } = {}) {
+function addTasks(job, mode, overrideDevice = null, { onlyFileId = null, explicit = false, sequential = false } = {}) {
 	let added = false;
 	for (const file of jobFileList(job)) {
 		if (onlyFileId && file.fileId !== onlyFileId) continue;
@@ -295,6 +300,7 @@ function addTasks(job, mode, overrideDevice = null, { onlyFileId = null, explici
 			existing.failureReason = null;
 			existing.mode = mode;
 			existing.overrideDevice = overrideDevice;
+			existing.sequential = sequential;
 			existing.device = null;
 			existing.notBefore = null;
 			added = true;
@@ -309,6 +315,7 @@ function addTasks(job, mode, overrideDevice = null, { onlyFileId = null, explici
 			settings: file.settings,
 			mode,
 			overrideDevice,
+			sequential, // print-all batch: one document at a printer at a time
 			status: "waiting",
 			waitReason: null,
 			failureReason: null,
@@ -359,6 +366,16 @@ function withSpoolLock(device, fn) {
 function schedule() {
 	if (!engine.running) return;
 
+	// Jobs that currently have a document at a printer. A print-all batch sends
+	// its documents ONE AT A TIME: the next dispatches only once the previous one
+	// settles (printed or failed), so a job never stacks the Windows queue. Any
+	// in-flight document of the job counts — including a lone per-document print
+	// — never two of the same job at once while a batch is pending.
+	const busyJobs = new Set();
+	for (const t of engine.tasks) {
+		if (t.status === "printing" || t.status === "verifying") busyJobs.add(t.jobId);
+	}
+
 	for (const task of engine.tasks) {
 		if (task.status !== "waiting") continue;
 		// Pausing holds the automated queue only — an explicit operator print must
@@ -367,10 +384,24 @@ function schedule() {
 			task.waitReason = "paused";
 			continue;
 		}
-		if (task.notBefore && task.notBefore > Date.now()) continue; // backend backoff
+
+		// One-at-a-time gate for print-all batches. busyJobs also gains the job the
+		// moment a document dispatches below, so a single pass never sends two.
+		if (task.sequential && busyJobs.has(task.jobId)) {
+			task.waitReason = "job-sequence";
+			continue;
+		}
+
+		if (task.notBefore && task.notBefore > Date.now()) {
+			// Backend backoff applies to the whole job — hold the batch in order.
+			if (task.sequential) busyJobs.add(task.jobId);
+			continue;
+		}
 
 		if (!files.isReady(task.fileId)) {
 			task.waitReason = "downloading";
+			// Transient: hold the batch behind this document so output order is kept.
+			if (task.sequential) busyJobs.add(task.jobId);
 			continue;
 		}
 
@@ -381,15 +412,19 @@ function schedule() {
 			exclude: task.attempts.map((a) => a.device),
 		});
 		if (!device) {
+			// Routing/hardware gap: needs operator action (or a printer coming back
+			// online), so it deliberately does NOT dam the rest of the batch — later
+			// documents that CAN route still print, one at a time.
 			task.waitReason = reason;
 			continue;
 		}
 
 		console.log(
 			`[Engine] dispatch ${task.id} → "${device}" (mode=${task.mode}` +
-				`${task.overrideDevice ? ", override" : `, load=${registry.loadOf(device)}`})`
+				`${task.sequential ? ", seq" : ""}${task.overrideDevice ? ", override" : `, load=${registry.loadOf(device)}`})`
 		);
 		claimAndDispatch(task, device);
+		if (task.sequential) busyJobs.add(task.jobId);
 	}
 	emit();
 }
@@ -735,7 +770,16 @@ function onJobsReconciled(jobs) {
 
 // ── commands (IPC surface) ───────────────────────────────────────────────────
 
-// "Print all" / "Print (n docs)" — every unprinted document of the job.
+// Part 2 — "Print all" / "Print (n docs)". Moves the WHOLE job to "printing" on
+// the backend, then queues every unprinted document as a SEQUENTIAL batch: the
+// task list is the job's own state array, and the scheduler feeds the printer
+// one document at a time — the next is sent only after the previous settles,
+// never dumping the whole job into the Windows spool queue at once.
+//   • dropdown printer chosen → every document goes to that device;
+//   • plain click             → each document, when its turn comes, is routed to
+//     the least-loaded printer of its matching service (registry.choosePrinter).
+// A mid-batch failure flags that document (Part 1 rules — never fails the job)
+// and the batch continues with the next one.
 async function printJob(jobId, deviceName = null) {
 	const job = getJobs().find((j) => j._id === jobId);
 	if (!job) return { success: false, message: "job not found" };
@@ -746,7 +790,7 @@ async function printJob(jobId, deviceName = null) {
 		return { success: false, message: "could not move the job to printing" };
 	}
 
-	addTasks(job, "manual", deviceName, { explicit: true });
+	addTasks(job, "manual", deviceName, { explicit: true, sequential: true });
 	schedule();
 	return { success: true };
 }
