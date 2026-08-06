@@ -1,6 +1,7 @@
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import ConfirmDialog from "./components/ConfirmDialog";
+import { collectBlockedKeys } from "./jobUtils";
 
 // Thin mirror of the main-process print engine. ALL orchestration — service
 // routing, the per-printer queue, spooler verification, retries, backend
@@ -82,6 +83,64 @@ export function AutoPrintProvider({ children }) {
 			localStorage.removeItem(LEGACY_PROGRESS_KEY);
 		}
 	}, []);
+
+	// ── failure alert sound ─────────────────────────────────────────────────────
+	// Sounded when a document becomes BLOCKED — a failed print, a cancelled PDF
+	// save, or a routing gap (getBlockedReason). Deliberately NOT tied to the
+	// job-level "failed" PATCH: that is the operator's own deliberate action and
+	// needs no alerting. This lives here rather than in the document card so a
+	// failure is heard even when its job isn't the one selected on screen.
+	const errorSoundRef = useRef(null);
+	const blockedKeysRef = useRef(null); // null until the first snapshot is seen
+
+	useEffect(() => {
+		let cancelled = false;
+		let objectUrl = null;
+
+		// Same blob-URL approach as the new-job "pop" (JobsContext): playing the
+		// file straight from its URL fails in Electron with
+		// ERR_CACHE_OPERATION_NOT_SUPPORTED.
+		fetch("sounds/error-popup.mp3")
+			.then((res) => res.blob())
+			.then((blob) => {
+				if (cancelled) return;
+				objectUrl = URL.createObjectURL(blob);
+				const sound = new Audio(objectUrl);
+				sound.volume = 0.7;
+				errorSoundRef.current = sound;
+			})
+			.catch((err) => console.warn("[Renderer] failed to load error sound:", err.message));
+
+		return () => {
+			cancelled = true;
+			if (objectUrl) URL.revokeObjectURL(objectUrl);
+		};
+	}, []);
+
+	useEffect(() => {
+		const current = collectBlockedKeys(snapshot);
+		const previous = blockedKeysRef.current;
+		blockedKeysRef.current = current;
+
+		// First snapshot only seeds the baseline — documents already failed when
+		// the dashboard mounts (e.g. after a restart) must not sound an alert.
+		if (previous === null) return;
+
+		// Fire once per burst, however many documents newly failed.
+		let isNew = false;
+		for (const key of current) {
+			if (!previous.has(key)) {
+				isNew = true;
+				break;
+			}
+		}
+		if (!isNew) return;
+
+		const sound = errorSoundRef.current;
+		if (!sound) return;
+		sound.currentTime = 0;
+		sound.play().catch((err) => console.warn("[Renderer] error sound blocked:", err.message));
+	}, [snapshot]);
 
 	// ── toasts (engine notifications) ───────────────────────────────────────────
 	const [toasts, setToasts] = useState([]);

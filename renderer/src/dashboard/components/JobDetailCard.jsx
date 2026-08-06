@@ -10,7 +10,7 @@ import {
 	AlertFilledIcon,
 } from "../icons";
 import { useFiles } from "../FilesContext";
-import { getJobPrintMode, getJobTotalPages } from "../jobUtils";
+import { getJobPrintMode, getJobTotalPages, getBlockedReason } from "../jobUtils";
 import PrintSplitButton from "./PrintSplitButton";
 
 function sidednessLabel(value) {
@@ -117,23 +117,12 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 	const queued = state?.status === "waiting";
 
 	// A document is BLOCKED when it will not print without the operator doing
-	// something. Three causes, each with its own explanation, but all three get
-	// the same treatment: a warning glyph instead of the tick, the action button
-	// in accent orange, and the job-level "mark failed" escape hatch. None of
-	// them ever fails the job on its own.
-	//   "print"      — the print attempt failed outright.
-	//   "pdf-cancel" — the operator dismissed the Print-to-PDF save dialog.
-	//   "route"      — no enabled service printer matches these settings.
-	const blockedReason =
-		printed || printingNow
-			? null
-			: state?.status === "failed"
-				? state?.failureReason === "pdf-cancel"
-					? "pdf-cancel"
-					: "print"
-				: queued && state?.waitReason === "route"
-					? "route"
-					: null;
+	// something (see getBlockedReason for the three causes). All three get the
+	// same treatment: a warning glyph instead of the tick, the action button in
+	// accent orange, and the job-level "mark failed" escape hatch. None of them
+	// ever fails the job on its own. AutoPrintContext sounds the alert off the
+	// same helper.
+	const blockedReason = getBlockedReason(state, printed);
 	const blocked = !!blockedReason;
 	return (
 		<div

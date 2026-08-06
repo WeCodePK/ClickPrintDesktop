@@ -71,6 +71,46 @@ export function getJobTotalPages(entry) {
 	return any ? total : null;
 }
 
+// Why a document can't print without the operator doing something, derived from
+// the engine's per-file state. Returns null when nothing is wrong.
+//   "print"      — the print attempt failed outright.
+//   "pdf-cancel" — the operator dismissed the Print-to-PDF save dialog.
+//   "route"      — no enabled service printer matches these settings.
+// Shared by the document card (which renders the warning) and AutoPrintContext
+// (which sounds the alert), so the two can never disagree about what counts as
+// a failure. Note none of these is the job-level "failed" PATCH — that is only
+// ever the operator's explicit "mark entire job as failed".
+export function getBlockedReason(state, printed = false) {
+	if (printed) return null;
+	if (state?.status === "printing" || state?.status === "verifying") return null;
+	if (state?.status === "failed") {
+		return state?.failureReason === "pdf-cancel" ? "pdf-cancel" : "print";
+	}
+	if (state?.status === "waiting" && state?.waitReason === "route") return "route";
+	return null;
+}
+
+// Every currently-blocked document in an engine snapshot, as "jobId:fileId"
+// keys. Comparing successive results is how AutoPrintContext spots a NEW
+// failure to alert on. A routing gap is only believed once the routing table
+// has loaded — before that every task reports "route" merely because no
+// services are known yet, which would cry wolf on startup.
+export function collectBlockedKeys(snapshot) {
+	const keys = new Set();
+	const files = snapshot?.files || {};
+	for (const jobId of Object.keys(files)) {
+		const byFile = files[jobId] || {};
+		for (const fileId of Object.keys(byFile)) {
+			const printed = !!snapshot?.printedFiles?.[jobId]?.[fileId];
+			const reason = getBlockedReason(byFile[fileId], printed);
+			if (!reason) continue;
+			if (reason === "route" && !snapshot?.routingLoaded) continue;
+			keys.add(`${jobId}:${fileId}`);
+		}
+	}
+	return keys;
+}
+
 export function getJobPrintMode(entry, isShort = false) {
 	const files = entry.files || [];
 	if (files.length === 0) {
