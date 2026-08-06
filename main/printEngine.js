@@ -874,8 +874,9 @@ function setPaused(paused) {
 }
 
 function setAutoPrint(enabled) {
+	// Deliberately NOT persisted — see start(). Unattended printing is only ever
+	// armed by a present operator, for the session they're in.
 	engine.autoPrint = !!enabled;
-	store.set("autoPrint", engine.autoPrint);
 	if (engine.autoPrint) {
 		// Enqueue the current backlog immediately (chosen behavior).
 		const activeJobs = getJobs().filter((j) => ACTIVE_STATUSES.has(j.status));
@@ -1000,7 +1001,13 @@ function start() {
 	if (engine.running) return;
 	console.log("[Engine] starting");
 	engine.running = true;
-	engine.autoPrint = store.get("autoPrint") === true;
+	// Automated printing NEVER survives a session: an app restart (or a fresh
+	// login) always comes up with it off. It prints unattended and costs the
+	// customer money, so arming it must be a deliberate act by an operator who is
+	// actually present — never something the app silently resumes on launch.
+	// The key is also cleared so a value persisted by an older build can't leak in.
+	engine.autoPrint = false;
+	store.remove("autoPrint");
 	engine.paused = false;
 	engine.initialized = false;
 	loadPrintedFiles();
@@ -1026,6 +1033,7 @@ function stop() {
 	_spoolLocks.clear();
 	registry.reset();
 	engine.requeuePrompt = null;
+	engine.autoPrint = false; // disarmed on logout too, not just app restart
 	engine.paused = false;
 	engine.initialized = false;
 	engine.seenJobs.clear();
