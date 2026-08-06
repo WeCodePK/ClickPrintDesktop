@@ -596,24 +596,20 @@ async function handleDispatchFailure(task, device, err) {
 	console.warn(`[Engine] print failed for ${task.id} on "${device}":`, err.message);
 	if (!engine.running || !engine.tasks.includes(task)) return; // job dropped meanwhile
 
-	if (err.message === "pdf save cancelled") {
-		// Operator dismissed the Save dialog — operator-side, never a refund. Still
-		// a failure for the batch: printing stops here ("whatever reason").
-		task.status = "failed";
-		task.failureReason = "pdf-cancel";
-		task.device = null;
-		haltSequentialBatch(task);
-		toast({ kind: "pdf-cancel", jobId: task.jobId, fileName: task.fileName });
-		return;
+	// A dismissed Print-to-PDF save dialog is operator-side, not a printer fault —
+	// so it isn't recorded as an attempt (there's no bad printer to steer away
+	// from) and it gets its own message. Everything after that is identical: it
+	// stops the job's printing exactly like any other failure.
+	const pdfCancelled = err.message === "pdf save cancelled";
+	if (!pdfCancelled) {
+		// Recorded so an operator-initiated retry is steered away from the printer
+		// that just failed this document (schedule() passes it to choosePrinter as
+		// `exclude`). It is NOT a retry counter — a failure is always permanent.
+		task.attempts.push({ device, error: err.message, at: Date.now() });
 	}
 
-	// Recorded so an operator-initiated retry is steered away from the printer
-	// that just failed this document (schedule() passes it to choosePrinter as
-	// `exclude`). It is NOT a retry counter — a failure is always permanent.
-	task.attempts.push({ device, error: err.message, at: Date.now() });
-
 	task.status = "failed";
-	task.failureReason = "print";
+	task.failureReason = pdfCancelled ? "pdf-cancel" : "print";
 	task.device = null;
 
 	// The job is NEVER failed automatically, in either mode — not even when the
@@ -621,20 +617,28 @@ async function handleDispatchFailure(task, device, err) {
 	// forceFailJob, the operator's explicit control.
 	if (task.mode === "auto") {
 		// Part 3: unattended printing stops for THIS job the moment a document
-		// fails. There is no retry — a failure means paper, toner or the printer
-		// itself needs a human, and the rest of the queue must not keep feeding a
-		// broken printer. The job's remaining documents stay queued (held by the
-		// pause) so resuming continues where it left off; the failed document
+		// fails. There is no retry — a failure means paper, toner, a dismissed save
+		// dialog or the printer itself needs a human, and the rest of the queue must
+		// not keep feeding it. The job's remaining documents stay queued (held by
+		// the pause) so resuming continues where it left off; the failed document
 		// waits for the operator to retry it by hand.
 		engine.autoPausedJobs.set(task.jobId, "failure");
 		console.log(`[Engine] ${task.id} failed — automated printing paused for job ${task.jobId} (needs attention)`);
-		toast({ kind: "auto-paused-failure", jobId: task.jobId, fileName: task.fileName, who: jobWho(getJobs().find((j) => j._id === task.jobId)) });
+		toast(
+			pdfCancelled
+				? { kind: "pdf-cancel", jobId: task.jobId, fileName: task.fileName }
+				: { kind: "auto-paused-failure", jobId: task.jobId, fileName: task.fileName, who: jobWho(getJobs().find((j) => j._id === task.jobId)) }
+		);
 	} else {
 		// Manual print: the document is flagged and a print-all batch stops here
 		// (its remaining documents are withdrawn — see haltSequentialBatch).
 		console.log(`[Engine] ${task.id} failed permanently — awaiting operator (job left untouched)`);
 		haltSequentialBatch(task);
-		toast({ kind: "doc-failed-print", jobId: task.jobId, fileName: task.fileName });
+		toast(
+			pdfCancelled
+				? { kind: "pdf-cancel", jobId: task.jobId, fileName: task.fileName }
+				: { kind: "doc-failed-print", jobId: task.jobId, fileName: task.fileName }
+		);
 	}
 	jobsChanged();
 }

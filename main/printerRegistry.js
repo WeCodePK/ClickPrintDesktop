@@ -274,9 +274,10 @@ function choosePrinter(settings, { mode = "manual", overrideDevice = null, exclu
 
 	const configured = service.devices.filter((d) => {
 		if (d.isDisabled) return false;
-		// Automated printing never targets a Print-to-PDF pseudo-printer: its Save
-		// dialog would block the unattended queue.
-		if (mode === "auto" && (!d.useAuto || isPdfDevice(d.name))) return false;
+		// Print-to-PDF is eligible for automated printing like any other printer the
+		// operator marked useAuto. Note it prints by asking for a save location
+		// (files.savePdfCopy), so an unattended queue will wait on that dialog.
+		if (mode === "auto" && !d.useAuto) return false;
 		return true;
 	});
 	if (configured.length === 0) return { device: null, reason: "route" };
@@ -337,13 +338,12 @@ function getDeviceLoads() {
 	return out;
 }
 
-// True when at least one enabled service has an automated, enabled, non-PDF
-// printer registered. Gates the auto-print toggle; deliberately ignores
-// online-ness so a briefly powered-off printer doesn't disable the feature.
+// True when at least one enabled service has an automated, enabled printer
+// registered — Print-to-PDF included. Gates the auto-print toggle; deliberately
+// ignores online-ness so a briefly powered-off printer doesn't disable the
+// feature.
 function hasAutoRoute() {
-	return _services.some(
-		(s) => !s.isDisabled && s.devices.some((d) => d.useAuto && !d.isDisabled && !isPdfDevice(d.name))
-	);
+	return _services.some((s) => !s.isDisabled && s.devices.some((d) => d.useAuto && !d.isDisabled));
 }
 
 function reset() {
