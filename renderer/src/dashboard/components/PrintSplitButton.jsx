@@ -14,9 +14,7 @@ function PrintSplitButton({
 	onOpen,
 	printers = [],
 	disabled = false,
-	busy = false,
 	label,
-	busyLabel = "Printing…",
 	size = "md",
 	showInfo = false,
 	// Replaces the default "Routed by service" helper line; `infoActive` gives it
@@ -87,22 +85,15 @@ function PrintSplitButton({
 							type="button"
 							className="print-split__main"
 							onClick={() => onPrint(undefined)}
-							disabled={disabled || busy}
+							disabled={disabled}
 						>
-							{busy ? (
-								<>
-									<div className="spinner spinner--dark" style={{ borderTopColor: "#111b21", width: "14px", height: "14px" }} />
-									{busyLabel}
-								</>
-							) : (
-								label
-							)}
+							{label}
 						</button>
 						<button
 							type="button"
 							className="print-split__toggle"
 							onClick={() => (open ? setOpen(false) : openMenu())}
-							disabled={disabled || busy || printers.length === 0}
+							disabled={disabled || printers.length === 0}
 							aria-label="Print to a different printer"
 							title="Print to a different printer"
 						>

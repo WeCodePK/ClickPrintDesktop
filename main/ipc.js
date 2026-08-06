@@ -322,9 +322,16 @@ function registerIpcHandlers(getMainWindow) {
 		return engine.setAutoPrint(enabled);
 	});
 
-	ipcMain.handle("engine:requeue-decision", async (_event, accept) => {
-		console.log("[IPC] engine:requeue-decision →", !!accept);
-		return engine.resolveRequeue(!!accept);
+	// Per-job automated-printing switch (holds only that job's auto queue).
+	ipcMain.handle("engine:set-job-autopause", async (_event, jobId, paused) => {
+		console.log(`[IPC] engine:set-job-autopause → ${jobId} (${!!paused})`);
+		return engine.setJobAutoPaused(jobId, !!paused);
+	});
+
+	// Answer to "automated printing was on last session — resume it?".
+	ipcMain.handle("engine:resume-decision", async (_event, accept) => {
+		console.log("[IPC] engine:resume-decision →", !!accept);
+		return engine.resolveResumePrompt(!!accept);
 	});
 
 	ipcMain.handle("engine:refresh-routing", async () => {

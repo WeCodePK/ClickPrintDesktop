@@ -24,30 +24,32 @@ const { getJobs } = require("./state");
 //    spread across a service's printers instead of waiting for one to go idle.
 //    Only the spool step is serialised per printer — see withSpoolLock — because
 //    the spooler identifies our job by diffing the queue around a single spool.
-//  - Print-all (Part 2) is SEQUENTIAL per job: its tasks carry `sequential` and
-//    the scheduler holds each one back until the job has nothing at a printer.
-//    The task list is the job's own queue — documents reach the Windows spooler
-//    one at a time, each picking its printer (override, or choosePrinter's
-//    least-loaded match) at ITS dispatch moment, not all up front.
+//  - Print-all (Part 2) and automated printing (Part 3) are both SEQUENTIAL per
+//    job: those tasks carry `sequential` and the scheduler holds each one back
+//    until the job has nothing at a printer. The task list is the job's own
+//    queue — documents reach the Windows spooler one at a time, each picking its
+//    printer (override, or choosePrinter's least-loaded match) at ITS dispatch
+//    moment, not all up front.
 //  - "Printed" means verified against the Windows spooler (files.printAndVerify),
 //    not merely spooled.
-//  - Failure policy differs by mode, deliberately:
-//      manual ("Print" on a document) — a permanent failure NEVER fails the job.
-//        The document is flagged, the operator gets a Retry button and an
-//        explicit "mark job failed" control. Only that control refunds.
-//      auto  — a permanent failure auto-fails the WHOLE job (customer refund);
-//        unattended printing can't leave money silently lost.
-//    Never auto-failed in either mode: a cancelled Print-to-PDF save dialog and
-//    routing gaps (operator-side config issues).
+//  - Failure policy — a failure is ALWAYS permanent (never retried behind the
+//    operator's back) and NEVER fails the job:
+//      manual — the document is flagged; a print-all batch stops there. The
+//        operator retries it or fails the job explicitly.
+//      auto   — automated printing is paused for that job (autoPausedJobs), which
+//        surfaces it as needing attention and restores its manual controls.
+//    The refund PATCH has exactly one trigger in the whole engine: forceFailJob,
+//    the operator's "mark entire job as failed" control.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ACTIVE_STATUSES = new Set(["draft", "submitted", "queued", "processing", "printing"]);
 const ROUTING_POLL_MS = 20000;
 const PRINTED_STORE_KEY = "printedFiles";
-// One attempt, full stop. A failed print is never retried automatically — the
-// operator decides, via the document's Retry button. Retrying behind their back
-// risks a second sheet coming out of a printer they're already attending to.
-const MAX_ATTEMPTS = 1;
+// Remembers ACROSS sessions that automated printing was armed when the app last
+// closed. It never re-arms anything by itself — it only decides whether the next
+// launch offers to resume (see resumePrompt). Distinct from the old "autoPrint"
+// key, which silently restored the on/off state.
+const AUTO_PRINT_ARMED_KEY = "autoPrintArmed";
 
 const isPdfDevice = registry.isPdfDevice;
 
@@ -86,7 +88,10 @@ const engine = {
 	running: false,
 	autoPrint: false,
 	paused: false,
-	requeuePrompt: null, // null | { jobIds: [...] }
+	// null | { pendingJobs: n } — set on the first reconcile of a session when
+	// automated printing was armed last time. Purely a question for the operator;
+	// nothing prints until they answer yes.
+	resumePrompt: null,
 
 	// Routing table (the resolved service → printer structure and each printer's
 	// queue live in printerRegistry; these are the raw inputs it's built from).
@@ -108,8 +113,15 @@ const engine = {
 	printingPatches: new Map(), // jobId -> in-flight ensureJobPrinting promise
 	overrides: new Map(), // jobId -> locally-applied status, until SSE confirms
 
+	// jobId -> "operator" | "failure". Automated printing is held for these jobs
+	// only; the rest of the queue keeps flowing. "failure" means a document of
+	// that job failed and it now needs manual intervention — the engine never
+	// retries and never fails the job on its own, so it parks the job here and
+	// surfaces it to the operator.
+	autoPausedJobs: new Map(),
+
 	seenJobs: new Set(), // jobIds already considered for auto-enqueue
-	initialized: false, // first reconcile handled (requeue prompt decided)
+	initialized: false, // first reconcile handled (resume prompt decided)
 };
 
 let _getMainWindow = null;
@@ -131,6 +143,8 @@ function getSnapshot() {
 			waitReason: task.status === "waiting" ? task.waitReason : null,
 			failureReason: task.failureReason,
 			device: task.device,
+			mode: task.mode, // "auto" | "manual" — lets the UI tell an auto hold
+			// from an operator batch (only the latter offers Stop).
 		};
 		if (
 			(task.status === "waiting" || task.status === "printing" || task.status === "verifying") &&
@@ -145,14 +159,12 @@ function getSnapshot() {
 		paused: engine.paused,
 		routingLoaded: engine.routingLoaded,
 		autoRouteReady: registry.hasAutoRoute(),
-		requeuePrompt: engine.requeuePrompt,
+		resumePrompt: engine.resumePrompt,
+		// { [jobId]: "operator" | "failure" } — automated printing held per job.
+		autoPaused: Object.fromEntries(engine.autoPausedJobs),
 		queuedJobIds,
 		printedFiles: engine.printedFiles,
 		files: fileMap,
-		// Live per-printer load: { device: { load, foreign, online, queue: [...] } }
-		printers: registry.getDeviceLoads(),
-		// The services → printers → queue structure, for the printer/queue views.
-		registry: registry.getSnapshot(),
 	};
 }
 
@@ -333,6 +345,7 @@ function addTasks(job, mode, overrideDevice = null, { onlyFileId = null, explici
 // printer-queue entries go with them so load balancing stops counting them.
 function dropJobTasks(jobId) {
 	engine.tasks = engine.tasks.filter((t) => t.jobId !== jobId);
+	engine.autoPausedJobs.delete(jobId); // nothing left to hold back
 	registry.dropJob(jobId);
 }
 
@@ -378,8 +391,15 @@ function schedule() {
 
 	for (const task of engine.tasks) {
 		if (task.status !== "waiting") continue;
-		// Pausing holds the automated queue only — an explicit operator print must
-		// still go through.
+		// Automated printing held for THIS job (operator switch, or a failure that
+		// needs manual intervention). Manual prints are unaffected — that is how
+		// the operator intervenes.
+		if (task.mode === "auto" && engine.autoPausedJobs.has(task.jobId)) {
+			task.waitReason = "job-paused";
+			continue;
+		}
+		// Global pause holds the automated queue only — an explicit operator print
+		// must still go through.
 		if (engine.paused && task.mode === "auto") {
 			task.waitReason = "paused";
 			continue;
@@ -587,37 +607,36 @@ async function handleDispatchFailure(task, device, err) {
 		return;
 	}
 
+	// Recorded so an operator-initiated retry is steered away from the printer
+	// that just failed this document (schedule() passes it to choosePrinter as
+	// `exclude`). It is NOT a retry counter — a failure is always permanent.
 	task.attempts.push({ device, error: err.message, at: Date.now() });
-
-	// MAX_ATTEMPTS is 1, so this never fires today — kept so the policy lives in
-	// one constant rather than being baked into the control flow.
-	if (task.attempts.length < MAX_ATTEMPTS) {
-		console.log(`[Engine] retrying ${task.id} (attempt ${task.attempts.length + 1}/${MAX_ATTEMPTS})`);
-		task.status = "waiting";
-		task.waitReason = null;
-		task.device = null;
-		return;
-	}
 
 	task.status = "failed";
 	task.failureReason = "print";
 	task.device = null;
 
-	// Manual print (Part 1): the DOCUMENT is flagged and the operator decides what
-	// happens next — retry, or explicitly mark the job failed. The job is never
-	// auto-failed here, not even when it's the job's only document; the refund
-	// PATCH belongs solely to forceFailJob. A print-all batch stops at the
-	// failure — nothing further prints until the operator acts.
-	if (task.mode !== "auto") {
+	// The job is NEVER failed automatically, in either mode — not even when the
+	// failed document is the job's only one. The refund PATCH belongs solely to
+	// forceFailJob, the operator's explicit control.
+	if (task.mode === "auto") {
+		// Part 3: unattended printing stops for THIS job the moment a document
+		// fails. There is no retry — a failure means paper, toner or the printer
+		// itself needs a human, and the rest of the queue must not keep feeding a
+		// broken printer. The job's remaining documents stay queued (held by the
+		// pause) so resuming continues where it left off; the failed document
+		// waits for the operator to retry it by hand.
+		engine.autoPausedJobs.set(task.jobId, "failure");
+		console.log(`[Engine] ${task.id} failed — automated printing paused for job ${task.jobId} (needs attention)`);
+		toast({ kind: "auto-paused-failure", jobId: task.jobId, fileName: task.fileName, who: jobWho(getJobs().find((j) => j._id === task.jobId)) });
+	} else {
+		// Manual print: the document is flagged and a print-all batch stops here
+		// (its remaining documents are withdrawn — see haltSequentialBatch).
 		console.log(`[Engine] ${task.id} failed permanently — awaiting operator (job left untouched)`);
 		haltSequentialBatch(task);
 		toast({ kind: "doc-failed-print", jobId: task.jobId, fileName: task.fileName });
-		jobsChanged();
-		return;
 	}
-
-	// Unattended printing: a permanent failure fails the whole job (refund).
-	await autoFailJob(task.jobId);
+	jobsChanged();
 }
 
 // ── backend transitions ──────────────────────────────────────────────────────
@@ -763,6 +782,10 @@ function onJobsReconciled(jobs) {
 			if (!byId.has(jobId)) set.delete(jobId);
 		}
 	}
+	// A job that's gone or terminal no longer needs attention.
+	for (const jobId of [...engine.autoPausedJobs.keys()]) {
+		if (!activeIds.has(jobId)) engine.autoPausedJobs.delete(jobId);
+	}
 
 	// Prune persisted progress for jobs no longer present.
 	let progressChanged = false;
@@ -777,23 +800,29 @@ function onJobsReconciled(jobs) {
 	const activeJobs = jobs.filter((j) => ACTIVE_STATUSES.has(effectiveStatus(j)));
 
 	if (!engine.initialized) {
-		// First reconcile after start: never auto-print leftovers silently — the
-		// operator decides via the requeue prompt (files may have printed while
-		// the app was closed).
+		// First reconcile after start. Marking every active job "seen" here is what
+		// stops the backlog printing itself the moment auto-print is armed later.
 		engine.initialized = true;
 		activeJobs.forEach((j) => engine.seenJobs.add(j._id));
-		if (engine.autoPrint) {
-			const leftovers = activeJobs
-				.filter((j) => jobFileList(j).some((f) => !isFilePrinted(j._id, f.fileId)))
-				.map((j) => j._id);
-			if (leftovers.length) engine.requeuePrompt = { jobIds: leftovers };
+
+		// Automated printing never resumes on its own. If it was armed when the app
+		// last closed, ASK — with the number of jobs that would start printing
+		// immediately, since some may have printed just before the app closed.
+		if (!engine.autoPrint && store.get(AUTO_PRINT_ARMED_KEY) === true) {
+			const pendingJobs = activeJobs.filter((j) =>
+				jobFileList(j).some((f) => !isFilePrinted(j._id, f.fileId))
+			).length;
+			engine.resumePrompt = { pendingJobs };
+			console.log(`[Engine] automated printing was on last session — asking to resume (${pendingJobs} job(s) pending)`);
 		}
 	} else if (engine.autoPrint) {
 		// Auto-enqueue jobs that arrived while enabled.
 		for (const job of activeJobs) {
 			if (engine.seenJobs.has(job._id)) continue;
 			engine.seenJobs.add(job._id);
-			addTasks(job, "auto");
+			// Sequential, exactly like Print-all: one document at a printer at a
+			// time, each routed by choosePrinter when its turn comes.
+			addTasks(job, "auto", null, { sequential: true });
 		}
 	}
 
@@ -874,15 +903,20 @@ function setPaused(paused) {
 }
 
 function setAutoPrint(enabled) {
-	// Deliberately NOT persisted — see start(). Unattended printing is only ever
-	// armed by a present operator, for the session they're in.
 	engine.autoPrint = !!enabled;
+	// The on/off STATE is never restored (see start()); only the fact that it was
+	// armed is remembered, so the next launch can offer to resume. Switching it
+	// off is a deliberate disarm and forgets that.
+	if (engine.autoPrint) store.set(AUTO_PRINT_ARMED_KEY, true);
+	else store.remove(AUTO_PRINT_ARMED_KEY);
 	if (engine.autoPrint) {
 		// Enqueue the current backlog immediately (chosen behavior).
 		const activeJobs = getJobs().filter((j) => ACTIVE_STATUSES.has(j.status));
 		for (const job of activeJobs) {
 			engine.seenJobs.add(job._id);
-			addTasks(job, "auto");
+			// Sequential, exactly like Print-all: one document at a printer at a
+			// time, each routed by choosePrinter when its turn comes.
+			addTasks(job, "auto", null, { sequential: true });
 		}
 		schedule();
 	} else {
@@ -893,19 +927,53 @@ function setAutoPrint(enabled) {
 	return { success: true };
 }
 
-function resolveRequeue(accept) {
-	const prompt = engine.requeuePrompt;
-	engine.requeuePrompt = null;
-	if (prompt) {
-		for (const jobId of prompt.jobIds) {
+// The operator's answer to "automated printing was on last time — resume it?".
+// Yes re-arms it exactly as if they'd flipped the switch themselves, which also
+// enqueues whatever is currently unprinted. No leaves it off and forgets that it
+// was ever armed, so the next launch doesn't ask again.
+// Per-job master switch for automated printing (Part 3). Pausing holds only this
+// job's automated documents — the rest of the queue keeps printing. While paused
+// the job's manual controls come back, which is how the operator intervenes on a
+// job the engine parked after a failure. Resuming continues from where it
+// stopped; a document that already failed is NOT retried by this — the operator
+// retries it explicitly.
+function setJobAutoPaused(jobId, paused) {
+	if (paused) {
+		// An operator pause must never downgrade a failure park — the job still
+		// needs attention either way.
+		if (!engine.autoPausedJobs.has(jobId)) engine.autoPausedJobs.set(jobId, "operator");
+	} else {
+		engine.autoPausedJobs.delete(jobId);
+		// Re-arm the job's automated queue. Its held documents may have been
+		// withdrawn while it was parked (the Stop control, a decline that was
+		// refused, …), and onJobsReconciled will NOT re-add them because the job is
+		// already in seenJobs — so resuming has to do it, or the remaining
+		// documents would be stranded with no way back into the auto queue.
+		// addTasks is non-explicit here: existing tasks (including the failed one)
+		// are left exactly as they are, and printed documents are skipped.
+		if (engine.autoPrint) {
 			const job = getJobs().find((j) => j._id === jobId);
-			if (job) addTasks(job, "auto");
+			if (job) addTasks(job, "auto", null, { sequential: true });
 		}
-		// "Not now" keeps the queue but paused — the operator reviews first.
-		engine.paused = !accept;
-		schedule();
 	}
+	console.log(`[Engine] automated printing ${paused ? "paused" : "resumed"} for job ${jobId}`);
+	schedule();
 	emit();
+	return { success: true };
+}
+
+function resolveResumePrompt(accept) {
+	if (!engine.resumePrompt) return { success: true };
+	engine.resumePrompt = null;
+
+	if (accept) {
+		console.log("[Engine] operator resumed automated printing");
+		setAutoPrint(true); // arms it, enqueues the backlog, emits
+	} else {
+		console.log("[Engine] operator declined to resume automated printing");
+		store.remove(AUTO_PRINT_ARMED_KEY);
+		emit();
+	}
 	return { success: true };
 }
 
@@ -1001,12 +1069,15 @@ function start() {
 	if (engine.running) return;
 	console.log("[Engine] starting");
 	engine.running = true;
-	// Automated printing NEVER survives a session: an app restart (or a fresh
+	// Automated printing NEVER resumes by itself: an app restart (or a fresh
 	// login) always comes up with it off. It prints unattended and costs the
-	// customer money, so arming it must be a deliberate act by an operator who is
-	// actually present — never something the app silently resumes on launch.
-	// The key is also cleared so a value persisted by an older build can't leak in.
+	// customer money, so re-arming it must be a deliberate act by an operator who
+	// is actually present. If it WAS armed last session the first reconcile offers
+	// to resume it (see onJobsReconciled / resolveResumePrompt).
+	// "autoPrint" is the legacy key from builds that silently restored the state —
+	// dropped so it can never leak back in.
 	engine.autoPrint = false;
+	engine.resumePrompt = null;
 	store.remove("autoPrint");
 	engine.paused = false;
 	engine.initialized = false;
@@ -1032,11 +1103,15 @@ function stop() {
 	engine.tasks = [];
 	_spoolLocks.clear();
 	registry.reset();
-	engine.requeuePrompt = null;
-	engine.autoPrint = false; // disarmed on logout too, not just app restart
+	engine.resumePrompt = null;
+	// Disarmed in memory on logout too — but the persisted "was armed" marker is
+	// deliberately left alone, so logging back in offers to resume just like a
+	// restart does.
+	engine.autoPrint = false;
 	engine.paused = false;
 	engine.initialized = false;
 	engine.seenJobs.clear();
+	engine.autoPausedJobs.clear();
 	engine.jobsMarkedPrinting.clear();
 	engine.jobsCompleting.clear();
 	engine.jobsFailing.clear();
@@ -1054,14 +1129,14 @@ module.exports = {
 	getSnapshot,
 	refreshRouting,
 	reconcilePrinterQueues,
-	getRegistrySnapshot: registry.getSnapshot,
 	migrateProgress,
 	printJob,
 	printFile,
 	stopJobBatch,
 	setPaused,
 	setAutoPrint,
-	resolveRequeue,
+	resolveResumePrompt,
+	setJobAutoPaused,
 	declineJob,
 	completeJob,
 	forceFailJob,

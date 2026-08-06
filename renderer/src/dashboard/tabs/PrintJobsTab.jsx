@@ -27,8 +27,6 @@ function PrintJobsTab() {
 		queueInfoFor,
 		printedFiles,
 		fileStates,
-		failedFilesFor,
-		jobBusy,
 		jobPrintingNow,
 		failJob,
 		declineJob,
@@ -37,6 +35,11 @@ function PrintJobsTab() {
 		printAllManual,
 		stopPrintJob,
 		jobHasQueuedDocs,
+		jobHasQueuedManualDocs,
+		jobAutoPaused,
+		jobNeedsAttention,
+		jobAutoActive,
+		setJobAutoPaused,
 		refreshPrinterState,
 	} = useAutoPrint();
 
@@ -166,6 +169,9 @@ function PrintJobsTab() {
 				</span>
 			);
 		}
+		if (info.state === "attention") {
+			return <span className="db-entry__queue db-entry__queue--attention">Needs attention</span>;
+		}
 		if (info.state === "paused") {
 			return <span className="db-entry__queue db-entry__queue--paused">Paused</span>;
 		}
@@ -174,6 +180,44 @@ function PrintJobsTab() {
 		}
 		return <span className="db-entry__queue">In queue · Nº{info.place}</span>;
 	};
+
+	const renderEntry = (entry) => {
+		const queueIndex = entries.indexOf(entry);
+		const attention = jobNeedsAttention(entry._id);
+		return (
+			<button
+				key={entry._id}
+				className={`db-entry db-entry--job ${selectedId === entry._id ? "db-entry--top" : ""} ${
+					attention ? "db-entry--attention" : ""
+				}`}
+				onClick={() => setSelectedId(entry._id)}
+			>
+				<span className="db-entry__qnum">{queueIndex + 1}</span>
+				<div className="db-entry__info">
+					<div className="db-entry__line">
+						<span className="db-entry__name">{entry.formattedNumber || "Unknown number"}</span>
+						<span className="db-entry__price">Rs. {entry.price}</span>
+					</div>
+					<div className="db-entry__line">
+						<span className="db-entry__sub">
+							{entry.createdBy?.name ? `${entry.createdBy.name} · ` : ""}
+							{entry.copies} {entry.copies === 1 ? "copy" : "copies"} · {getJobPrintMode(entry, true)} · {entry.filesCount} {entry.filesCount === 1 ? "file" : "files"}
+						</span>
+						<span className="db-entry__right">
+							<span className="db-entry__time">{entry.time}</span>
+							<span className={`db-entry__dot db-entry__dot--${entry.status}`} />
+						</span>
+					</div>
+					{autoPrintEnabled && queueLine(entry._id)}
+				</div>
+			</button>
+		);
+	};
+
+	// Jobs the engine parked after a failed document — automated printing is held
+	// on them and they need a human. Listed first, in their own section.
+	const attentionJobs = visible.filter((e) => jobNeedsAttention(e._id));
+	const queueJobs = visible.filter((e) => !jobNeedsAttention(e._id));
 
 	return (
 		<>
@@ -229,44 +273,31 @@ function PrintJobsTab() {
 						<p>{q ? "No jobs match that number" : "No active print jobs"}</p>
 					</div>
 				) : (
-					visible.map((entry) => {
-						const queueIndex = entries.indexOf(entry);
-						return (
-							<button
-								key={entry._id}
-								className={`db-entry db-entry--job ${selectedId === entry._id ? "db-entry--top" : ""}`}
-								onClick={() => setSelectedId(entry._id)}
-							>
-								<span className="db-entry__qnum">{queueIndex + 1}</span>
-								<div className="db-entry__info">
-									<div className="db-entry__line">
-										<span className="db-entry__name">{entry.formattedNumber || "Unknown number"}</span>
-										<span className="db-entry__price">Rs. {entry.price}</span>
-									</div>
-									<div className="db-entry__line">
-										<span className="db-entry__sub">
-											{entry.createdBy?.name ? `${entry.createdBy.name} · ` : ""}
-											{entry.copies} {entry.copies === 1 ? "copy" : "copies"} · {getJobPrintMode(entry, true)} · {entry.filesCount} {entry.filesCount === 1 ? "file" : "files"}
-										</span>
-										<span className="db-entry__right">
-											<span className="db-entry__time">{entry.time}</span>
-											<span className={`db-entry__dot db-entry__dot--${entry.status}`} />
-										</span>
-									</div>
-									{autoPrintEnabled && queueLine(entry._id)}
+					<>
+						{attentionJobs.length > 0 && (
+							<>
+								<div className="db-list__section db-list__section--attention">
+									<span className="db-list__section-title">Needs attention</span>
+									<span className="db-list__section-count">{attentionJobs.length}</span>
 								</div>
-							</button>
-						);
-					})
+								{attentionJobs.map(renderEntry)}
+								{queueJobs.length > 0 && (
+									<div className="db-list__section">
+										<span className="db-list__section-title">Queue</span>
+										<span className="db-list__section-count">{queueJobs.length}</span>
+									</div>
+								)}
+							</>
+						)}
+						{queueJobs.map(renderEntry)}
+					</>
 				)}
 			</ListColumn>
 
 			<div className="db-detail">
 				{selectedEntry ? (() => {
 					const jobPrinted = printedFiles[selectedEntry._id] || {};
-					const jobFailed = failedFilesFor(selectedEntry._id);
 					const jobStates = fileStates[selectedEntry._id] || {};
-					const busy = jobBusy(selectedEntry._id);
 					const remainingCount = (selectedEntry.files || []).filter((f) => !jobPrinted[f.fileId]).length;
 					// Destructive actions stay available while documents merely wait in
 					// the queue (declining drops them) — only an in-flight print locks them.
@@ -274,6 +305,12 @@ function PrintJobsTab() {
 					// Docs still queued → the header control renders as Stop; anything
 					// queued OR at a printer → the helper line reads "Printing…".
 					const hasQueued = jobHasQueuedDocs(selectedEntry._id);
+					// Automated printing drives this job only while it isn't paused for
+					// it. Paused (by the operator, or by the engine after a failure) →
+					// the manual controls come back so the operator can intervene.
+					const autoDriving = jobAutoActive(selectedEntry._id);
+					const autoHeld = autoPrintEnabled && jobAutoPaused(selectedEntry._id);
+					const needsAttention = jobNeedsAttention(selectedEntry._id);
 
 					return (
 						<JobDetailCard
@@ -281,13 +318,11 @@ function PrintJobsTab() {
 							onPreviewFile={handlePreviewFile}
 							onPrintFile={handlePrintFile}
 							printedFileIds={jobPrinted}
-							failedFileIds={jobFailed}
 							fileStates={jobStates}
 							onMarkJobFailed={() => failJob(selectedEntry)}
-							printingAll={busy}
 							printers={printers}
 							onPrinterMenuOpen={() => refreshPrinters(true)}
-							autoPrintOn={autoPrintEnabled}
+							autoPrintOn={autoDriving}
 							headerActions={
 								selectedEntry.status !== "completed" ? (
 									<>
@@ -307,14 +342,32 @@ function PrintJobsTab() {
 											<CheckIcon />
 											Mark as Complete
 										</button>
-										{autoPrintEnabled ? (
-											<span className="autoprint-tip" title="Automated printing is on — printing is handled automatically">
-												<button className="btn-gradient" disabled style={{ pointerEvents: "none" }}>
-													<PrinterIcon />
-													Auto-printing
-												</button>
-											</span>
-										) : (
+										{/* The per-job master switch replaces Print-all while
+										    automated printing is driving this job. */}
+										{autoDriving ? (
+											<button
+												className="btn-outline"
+												onClick={() => setJobAutoPaused(selectedEntry._id, true)}
+												title="Hold automated printing for this job only — the rest of the queue keeps printing"
+											>
+												<PauseIcon />
+												Pause auto-print
+											</button>
+										) : autoHeld ? (
+											<button
+												className={needsAttention ? "btn-outline btn-outline-danger" : "btn-outline"}
+												onClick={() => setJobAutoPaused(selectedEntry._id, false)}
+												title={
+													needsAttention
+														? "A document failed — fix the problem, then resume automated printing for this job"
+														: "Resume automated printing for this job"
+												}
+											>
+												<PlayIcon />
+												Resume auto-print
+											</button>
+										) : null}
+										{autoDriving ? null : (
 											// While the batch has queued docs the control is Stop; the
 											// running state lives in the helper line below the button
 											// (where "Routed by service" sits when idle). During the
@@ -329,7 +382,9 @@ function PrintJobsTab() {
 												showInfo
 												info={hasQueued || actionsLocked ? "Printing…" : undefined}
 												infoActive={hasQueued || actionsLocked}
-												stopMode={hasQueued}
+												// Stop belongs to an operator batch only — documents
+												// held by a per-job auto pause aren't running.
+												stopMode={jobHasQueuedManualDocs(selectedEntry._id)}
 												onStop={() => stopPrintJob(selectedEntry._id)}
 												label={
 													<>

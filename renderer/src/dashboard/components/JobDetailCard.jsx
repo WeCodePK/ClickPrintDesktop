@@ -94,10 +94,10 @@ function waitHint(waitReason) {
 	switch (waitReason) {
 		case "downloading":
 			return "Queued · downloading…";
-		case "no-free-printer":
-			return "Queued · waiting for a free printer";
 		case "paused":
 			return "Queued · automated printing paused";
+		case "job-paused":
+			return "Queued · automated printing paused for this job";
 		case "job-sequence":
 			// Print-all sends documents one at a time; this one is behind another.
 			return "Queued · next in line";
@@ -110,7 +110,7 @@ function waitHint(waitReason) {
 	}
 }
 
-function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, failed, onMarkJobFailed, printingAll, printers, onPrinterMenuOpen, autoPrintOn, state }) {
+function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, onMarkJobFailed, printers, onPrinterMenuOpen, autoPrintOn, state }) {
 	const settings = file.settings || {};
 	// Per-file engine state: "waiting" | "printing" | "verifying" | "printed" | "failed".
 	const printingNow = state?.status === "printing" || state?.status === "verifying";
@@ -297,7 +297,7 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, fa
 //   │    Cost    │                  │
 //   └────────────┴──────────────────┘
 
-function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showPreview = true, printedFileIds, failedFileIds, fileStates, onMarkJobFailed, printingAll, printers, onPrinterMenuOpen, autoPrintOn }) {
+function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showPreview = true, printedFileIds, fileStates, onMarkJobFailed, printers, onPrinterMenuOpen, autoPrintOn }) {
 	const files = entry.files || [];
 	const cost = entry.cost;
 	const totalPages = getJobTotalPages(entry);
@@ -399,9 +399,7 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showP
 								onPrint={onPrintFile}
 								showPreview={showPreview}
 								printed={!!printedFileIds?.[file.fileId]}
-								failed={!!failedFileIds?.[file.fileId]}
 								onMarkJobFailed={onMarkJobFailed}
-								printingAll={printingAll}
 								printers={printers}
 								onPrinterMenuOpen={onPrinterMenuOpen}
 								autoPrintOn={autoPrintOn}

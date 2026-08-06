@@ -9,7 +9,8 @@ import { collectBlockedKeys } from "./jobUtils";
 // (main/printEngine.js). This context only:
 //   1. mirrors the engine's state snapshot (engine:state),
 //   2. exposes command wrappers over IPC,
-//   3. renders engine notifications (engine:toast) and the requeue dialog.
+//   3. renders engine notifications (engine:toast) and the resume-automated-
+//      printing dialog shown on launch.
 
 const EMPTY_SNAPSHOT = {
 	running: false,
@@ -17,11 +18,11 @@ const EMPTY_SNAPSHOT = {
 	paused: false,
 	routingLoaded: false,
 	autoRouteReady: false,
-	requeuePrompt: null,
+	resumePrompt: null,
+	autoPaused: {},
 	queuedJobIds: [],
 	printedFiles: {},
 	files: {},
-	printers: {},
 };
 
 // Legacy localStorage progress (pre-engine builds) — pushed to main once, then
@@ -39,6 +40,9 @@ function toastMessage({ kind, who, fileName }) {
 		// the operator retries, or fails the job explicitly from its failure box.
 		case "doc-failed-print":
 			return `“${fileName}” couldn't be printed. The job is still open — retry it, or mark the job as failed.`;
+		// Automated printing hit a failure and parked the job for a human.
+		case "auto-paused-failure":
+			return `“${fileName}” failed to print — automated printing is paused for job (${who}). It needs your attention.`;
 		case "pdf-cancel":
 			return `Saving “${fileName}” as PDF was cancelled. To cancel the job, use the Decline Job button.`;
 		case "fail-report-error":
@@ -157,33 +161,6 @@ export function AutoPrintProvider({ children }) {
 		[printedFiles]
 	);
 
-	const isFileFailed = useCallback(
-		(jobId, fileId) => fileStates[jobId]?.[fileId]?.status === "failed",
-		[fileStates]
-	);
-
-	// Per-job map of failed fileIds (shape kept from the old context: truthy per file).
-	const failedFilesFor = useCallback(
-		(jobId) => {
-			const out = {};
-			for (const [fileId, state] of Object.entries(fileStates[jobId] || {})) {
-				if (state.status === "failed") out[fileId] = state.failureReason || true;
-			}
-			return out;
-		},
-		[fileStates]
-	);
-
-	// Any of the job's documents queued or in flight — locks destructive actions
-	// and drives the Print button's busy state.
-	const jobBusy = useCallback(
-		(jobId) => {
-			const states = Object.values(fileStates[jobId] || {});
-			return states.some((s) => s.status === "waiting" || s.status === "printing" || s.status === "verifying");
-		},
-		[fileStates]
-	);
-
 	const jobPrintingNow = useCallback(
 		(jobId) => {
 			const states = Object.values(fileStates[jobId] || {});
@@ -199,6 +176,37 @@ export function AutoPrintProvider({ children }) {
 		[fileStates]
 	);
 
+	// Only an OPERATOR batch can be stopped. Documents merely held because
+	// automated printing is paused for the job are not "running", so offering
+	// Stop for them would be meaningless (and would strand them).
+	const jobHasQueuedManualDocs = useCallback(
+		(jobId) =>
+			Object.values(fileStates[jobId] || {}).some((s) => s.status === "waiting" && s.mode !== "auto"),
+		[fileStates]
+	);
+
+	// ── per-job automated printing ──────────────────────────────────────────────
+	const autoPaused = snapshot.autoPaused || {};
+
+	// Automated printing is held for this job (operator switch or a failure).
+	const jobAutoPaused = useCallback((jobId) => !!autoPaused[jobId], [autoPaused]);
+
+	// Parked by the engine after a failed document — needs a human.
+	const jobNeedsAttention = useCallback((jobId) => autoPaused[jobId] === "failure", [autoPaused]);
+
+	// Whether the engine is currently driving THIS job. When it isn't (auto off,
+	// or paused for this job) the manual print controls come back — that is how
+	// the operator intervenes on a parked job.
+	const jobAutoActive = useCallback(
+		(jobId) => autoPrint && !autoPaused[jobId],
+		[autoPrint, autoPaused]
+	);
+
+	const setJobAutoPaused = useCallback(
+		(jobId, value) => window.electronAPI.setJobAutoPaused(jobId, value),
+		[]
+	);
+
 	// Queue-position line for the jobs list.
 	const queueInfoFor = useCallback(
 		(jobId) => {
@@ -209,18 +217,15 @@ export function AutoPrintProvider({ children }) {
 			const allBlocked =
 				states.length > 0 &&
 				states.every(
-					(s) =>
-						s.status !== "waiting" ||
-						s.waitReason === "no-free-printer" ||
-						s.waitReason === "no-online-printer" ||
-						s.waitReason === "route"
+					(s) => s.status !== "waiting" || s.waitReason === "no-online-printer" || s.waitReason === "route"
 				) &&
 				states.some((s) => s.status === "waiting");
-			if (paused) return { state: "paused", place: idx };
+			if (autoPaused[jobId] === "failure") return { state: "attention", place: idx };
+			if (paused || autoPaused[jobId]) return { state: "paused", place: idx };
 			if (allBlocked) return { state: "waiting", place: idx };
 			return { state: "queued", place: idx };
 		},
-		[queuedJobIds, paused, fileStates, jobPrintingNow]
+		[queuedJobIds, paused, autoPaused, fileStates, jobPrintingNow]
 	);
 
 	// ── commands ────────────────────────────────────────────────────────────────
@@ -261,12 +266,14 @@ export function AutoPrintProvider({ children }) {
 		printedFiles,
 		fileStates,
 		isFilePrinted,
-		isFileFailed,
-		failedFilesFor,
-		jobBusy,
 		jobPrintingNow,
 		jobHasQueuedDocs,
+		jobHasQueuedManualDocs,
 		stopPrintJob,
+		jobAutoPaused,
+		jobNeedsAttention,
+		jobAutoActive,
+		setJobAutoPaused,
 		queueInfoFor,
 		enableAutoPrint,
 		disableAutoPrint,
@@ -280,19 +287,26 @@ export function AutoPrintProvider({ children }) {
 		refreshPrinterState,
 	};
 
-	const requeueCount = snapshot.requeuePrompt?.jobIds?.length || 0;
+	// Shown once per launch when automated printing was armed in the previous
+	// session. It is never resumed without this answer.
+	const resumePrompt = snapshot.resumePrompt;
+	const pendingJobs = resumePrompt?.pendingJobs || 0;
 
 	return (
 		<AutoPrintContext.Provider value={value}>
 			{children}
-			{requeueCount > 0 && (
+			{resumePrompt && (
 				<ConfirmDialog
 					title="Resume automated printing?"
-					message={`Automated printing is on and ${requeueCount} unprinted ${requeueCount === 1 ? "job" : "jobs"} ${requeueCount === 1 ? "was" : "were"} left over. Start printing ${requeueCount === 1 ? "it" : "them"} now? Some documents may have printed just before the app closed — review first if unsure. Choosing “Not now” keeps ${requeueCount === 1 ? "it" : "them"} in the queue but pauses automated printing — press Resume in Print Jobs when you're ready.`}
-					confirmLabel="Re-queue & print"
-					cancelLabel="Not now (pause)"
-					onConfirm={() => window.electronAPI.resolveRequeue(true)}
-					onCancel={() => window.electronAPI.resolveRequeue(false)}
+					message={
+						pendingJobs > 0
+							? `Automated printing was on when the app last closed. It is currently OFF. Turn it back on? ${pendingJobs} unprinted ${pendingJobs === 1 ? "job" : "jobs"} ${pendingJobs === 1 ? "is" : "are"} waiting and would start printing straight away — some documents may have printed just before the app closed, so review them first if unsure.`
+							: "Automated printing was on when the app last closed. It is currently OFF. Turn it back on? New jobs will then print automatically as they arrive."
+					}
+					confirmLabel="Yes, resume"
+					cancelLabel="No, keep it off"
+					onConfirm={() => window.electronAPI.resolveResumePrompt(true)}
+					onCancel={() => window.electronAPI.resolveResumePrompt(false)}
 				/>
 			)}
 			{toasts.length > 0 && createPortal(

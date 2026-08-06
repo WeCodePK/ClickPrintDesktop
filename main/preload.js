@@ -57,7 +57,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	stopPrintJob: (jobId) => ipcRenderer.invoke("engine:stop-job", jobId),
 	setQueuePaused: (paused) => ipcRenderer.invoke("engine:set-paused", paused),
 	setAutoPrint: (enabled) => ipcRenderer.invoke("engine:set-autoprint", enabled),
-	resolveRequeue: (accept) => ipcRenderer.invoke("engine:requeue-decision", accept),
+	// Per-job automated-printing switch — pausing a job returns its manual print
+	// controls so the operator can intervene.
+	setJobAutoPaused: (jobId, paused) => ipcRenderer.invoke("engine:set-job-autopause", jobId, paused),
+	// Answer the "resume automated printing?" prompt shown on launch when it was
+	// armed in the previous session.
+	resolveResumePrompt: (accept) => ipcRenderer.invoke("engine:resume-decision", accept),
 	refreshRouting: () => ipcRenderer.invoke("engine:refresh-routing"),
 	migratePrintProgress: (printedFiles) => ipcRenderer.invoke("engine:migrate-progress", printedFiles),
 
