@@ -85,21 +85,14 @@ export function AutoPrintProvider({ children }) {
 	}, []);
 
 	// ── failure alert sound ─────────────────────────────────────────────────────
-	// Sounded when a document becomes BLOCKED — a failed print, a cancelled PDF
-	// save, or a routing gap (getBlockedReason). Deliberately NOT tied to the
-	// job-level "failed" PATCH: that is the operator's own deliberate action and
-	// needs no alerting. This lives here rather than in the document card so a
-	// failure is heard even when its job isn't the one selected on screen.
+	
 	const errorSoundRef = useRef(null);
-	const blockedKeysRef = useRef(null); // null until the first snapshot is seen
+	const blockedKeysRef = useRef(null);
 
 	useEffect(() => {
 		let cancelled = false;
 		let objectUrl = null;
 
-		// Same blob-URL approach as the new-job "pop" (JobsContext): playing the
-		// file straight from its URL fails in Electron with
-		// ERR_CACHE_OPERATION_NOT_SUPPORTED.
 		fetch("sounds/error-popup.mp3")
 			.then((res) => res.blob())
 			.then((blob) => {
