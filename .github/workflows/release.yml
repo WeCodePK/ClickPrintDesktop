@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    branches: [prod]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump to apply"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+# Two releases building at once would race on the version bump and the tag.
+concurrency:
+  group: release-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: prod
+          # Needed so the version-bump commit can be pushed back to prod.
+          persist-credentials: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # Bump before building so the installer filename and the auto-update
+      # metadata carry the new version.
+      - name: Bump version
+        id: bump
+        shell: bash
+        run: |
+          npm version "${{ inputs.bump || 'patch' }}" --no-git-tag-version
+          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - run: npm run build:renderer
+
+      - name: Build and publish release
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Only after a successful publish, so a failed build doesn't burn a version.
+      # [skip ci] keeps this push from re-triggering the workflow.
+      - name: Commit version bump
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore: release v${{ steps.bump.outputs.version }} [skip ci]"
+          git push origin HEAD:prod
