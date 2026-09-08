@@ -9,6 +9,7 @@ import HistoryTab from "../dashboard/tabs/HistoryTab";
 import DashboardTab from "../dashboard/tabs/DashboardTab";
 import ServicesTab from "../dashboard/tabs/ServicesTab";
 import ShopProfileSettings from "../dashboard/components/settings/ShopProfileSettings";
+import AppSettings from "../dashboard/components/settings/AppSettings";
 import LogoutTab from "../dashboard/tabs/LogoutTab";
 
 function DashboardScreen({ shopProfile, onLogout }) {
@@ -29,6 +30,7 @@ function DashboardScreen({ shopProfile, onLogout }) {
 								    pane wrapper the old SettingsTab used to provide. */}
 								<Route path="services" element={<ServicesTab />} />
 								<Route path="profile" element={<div className="db-detail"><ShopProfileSettings /></div>} />
+								<Route path="settings" element={<div className="db-detail"><AppSettings /></div>} />
 								<Route path="logout" element={<LogoutTab onLogout={onLogout} />} />
 								<Route path="*" element={<Navigate to="jobs" replace />} />
 							</Route>

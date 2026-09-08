@@ -11,7 +11,7 @@ on:
         options: [patch, minor, major]
         default: patch
 
-# Two releases building at once would race on the version bump and the tag.
+# Two releases building at once would resolve to the same next version.
 concurrency:
   group: release-prod
   cancel-in-progress: false
@@ -25,10 +25,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: prod
-          # Needed so the version-bump commit can be pushed back to prod.
-          persist-credentials: true
 
       - uses: actions/setup-node@v4
         with:
@@ -37,14 +33,29 @@ jobs:
 
       - run: npm ci
 
-      # Bump before building so the installer filename and the auto-update
-      # metadata carry the new version.
-      - name: Bump version
-        id: bump
+      # The real version lives in GitHub releases, not in package.json. The
+      # version in package.json is only a baseline for the very first release.
+      - name: Resolve next version
+        id: version
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npm version "${{ inputs.bump || 'patch' }}" --no-git-tag-version
-          echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          # Includes drafts and prereleases on purpose: a tag that already
+          # exists must never be handed back out as the next version.
+          gh api "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq '.[].tag_name' > tags.txt
+          VERSION=$(node scripts/next-version.js \
+            "${{ inputs.bump || 'patch' }}" \
+            "$(node -p "require('./package.json').version")" < tags.txt)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION"
+
+      # Working-tree only. This is never committed, so prod stays exactly
+      # where main is and there is nothing to pull back down locally.
+      - name: Apply version
+        shell: bash
+        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
 
       - run: npm run build:renderer
 
@@ -52,14 +63,3 @@ jobs:
         run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Only after a successful publish, so a failed build doesn't burn a version.
-      # [skip ci] keeps this push from re-triggering the workflow.
-      - name: Commit version bump
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
-          git commit -m "chore: release v${{ steps.bump.outputs.version }} [skip ci]"
-          git push origin HEAD:prod

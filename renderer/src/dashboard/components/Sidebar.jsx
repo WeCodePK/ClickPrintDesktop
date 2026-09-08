@@ -7,6 +7,7 @@ import {
 	HistoryIcon,
 	WalletIcon,
 	StoreIcon,
+	SettingsIcon,
 	LogoutIcon,
 } from "../icons";
 import ConnectionSwitcher from "./ConnectionSwitcher";
@@ -21,6 +22,7 @@ const TABS = [
 	{ to: "history", label: "History", Icon: HistoryIcon },
 	{ to: "services", label: "Services", Icon: WalletIcon },
 	{ to: "profile", label: "Shop Profile", Icon: StoreIcon },
+	{ to: "settings", label: "App Settings", Icon: SettingsIcon },
 ];
 
 // ── Leaf icon (matches the Claude Code reference) ────────────────────────────

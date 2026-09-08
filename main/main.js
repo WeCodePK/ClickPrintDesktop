@@ -3,11 +3,19 @@ const { registerIpcHandlers } = require('./ipc');
 const { registerFileSchemePrivileges, registerFileProtocol } = require('./files');
 const { loadPersistedAuth } = require('./state');
 const { startOfflineWatcher } = require('./printers');
+const { initLoginItem, isEnabled: isOpenAtLogin, setEnabled: setOpenAtLogin, startedHidden } = require('./startup');
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
 const { autoUpdater } = require('electron-updater');
 
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
+
+// The app lives in the tray and keeps printing while its window is hidden, so a
+// second launch must hand off to the running instance rather than start a rival
+// one (two SSE streams / print engines would double-print). The loser exits;
+// the winner surfaces its window in the "second-instance" handler below.
+const hasInstanceLock = app.requestSingleInstanceLock();
+if (!hasInstanceLock) app.quit();
 
 // Last known update-lifecycle state. Kept here and replayed to the renderer on
 // demand (app:get-update-status) so a banner that mounts late — e.g. after the
@@ -46,18 +54,63 @@ ipcMain.on('app:restart-to-update', () => autoUpdater.quitAndInstall());
 ipcMain.handle('app:get-version', () => app.getVersion());
 ipcMain.handle('app:get-update-status', () => updateStatus);
 
+// Launch-at-login preference, surfaced in the Settings tab and the tray menu.
+ipcMain.handle('app:get-open-at-login', () => isOpenAtLogin());
+ipcMain.handle('app:set-open-at-login', (_event, enabled) => {
+	const value = setOpenAtLogin(enabled);
+	refreshTrayMenu();
+	return value;
+});
+
 // Privileged scheme registration must happen before the app is ready.
 registerFileSchemePrivileges();
 
 let window = null;
 let tray = null;
+// Set when the window was created hidden (login launch) and hasn't been shown
+// yet, so its first appearance still gets the maximized layout ready-to-show
+// would have given it.
+let needsInitialMaximize = false;
 
-function createTray() {
-	const icon = nativeImage.createFromPath(path.join(__dirname, 'tray-icon.ico'));
-	tray = new Tray(icon);
+// Set on the way out (tray "Exit", an update relaunch, an OS shutdown) so the
+// window's close handler stops intercepting and lets the app actually die.
+app.isQuitting = false;
+app.on('before-quit', () => { app.isQuitting = true; });
 
-	tray.setToolTip('Your App Name');
+// Brings the app back from the tray: restore if minimized, show if hidden, focus
+// either way. Used by the tray, a second launch, and macOS dock activation.
+function showWindow() {
+	if (!window || window.isDestroyed()) {
+		createWindow(false);
+		return;
+	}
+	if (needsInitialMaximize) {
+		window.maximize();
+		needsInitialMaximize = false;
+	}
+	if (window.isMinimized()) window.restore();
+	window.show();
+	window.focus();
+}
+
+function refreshTrayMenu() {
+	if (!tray) return;
 	tray.setContextMenu(Menu.buildFromTemplate([
+		{
+			label: 'Open ClickPrint',
+			click: showWindow,
+		},
+		{ type: 'separator' },
+		{
+			label: 'Start when I sign in',
+			type: 'checkbox',
+			checked: isOpenAtLogin(),
+			click: (item) => {
+				setOpenAtLogin(item.checked);
+				refreshTrayMenu();
+			},
+		},
+		{ type: 'separator' },
 		{
 			label: 'Exit',
 			click: () => {
@@ -66,14 +119,19 @@ function createTray() {
 			}
 		}
 	]));
-
-	tray.on('click', () => {
-		window?.show();
-		window?.focus();
-	});
 }
 
-function createWindow() {
+function createTray() {
+	const icon = nativeImage.createFromPath(path.join(__dirname, 'tray-icon.ico'));
+	tray = new Tray(icon);
+
+	tray.setToolTip('ClickPrint');
+	refreshTrayMenu();
+
+	tray.on('click', showWindow);
+}
+
+function createWindow(startHidden) {
 	window = new BrowserWindow({
 		show: false,
 		minWidth: 900,
@@ -90,8 +148,22 @@ function createWindow() {
 		},
 	});
 
+	// Closing the window (title-bar X or Alt+F4) only hides it — jobs keep
+	// streaming and printing in the tray. Only an explicit quit tears it down.
+	window.on("close", (event) => {
+		if (app.isQuitting) return;
+		event.preventDefault();
+		window.hide();
+	});
 	window.on("closed", () => window = null);
 	window.once("ready-to-show", () => {
+		// A login launch loads the renderer (so the print engine and its UI state
+		// are warm) but never flashes a window — the operator opens it from the tray.
+		if (startHidden) {
+			console.log("[Main] started at login — staying in the tray");
+			needsInitialMaximize = true;
+			return;
+		}
 		window.maximize();
 		window.show();
 	});
@@ -105,15 +177,26 @@ function createWindow() {
 
 
 ipcMain.on("window:close", () => {
+	// Routed through close() so the handler above applies: hide to tray.
 	window?.close();
 });
 ipcMain.on("window:minimize", () => window?.minimize());
 ipcMain.on("window:maximize", () => window.isMaximized() ? window.unmaximize() : window?.maximize());
 
-app.whenReady().then(() => {
+// A second launch (desktop shortcut while the app sits in the tray) surfaces the
+// existing window instead of starting another instance.
+app.on("second-instance", (_event, argv) => {
+	// A login-launched second instance (same --hidden flag) shouldn't pop the
+	// window open; anything else is the operator asking for the app.
+	if (!argv.includes("--hidden")) showWindow();
+});
+app.on("activate", showWindow);
+
+if (hasInstanceLock) app.whenReady().then(() => {
 	loadPersistedAuth();
+	initLoginItem();
 	registerFileProtocol();
-	createWindow();
+	createWindow(startedHidden());
 	createTray();
 	// Warm the printer offline-state cache and keep it fresh in the background so
 	// listing printers never blocks on a PowerShell spawn.
@@ -125,4 +208,6 @@ app.whenReady().then(() => {
 	}
 });
 
-app.on("window-all-closed", () => app.quit());
+// Deliberately empty: the app is a tray resident, so a closed (hidden) window
+// must not end the process. Quitting goes through the tray's Exit item.
+app.on("window-all-closed", () => {});
