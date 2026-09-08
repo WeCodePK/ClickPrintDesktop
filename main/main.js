@@ -122,7 +122,7 @@ function refreshTrayMenu() {
 }
 
 function createTray() {
-	const icon = nativeImage.createFromPath(path.join(__dirname, 'tray-icon.ico'));
+	const icon = nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'icon.ico'));
 	tray = new Tray(icon);
 
 	tray.setToolTip('ClickPrint');
@@ -138,7 +138,7 @@ function createWindow(startHidden) {
 		minHeight: 600,
 		frame: false,
 		backgroundColor: "#F7F8FA",
-		icon: path.join(__dirname, "assets", "icon.ico"),
+		icon: path.join(__dirname, "..", "assets", "icon.ico"),
 		webPreferences: {
 			preload: path.join(__dirname, "preload.js"),
 			plugins: true, // enable Chromium's built-in PDF viewer for previews

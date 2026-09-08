@@ -34,8 +34,9 @@ An Electron-based desktop client for **ClickPrint**—an automated, zero-interve
 ## 📁 Repository Structure
 
 ```text
+├── assets/                 # Shared static assets (icons, sounds) for both processes
+│
 ├── main/                   # Electron main process code
-│   ├── assets/             # Main process assets (icons)
 │   ├── api.js              # ClickPrint REST API & SSE client integration
 │   ├── files.js            # File download, cache & custom protocol registry
 │   ├── ipc.js              # Inter-process communication handlers
@@ -50,7 +51,6 @@ An Electron-based desktop client for **ClickPrint**—an automated, zero-interve
 │
 ├── renderer/               # React frontend (Vite project)
 │   ├── dist/               # Production build output
-│   ├── public/             # Static assets
 │   └── src/
 │       ├── components/     # UI elements (buttons, inputs, cards)
 │       ├── dashboard/      # Tabs, context providers, layout, and utils
