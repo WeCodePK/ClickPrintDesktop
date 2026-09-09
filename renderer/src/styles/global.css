@@ -690,13 +690,13 @@ body {
 	box-shadow: 0 6px 25px rgba(255, 79, 0, 0.35);
 }
 
-/* ── Instruction text with WhatsApp icon ── */
+/* ── Instruction text with SMS icon ── */
 
 .instruction-row {
 	display: flex;
 	align-items: center;
 	flex-wrap: wrap;
-	gap: 4px;
+	gap: 6px;
 	margin-bottom: 40px;
 }
 
@@ -706,18 +706,26 @@ body {
 	line-height: 1.6;
 }
 
-.whatsapp-badge {
+.sms-badge {
 	display: inline-flex;
 	align-items: center;
-	gap: 4px;
+	gap: 5px;
 	font-size: 15px;
 	font-weight: 600;
 	color: var(--color-text-primary);
+	line-height: 1;
 }
 
-.whatsapp-icon {
-	color: #25d366;
-	font-size: 17px;
+.sms-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--color-accent-light);
+	line-height: 1;
+}
+
+.sms-icon svg {
+	display: block;
 }
 
 /* ── Success Screen ── */
