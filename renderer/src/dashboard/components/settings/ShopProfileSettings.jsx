@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { MultiSegmented } from "./Segmented";
+import { MultiSegmented } from "../Segmented";
 
 // Pure validation shared between the real-time "can I submit yet?" check (used
 // to disable the button) and the submit handler's final guard. Returns the

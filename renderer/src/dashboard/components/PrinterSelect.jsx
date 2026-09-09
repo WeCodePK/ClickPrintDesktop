@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDownIcon, CheckIcon } from "../../icons";
+import { ChevronDownIcon, CheckIcon } from "../icons";
 
 // Multi-select dropdown for the shop's registered printers, with a status dot
 // per entry (green = online, grey = offline). `value` is an array of printer ids.

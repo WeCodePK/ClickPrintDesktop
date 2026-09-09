@@ -1,28 +1,22 @@
 import { useState, useEffect } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import {
 	HomeIcon,
 	PrintJobsIcon,
 	PrinterIcon,
 	HistoryIcon,
 	WalletIcon,
-	StoreIcon,
 	SettingsIcon,
 	LogoutIcon,
 } from "../icons";
 import ConnectionSwitcher from "./ConnectionSwitcher";
 import AutoPrintSwitcher from "./AutoPrintSwitcher";
 
-// The Settings screen's former sub-sections (Services, Shop Profile) are now
-// first-class nav items alongside the core tabs. Automated Printing lives in a
-// popover next to the connection indicator instead of a tab.
 const TABS = [
 	{ to: "jobs", label: "Jobs", Icon: PrintJobsIcon },
 	{ to: "printers", label: "Printers", Icon: PrinterIcon },
 	{ to: "history", label: "History", Icon: HistoryIcon },
 	{ to: "services", label: "Services", Icon: WalletIcon },
-	{ to: "profile", label: "Shop Profile", Icon: StoreIcon },
-	{ to: "settings", label: "App Settings", Icon: SettingsIcon },
 ];
 
 // ── Leaf icon (matches the Claude Code reference) ────────────────────────────
@@ -109,6 +103,10 @@ function UpdateBanner() {
 
 // Left vertical navigation (WhatsApp-style). Each item is a router NavLink so the state follows the URL.
 function Sidebar() {
+	const location = useLocation();
+	const isSettingsActive =
+		location.pathname.includes("settings") || location.pathname.includes("profile");
+
 	return (
 		<nav className="db-sidebar">
 			<div className="db-sidebar__top">
@@ -151,6 +149,19 @@ function Sidebar() {
 
 				{/* ── SSE connection status + shop switcher ── */}
 				<ConnectionSwitcher />
+
+				{/* ── Settings tab (placed right above Logout) ── */}
+				<div className="tooltip-wrapper">
+					<NavLink
+						to="settings"
+						className={`db-tab ${isSettingsActive ? "db-tab--active" : ""}`}
+					>
+						<span className="db-tab__icon">
+							<SettingsIcon />
+						</span>
+					</NavLink>
+					<span className="tooltip-text">Settings</span>
+				</div>
 
 				<div className="tooltip-wrapper">
 					<NavLink

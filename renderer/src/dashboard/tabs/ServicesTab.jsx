@@ -3,8 +3,8 @@ import { createPortal } from "react-dom";
 import ListColumn from "../components/ListColumn";
 import WelcomePane from "../components/WelcomePane";
 import ConfirmDialog from "../components/ConfirmDialog";
-import { Segmented } from "../components/settings/Segmented";
-import PrinterSelect from "../components/settings/PrinterSelect";
+import { Segmented } from "../components/Segmented";
+import PrinterSelect from "../components/PrinterSelect";
 import { useAutoPrint } from "../AutoPrintContext";
 import { TrashIcon, EditIcon, CheckIcon, BoltIcon, WalletIcon, PaperIcon, PagesIcon, StackIcon, EyeIcon } from "../icons";
 

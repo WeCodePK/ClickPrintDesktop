@@ -1,4 +1,4 @@
-// Segmented controls shared by the settings panels.
+// Segmented controls shared across dashboard forms and modals.
 
 // Single-choice segmented control.
 export function Segmented({ options, value, onChange }) {
