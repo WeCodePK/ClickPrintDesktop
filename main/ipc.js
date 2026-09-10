@@ -18,6 +18,9 @@ const {
 	setPrinterDisabled,
 	fetchJobs,
 	fetchHistory,
+	uploadFile,
+	fetchImageData,
+	searchLocation,
 	markJobFailed,
 	isJobFailing,
 	acknowledgeNewJobs,
@@ -234,6 +237,20 @@ function registerIpcHandlers(getMainWindow) {
 			console.error(`[IPC] files:open ${fileId} error:`, error.message);
 			return { success: false, message: error.message };
 		}
+	});
+
+	ipcMain.handle("files:upload", async (_event, buffer, fileName) => {
+		console.log("[IPC] files:upload →", fileName);
+		return await uploadFile(buffer, fileName);
+	});
+
+	ipcMain.handle("files:fetch-image-data", async (_event, fileId) => {
+		return await fetchImageData(fileId);
+	});
+
+	ipcMain.handle("map:search", async (_event, query) => {
+		console.log("[IPC] map:search →", query);
+		return await searchLocation(query);
 	});
 
 	// ── Shop printers (registered on the backend) ─────────────────────────────

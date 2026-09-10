@@ -15,7 +15,7 @@ const SECTIONS = [
 	{
 		id: "profile",
 		label: "Shop Profile",
-		description: "Manage shop name, address & capabilities",
+		description: "Manage shop details, location & timings",
 		Icon: StoreIcon,
 	},
 ];

@@ -21,6 +21,7 @@
     "electron-store": "^8.1.0",
     "electron-updater": "^6.8.9",
     "eventsource": "^1.1.2",
+    "leaflet": "^1.9.4",
     "react-router-dom": "^7.18.0"
   },
   "devDependencies": {

@@ -77,6 +77,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	fileUrl: (fileId) => `clickfile://file/${fileId}`,
 	// Open a cached file in the OS default viewer / native print dialog.
 	openFile: (fileId) => ipcRenderer.invoke("files:open", fileId),
+	// Upload a file to /api/files (e.g. shop images)
+	uploadFile: (buffer, fileName) => ipcRenderer.invoke("files:upload", buffer, fileName),
+	// Fetch an image file as a base64 data URL
+	fetchImageData: (fileId) => ipcRenderer.invoke("files:fetch-image-data", fileId),
+	// Full public URL for a backend file (e.g. shop images)
+	getFileUrl: (fileId) => `https://clickprintbackend.wckd.pk/api/files/${fileId}`,
+	// Search location via OpenStreetMap Nominatim
+	searchLocation: (query) => ipcRenderer.invoke("map:search", query),
 
 	// Shop printers (registered on the backend)
 	fetchPrinters: () => ipcRenderer.invoke("printers:fetch"),
