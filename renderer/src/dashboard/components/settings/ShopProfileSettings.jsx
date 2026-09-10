@@ -136,6 +136,19 @@ function ShopProfileSettings() {
 	const [error, setError] = useState(null);
 	const [successMessage, setSuccessMessage] = useState(null);
 	const [showSuccessPopup, setShowSuccessPopup] = useState(false);
+	const [isEnlargedImageOpen, setIsEnlargedImageOpen] = useState(false);
+
+	// Close enlarged image on Escape key
+	useEffect(() => {
+		if (!isEnlargedImageOpen) return;
+		const handleKeyDown = (e) => {
+			if (e.key === "Escape") {
+				setIsEnlargedImageOpen(false);
+			}
+		};
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, [isEnlargedImageOpen]);
 
 	// Auto-dismiss success popup on any mouse click or after 3 seconds
 	useEffect(() => {
@@ -489,17 +502,56 @@ function ShopProfileSettings() {
 							style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}
 						/>
 						{previewSrc && (
-							<img
-								src={previewSrc}
-								alt={imageName || form.name || "Shop preview"}
+							<div
+								onClick={() => setIsEnlargedImageOpen(true)}
 								style={{
-									width: "48px",
-									height: "48px",
-									borderRadius: "var(--radius-md)",
-									border: "1px solid var(--border-light)",
-									objectFit: "cover",
+									position: "relative",
+									cursor: "pointer",
+									display: "inline-block",
 								}}
-							/>
+								title="Click to enlarge image"
+							>
+								<img
+									src={previewSrc}
+									alt={imageName || form.name || "Shop preview"}
+									style={{
+										width: "50px",
+										height: "50px",
+										borderRadius: "var(--radius-md)",
+										border: "1px solid var(--border-light)",
+										objectFit: "cover",
+										display: "block",
+										transition: "transform var(--transition-fast), box-shadow var(--transition-fast)",
+									}}
+									onMouseEnter={(e) => {
+										e.currentTarget.style.transform = "scale(1.08)";
+										e.currentTarget.style.boxShadow = "var(--shadow-md)";
+									}}
+									onMouseLeave={(e) => {
+										e.currentTarget.style.transform = "scale(1)";
+										e.currentTarget.style.boxShadow = "none";
+									}}
+								/>
+								<div
+									style={{
+										position: "absolute",
+										bottom: "2px",
+										right: "2px",
+										background: "rgba(0, 0, 0, 0.65)",
+										borderRadius: "50%",
+										width: "16px",
+										height: "16px",
+										display: "flex",
+										alignItems: "center",
+										justifyContent: "center",
+										color: "#fff",
+										fontSize: "9px",
+										pointerEvents: "none",
+									}}
+								>
+									🔍
+								</div>
+							</div>
 						)}
 					</div>
 					<div style={{ fontSize: "11.5px", color: "var(--color-text-muted)", marginTop: "6px" }}>
@@ -510,6 +562,19 @@ function ShopProfileSettings() {
 							: imageFileId
 							? "Choose a file to replace the current image"
 							: "Please select an image for your shop"}
+						{previewSrc && !isUploading && (
+							<span
+								onClick={() => setIsEnlargedImageOpen(true)}
+								style={{
+									marginLeft: "8px",
+									color: "var(--color-primary)",
+									cursor: "pointer",
+									fontWeight: 600,
+								}}
+							>
+								(Click to view full image)
+							</span>
+						)}
 					</div>
 					{imageError && <div style={{ fontSize: "11.5px", color: "var(--color-accent)", marginTop: "4px" }}>{imageError}</div>}
 				</div>
@@ -810,6 +875,105 @@ function ShopProfileSettings() {
 						>
 							Click anywhere to dismiss
 						</span>
+					</div>
+				</div>
+			)}
+
+			{/* Enlarged Shop Image Lightbox Modal */}
+			{isEnlargedImageOpen && previewSrc && (
+				<div
+					onClick={() => setIsEnlargedImageOpen(false)}
+					style={{
+						position: "fixed",
+						inset: 0,
+						zIndex: 10000,
+						display: "flex",
+						alignItems: "center",
+						justifyContent: "center",
+						background: "rgba(0, 0, 0, 0.78)",
+						backdropFilter: "blur(6px)",
+						cursor: "zoom-out",
+						animation: "fadeIn 180ms ease-out both",
+						padding: "32px",
+					}}
+				>
+					<div
+						onClick={(e) => e.stopPropagation()}
+						style={{
+							position: "relative",
+							maxWidth: "90vw",
+							maxHeight: "88vh",
+							display: "flex",
+							flexDirection: "column",
+							alignItems: "center",
+							justifyContent: "center",
+							cursor: "default",
+							animation: "popIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both",
+						}}
+					>
+						{/* Close Button */}
+						<button
+							type="button"
+							onClick={() => setIsEnlargedImageOpen(false)}
+							style={{
+								position: "absolute",
+								top: "-16px",
+								right: "-16px",
+								width: "36px",
+								height: "36px",
+								borderRadius: "50%",
+								background: "var(--color-bg-card)",
+								border: "1px solid var(--border-light)",
+								color: "var(--color-text-primary)",
+								display: "flex",
+								alignItems: "center",
+								justifyContent: "center",
+								fontSize: "16px",
+								fontWeight: 700,
+								cursor: "pointer",
+								boxShadow: "0 4px 16px rgba(0, 0, 0, 0.4)",
+								zIndex: 1,
+								transition: "transform var(--transition-fast)",
+							}}
+							onMouseEnter={(e) => {
+								e.currentTarget.style.transform = "scale(1.1)";
+							}}
+							onMouseLeave={(e) => {
+								e.currentTarget.style.transform = "scale(1)";
+							}}
+							title="Close image preview"
+						>
+							✕
+						</button>
+
+						{/* Enlarged Image */}
+						<img
+							src={previewSrc}
+							alt={imageName || form.name || "Enlarged shop preview"}
+							style={{
+								maxWidth: "100%",
+								maxHeight: "82vh",
+								borderRadius: "var(--radius-lg)",
+								boxShadow: "0 24px 60px rgba(0, 0, 0, 0.5)",
+								border: "1px solid rgba(255, 255, 255, 0.15)",
+								objectFit: "contain",
+								background: "var(--color-bg-card)",
+							}}
+						/>
+
+						{/* Caption & Instructions */}
+						<div
+							style={{
+								marginTop: "12px",
+								fontSize: "12.5px",
+								color: "#ffffff",
+								opacity: 0.9,
+								textAlign: "center",
+								textShadow: "0 1px 3px rgba(0,0,0,0.8)",
+							}}
+						>
+							{imageName || form.name || "Shop Image"} • Click anywhere outside or press Esc to close
+						</div>
 					</div>
 				</div>
 			)}
