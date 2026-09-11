@@ -12,8 +12,8 @@ const spooler = require("./spooler");
 const FILE_SCHEME = "clickfile";
 
 // Upper bound on rendering a cached PDF into the offscreen window before we
-// spool it. The print engine holds the target printer's spool lock for the whole
-// of spoolFile, so this must never be unbounded.
+// spool it. The print engine holds the target printer's spool lock while
+// openPrintWindow runs, so this must never be unbounded.
 const LOAD_TIMEOUT_MS = 30000;
 
 let _filesDir = null;
@@ -277,16 +277,11 @@ async function savePdfCopy(fileId, fileName) {
 	console.log(`[Files] saved PDF copy ${fileId} → ${dest}`);
 }
 
-// Loads a cached PDF into an offscreen window and spools it silently to a
-// real printer with the document's own settings applied. Resolves once the job
-// is handed to the Windows spooler; rejects if spooling fails. This says
-// nothing about the physical outcome — printAndVerify layers spooler tracking
-// on top. Callers must not pass a Print-to-PDF pseudo-printer here (use
-// savePdfCopy for that).
-async function spoolFile(fileId, settings, deviceName, fileName) {
+// Loads a cached PDF into an offscreen window, ready to print. The caller owns
+// the returned window and must destroy it.
+async function openPrintWindow(fileId) {
 	await ensureFile(fileId);
 	if (!isReady(fileId)) throw new Error("file not ready");
-	if (!deviceName) throw new Error("no printer specified");
 
 	// `plugins: true` is required so Chromium's PDF viewer actually renders the
 	// document — without it the print job comes out blank.
@@ -303,63 +298,76 @@ async function spoolFile(fileId, settings, deviceName, fileName) {
 		]);
 		// Give the PDF plugin a moment to lay the document out before printing.
 		await new Promise((resolve) => setTimeout(resolve, 400));
+		return win;
+	} catch (err) {
+		if (!win.isDestroyed()) win.destroy();
+		throw err;
+	}
+}
+
+// Hands the document to Chromium and resolves with what its print callback
+// reports: { ok, reason }. Never rejects and has no timeout of its own, because
+// the callback can't be relied on: for a PDF in the viewer plugin Electron often
+// doesn't fire it at all while the page prints fine, and only reports
+// success=false once the window is destroyed. It is a hint for the spooler
+// (see spooler.trackPrintJob), never the verdict.
+function startPrint(win, fileId, options) {
+	return new Promise((resolve) => {
+		try {
+			win.webContents.print(options, (success, failureReason) => {
+				console.log(`[Files] print callback ${fileId}: success=${success} reason=${failureReason}`);
+				resolve({ ok: !!success, reason: failureReason || null });
+			});
+		} catch (err) {
+			resolve({ ok: false, reason: err.message });
+		}
+	});
+}
+
+// The engine's print primitive: hand the document to Chromium silently with its
+// own settings applied, then watch the Windows spooler until the job actually
+// completes (or dies). The spooler decides the outcome; Chromium's callback only
+// matters if the job never shows up in the queue. Throws on any real failure —
+// spool refusal, never reaching the queue, queue cancellation, persistent error
+// state, or a stuck job — so the caller's failure policy treats them uniformly.
+// `onPhase("verifying")` fires once the job is being tracked in the queue.
+// `onIdentified(spoolId)` fires as soon as our Windows spool job id is pinned
+// down (or null if it never appeared) — the engine releases that printer's
+// spool lock there, letting the next document start spooling behind ours.
+// Callers must not pass a Print-to-PDF pseudo-printer here (use savePdfCopy).
+async function printAndVerify(fileId, settings, deviceName, fileName, { onPhase, onIdentified } = {}) {
+	let win;
+	try {
+		if (!deviceName) throw new Error("no printer specified");
+		win = await openPrintWindow(fileId);
+	} catch (err) {
+		if (onIdentified) onIdentified(null); // nothing spooled — don't hold the lock
+		throw err;
+	}
+
+	try {
+		// Snapshot the queue right before printing so the new job id can be
+		// identified. A failed snapshot makes the print untrackable rather than
+		// blocking printing altogether.
+		const before = await spooler.snapshotPrinter(deviceName);
 		const options = buildPrintOptions(settings);
 		options.deviceName = deviceName;
 		console.log(`[Files] spooling ${fileId} ("${fileName || ""}") → ${deviceName}`, options);
 
-		await new Promise((resolve, reject) => {
-			let settled = false;
-			const finish = (fn, arg) => {
-				if (settled) return;
-				settled = true;
-				clearTimeout(timer);
-				fn(arg);
-			};
-
-			win.webContents.print(options, (success, failureReason) => {
-				console.log(`[Files] print callback ${fileId}: success=${success} reason=${failureReason}`);
-				if (success) finish(resolve);
-				else finish(reject, new Error(failureReason || "print failed"));
-			});
-
-			// Guard against a callback that never fires at all — treat the silence as
-			// a failure so a stuck/offline printer never falsely advances the status.
-			const timer = setTimeout(() => {
-				console.log(`[Files] print callback timed out ${fileId}, treating as failed`);
-				finish(reject, new Error("print timed out"));
-			}, 30000);
-		});
-		console.log(`[Files] print spooled ${fileId}`);
+		// Tracking starts the moment the job is handed over, not when the callback
+		// fires — the callback may never fire.
+		const spool = startPrint(win, fileId, options);
+		const result = await spooler.trackPrintJob(deviceName, before, { onPhase, onIdentified, spool });
+		if (result.outcome === "aborted") return result; // engine stopped; outcome discarded upstream
+		if (result.outcome !== "success") {
+			throw new Error(`print ${result.outcome}${result.detail ? `: ${result.detail}` : ""}`);
+		}
+		return result;
 	} finally {
+		// Only once there's a verdict: destroying the window while Chromium may
+		// still be feeding the spooler could cut the job short.
 		if (!win.isDestroyed()) win.destroy();
 	}
-}
-
-// The engine's print primitive: spool the document, then watch the Windows
-// spooler until the job actually completes (or dies). Throws on any real
-// failure — spool rejection, queue cancellation, persistent error state, or a
-// stuck job — so the caller's retry/auto-fail policy treats them uniformly.
-// `onPhase("verifying")` fires once the job is being tracked post-spool.
-// `onIdentified(spoolId)` fires as soon as our Windows spool job id is pinned
-// down (or null if it never appeared) — the engine releases that printer's
-// spool lock there, letting the next document start spooling behind ours.
-async function printAndVerify(fileId, settings, deviceName, fileName, { onPhase, onIdentified } = {}) {
-	// Snapshot the queue BEFORE spooling so the new job id can be identified.
-	// A failed snapshot makes the print untrackable (fall back to trusting the
-	// spool callback) rather than blocking printing altogether.
-	const before = await spooler.snapshotPrinter(deviceName);
-	try {
-		await spoolFile(fileId, settings, deviceName, fileName);
-	} catch (err) {
-		if (onIdentified) onIdentified(null); // spooling failed — don't hold the lock
-		throw err;
-	}
-	const result = await spooler.trackPrintJob(deviceName, before, { onPhase, onIdentified });
-	if (result.outcome === "aborted") return result; // engine stopped; outcome discarded upstream
-	if (result.outcome !== "success") {
-		throw new Error(`print ${result.outcome}${result.detail ? `: ${result.detail}` : ""}`);
-	}
-	return result;
 }
 
 // Registers the privileged scheme. Must be called before app `ready`.
