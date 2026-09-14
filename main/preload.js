@@ -82,7 +82,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	// Fetch an image file as a base64 data URL
 	fetchImageData: (fileId) => ipcRenderer.invoke("files:fetch-image-data", fileId),
 	// Full public URL for a backend file (e.g. shop images)
-	getFileUrl: (fileId) => `https://clickprintbackend.wckd.pk/api/files/${fileId}`,
+	getFileUrl: (fileId) => `https://api.clickprint.pk/api/files/${fileId}`,
 	// Search location via OpenStreetMap Nominatim
 	searchLocation: (query) => ipcRenderer.invoke("map:search", query),
 

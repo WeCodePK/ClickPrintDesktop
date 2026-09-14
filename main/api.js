@@ -3,7 +3,7 @@ const { BrowserWindow } = require("electron");
 const { getAuth, setAuth, setJobs, clearAuth } = require("./state");
 const { listPrinters } = require("./printers");
 
-const API_BASE_URL = "https://clickprintbackend.wckd.pk"
+const API_BASE_URL = "https://api.clickprint.pk"
 
 // The backend now nests each route's payload under a named key inside `data`
 // (e.g. { data: { jobs: [...] } } instead of { data: [...] }). Unwrap that named
