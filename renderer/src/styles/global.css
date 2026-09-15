@@ -3506,6 +3506,18 @@ body,
 	height: 12px;
 }
 
+/* Invisible bridge over the gap between the Download button and its menu —
+   without it, the pointer leaves `:hover` while crossing the gap and the menu
+   closes before it's reached. */
+.jobtbl-dropdown--hover::after {
+	content: "";
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 100%;
+	height: 6px;
+}
+
 .jobtbl-dropdown__menu {
 	display: none;
 	position: absolute;
