@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import LocationPicker from "./LocationPicker";
+import { WalletIcon } from "../../icons";
 
 const DAYS = [
 	"Monday",
@@ -37,65 +37,98 @@ function parseTimings(timings) {
 	});
 }
 
-/**
- * Validates the entire shop profile according to backend constraints and requirements:
- * 1. Shop name: 2-50 chars, must start with an alphabet, can end with an alphanumeric, allowed punctuation, no double punctuation.
- * 2. Address: 5-100 chars.
- * 3. Coordinates: picked from map, valid latitude [-90, 90] and longitude [-180, 180].
- * 4. Image: shop image must be uploaded and not in an active uploading state.
- * 5. Contact number: valid Pakistani number (11 digits starting with 03 or 10-11 digits landline).
- * 6. Google Maps link: optional, but if provided must be a valid Google Maps URL.
- * 7. Timings: 7 days, open days must have valid open/close times and close after open.
- */
-function validateShopProfile({ form, coordinates, imageFileId, isUploading, timings }) {
-	// Shop Name
-	const trimmedName = form.name.trim();
-	if (!trimmedName) return "Shop name is required.";
-	if (trimmedName.length < 2) return "Shop name must be at least 2 characters.";
-	if (trimmedName.length > 50) return "Shop name cannot exceed 50 characters.";
-	if (!/^[a-zA-Z]/u.test(trimmedName)) return "Shop name must start with a letter (A-Z).";
-	if (!/[a-zA-Z0-9]$/u.test(trimmedName)) return "Shop name must end with a letter or number.";
-	if (!/^[\p{L}\p{N}\s.,'&()\-]+$/u.test(trimmedName)) return "Shop name contains invalid characters.";
-	if (/([.,'&()\-])\1/.test(trimmedName)) return "Shop name cannot contain consecutive punctuation marks.";
+// ── Validation Helpers ────────────────────────────────────────────────────────
 
-	// Address
-	const trimmedAddress = form.address.trim();
-	if (!trimmedAddress) return "Address is required.";
-	if (trimmedAddress.length < 5) return "Address must be at least 5 characters.";
-	if (trimmedAddress.length > 100) return "Address cannot exceed 100 characters.";
-
-	// Coordinates
-	if (!coordinates || !Number.isFinite(coordinates.lat) || !Number.isFinite(coordinates.lng)) {
-		return "Please pick a location on the map.";
+// Validates bank or mobile wallet provider name (2-50 chars, allowed punctuation, start & end alphanumeric)
+function validateBankName(name) {
+	const trimmed = (name || "").trim();
+	if (!trimmed) return "Bank or wallet provider name is required.";
+	if (trimmed.length < 2) return "Bank name must be at least 2 characters.";
+	if (trimmed.length > 50) return "Bank name cannot exceed 50 characters.";
+	if (!/^[\p{L}\p{N}\s.,'&()\-]+$/u.test(trimmed)) {
+		return "Bank name contains invalid characters.";
 	}
-	if (coordinates.lat < -90 || coordinates.lat > 90 || coordinates.lng < -180 || coordinates.lng > 180) {
-		return "Invalid coordinates range.";
+	if (!/[\p{L}\p{N}]/u.test(trimmed)) {
+		return "Bank name must contain at least one letter or digit.";
+	}
+	if (!/^[\p{L}\p{N}].*[\p{L}\p{N}]$|^[\p{L}\p{N}]$/u.test(trimmed)) {
+		return "Bank name must start and end with a letter or digit.";
+	}
+	if (/([.,'&()\-])\1/.test(trimmed)) {
+		return "Bank name cannot contain consecutive punctuation marks.";
+	}
+	return null;
+}
+
+// Validates account title (2-100 chars, start alphanumeric, end alphanumeric or '.' or ')')
+function validateAccountTitle(title) {
+	const trimmed = (title || "").trim();
+	if (!trimmed) return "Account title is required.";
+	if (trimmed.length < 2) return "Account title must be at least 2 characters.";
+	if (trimmed.length > 50) return "Account title cannot exceed 50 characters.";
+	if (!/^[\p{L}\p{N}\s.,'&()\-]+$/u.test(trimmed)) {
+		return "Account title contains invalid characters.";
+	}
+	if (!/\p{L}/u.test(trimmed)) {
+		return "Account title must contain at least one letter.";
+	}
+	if (!/^[\p{L}\p{N}]/u.test(trimmed)) {
+		return "Account title must start with a letter or digit.";
+	}
+	if (!/[\p{L}\p{N}.)]$/u.test(trimmed)) {
+		return "Account title must end with a letter, digit, dot, or closing parenthesis.";
+	}
+	if (/([.,'&()\-])\1/.test(trimmed)) {
+		return "Account title cannot contain consecutive punctuation marks.";
+	}
+	return null;
+}
+
+// Validates PK IBAN, standard 8-20 digit bank account number, or mobile wallet number
+function validateWalletNumber(number) {
+	const raw = (number || "").trim();
+	if (!raw) return "IBAN or account number is required.";
+	const cleaned = raw.replace(/[\s\-]/g, "").toUpperCase().replace(/^\+92(?=3\d{9}$)/, "0");
+
+	if (/^PK/i.test(cleaned)) {
+		if (!/^PK\d{2}[A-Z]{4}\d{16}$/.test(cleaned)) {
+			return "Invalid Pakistani IBAN format (expected e.g. PK36SCBL0000001123456702, 24 characters).";
+		}
+		return null;
 	}
 
-	// Image File
-	if (isUploading) return "Shop image is uploading. Please wait.";
-	if (!imageFileId) return "A shop image is required.";
+	if (!/^\d{8,20}$/.test(cleaned)) {
+		return "Enter a valid PK IBAN, account number (8-20 digits), or mobile wallet number";
+	}
+	return null;
+}
 
-	// Contact Number
-	const trimmedContact = form.contactNumber.trim();
-	if (!trimmedContact) return "Contact number is required.";
-	const normalizedDigits = trimmedContact.replace(/[\s\-()]/g, "").replace(/^\+92/, "0");
+// Validates Pakistani contact number (mobile or landline)
+function validateContactNumber(number) {
+	const raw = (number || "").trim();
+	if (!raw) return "Contact number is required.";
+	const normalizedDigits = raw.replace(/[\s\-()]/g, "").replace(/^\+92/, "0");
 	if (!/^0\d{9,10}$/.test(normalizedDigits)) {
 		return "Contact number must be a valid Pakistani phone number (e.g. 03XXXXXXXXX).";
 	}
+	return null;
+}
 
-	// Google Maps Link (optional)
-	const trimmedMapLink = form.googleMapsLink.trim();
-	if (trimmedMapLink) {
-		const isGoogleMap = /^https?:\/\/(www\.)?(google\.[a-z.]+\/maps|maps\.google\.[a-z.]+|maps\.app\.goo\.gl|goo\.gl\/maps)\/?.*/i.test(
-			trimmedMapLink
-		);
-		if (!isGoogleMap) {
-			return "Google Maps link must be a valid Google Maps URL (e.g. https://maps.app.goo.gl/…).";
-		}
+// Validates Google Maps link (optional)
+function validateGoogleMapsLink(link) {
+	const raw = (link || "").trim();
+	if (!raw) return null;
+	const isGoogleMap = /^https?:\/\/(www\.)?(google\.[a-z.]+\/maps|maps\.google\.[a-z.]+|maps\.app\.goo\.gl|goo\.gl\/maps)\/?.*/i.test(
+		raw
+	);
+	if (!isGoogleMap) {
+		return "Google Maps link must be a valid Google Maps URL (e.g. https://maps.app.goo.gl/…).";
 	}
+	return null;
+}
 
-	// Timings
+// Validates 7-day operating hours
+function validateTimings(timings) {
 	for (let i = 0; i < timings.length; i++) {
 		const day = timings[i];
 		if (!day.closed) {
@@ -110,45 +143,28 @@ function validateShopProfile({ form, coordinates, imageFileId, isUploading, timi
 			}
 		}
 	}
-
 	return null;
 }
 
+
 function ShopProfileSettings() {
 	const [shopId, setShopId] = useState("");
+	const [wallet, setWallet] = useState({
+		bank: "",
+		title: "",
+		number: "",
+	});
 	const [form, setForm] = useState({
-		name: "",
-		address: "",
 		contactNumber: "",
 		googleMapsLink: "",
 	});
-	const [coordinates, setCoordinates] = useState(null);
 	const [timings, setTimings] = useState(defaultTimings);
-	const [imageFileId, setImageFileId] = useState("");
-	const [imageName, setImageName] = useState("");
-	const [imagePreview, setImagePreview] = useState(null);
-	const [loadedImageData, setLoadedImageData] = useState(null);
-	const [isUploading, setIsUploading] = useState(false);
-	const [imageError, setImageError] = useState(null);
 
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState(null);
 	const [successMessage, setSuccessMessage] = useState(null);
 	const [showSuccessPopup, setShowSuccessPopup] = useState(false);
-	const [isEnlargedImageOpen, setIsEnlargedImageOpen] = useState(false);
-
-	// Close enlarged image on Escape key
-	useEffect(() => {
-		if (!isEnlargedImageOpen) return;
-		const handleKeyDown = (e) => {
-			if (e.key === "Escape") {
-				setIsEnlargedImageOpen(false);
-			}
-		};
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [isEnlargedImageOpen]);
 
 	// Auto-dismiss success popup on any mouse click or after 3 seconds
 	useEffect(() => {
@@ -162,7 +178,6 @@ function ShopProfileSettings() {
 			setShowSuccessPopup(false);
 		};
 
-		// 100ms delay so the click that triggered the submit doesn't dismiss it immediately
 		const attachTimer = setTimeout(() => {
 			window.addEventListener("click", handleDismiss, { capture: true });
 			window.addEventListener("keydown", handleDismiss, { capture: true });
@@ -176,30 +191,6 @@ function ShopProfileSettings() {
 		};
 	}, [showSuccessPopup]);
 
-	// Revoke preview object URL when unmounted or changed
-	useEffect(() => {
-		return () => {
-			if (imagePreview) URL.revokeObjectURL(imagePreview);
-		};
-	}, [imagePreview]);
-
-	// Fetch existing backend image as data URL
-	useEffect(() => {
-		let active = true;
-		if (imageFileId && !imagePreview) {
-			window.electronAPI?.fetchImageData?.(imageFileId).then((dataUrl) => {
-				if (active && dataUrl) {
-					setLoadedImageData(dataUrl);
-				}
-			});
-		} else {
-			setLoadedImageData(null);
-		}
-		return () => {
-			active = false;
-		};
-	}, [imageFileId, imagePreview]);
-
 	const loadShop = useCallback(async () => {
 		setLoading(true);
 		setError(null);
@@ -208,20 +199,16 @@ function ShopProfileSettings() {
 			if (result.success && result.data) {
 				const shop = result.data;
 				setShopId(shop._id || "");
+				setWallet({
+					bank: shop.wallet?.bank || "",
+					title: shop.wallet?.title || "",
+					number: shop.wallet?.number || "",
+				});
 				setForm({
-					name: shop.name || "",
-					address: shop.address || "",
 					contactNumber: shop.contactNumber || "",
 					googleMapsLink: shop.googleMapsLink || "",
 				});
-				if (Array.isArray(shop.coordinates) && shop.coordinates.length === 2) {
-					setCoordinates({ lat: shop.coordinates[0], lng: shop.coordinates[1] });
-				}
 				setTimings(parseTimings(shop.timings));
-				const imgId = typeof shop.imageFile === "object" ? shop.imageFile?._id : shop.imageFile;
-				if (imgId) {
-					setImageFileId(imgId);
-				}
 			} else {
 				setError(result.message || "Failed to load shop profile.");
 			}
@@ -237,6 +224,10 @@ function ShopProfileSettings() {
 		loadShop();
 	}, [loadShop]);
 
+	const updateWallet = (key, value) => {
+		setWallet((prev) => ({ ...prev, [key]: value }));
+	};
+
 	const updateForm = (key, value) => {
 		setForm((prev) => ({ ...prev, [key]: value }));
 	};
@@ -249,57 +240,32 @@ function ShopProfileSettings() {
 		setTimings((prev) => prev.map(() => ({ ...prev[0] })));
 	};
 
-	const handleImageChange = async (file) => {
-		if (!file) return;
-
-		setIsUploading(true);
-		setImageError(null);
-
-		try {
-			const buffer = await file.arrayBuffer();
-			const result = await window.electronAPI.uploadFile(buffer, file.name);
-
-			if (result?.success && result.data?.file?._id) {
-				setImageFileId(result.data.file._id);
-				setImageName(file.name);
-				setImagePreview((prev) => {
-					if (prev) URL.revokeObjectURL(prev);
-					return URL.createObjectURL(file);
-				});
-			} else {
-				setImageError(result?.message || result?.error || "Image upload failed");
-			}
-		} catch (err) {
-			console.error("[ShopProfileSettings] image upload error:", err);
-			setImageError("Network error during image upload.");
-		} finally {
-			setIsUploading(false);
-		}
-	};
-
-	// Resolved image preview source
-	const previewSrc = useMemo(() => {
-		if (imagePreview) return imagePreview;
-		if (loadedImageData) return loadedImageData;
-		if (imageFileId && window.electronAPI?.getFileUrl) {
-			return window.electronAPI.getFileUrl(imageFileId);
-		}
-		return null;
-	}, [imagePreview, loadedImageData, imageFileId]);
-
-	// Live real-time validation drives submit disabled state and error hint
+	// Real-time client validations driving submit disabled state and error hint
 	const validationError = useMemo(() => {
 		if (!shopId && !loading) return "Shop not identified.";
-		return validateShopProfile({
-			form,
-			coordinates,
-			imageFileId,
-			isUploading,
-			timings,
-		});
-	}, [shopId, loading, form, coordinates, imageFileId, isUploading, timings]);
 
-	const canSubmit = !saving && !isUploading && !validationError;
+		const bankErr = validateBankName(wallet.bank);
+		if (bankErr) return bankErr;
+
+		const titleErr = validateAccountTitle(wallet.title);
+		if (titleErr) return titleErr;
+
+		const numberErr = validateWalletNumber(wallet.number);
+		if (numberErr) return numberErr;
+
+		const contactErr = validateContactNumber(form.contactNumber);
+		if (contactErr) return contactErr;
+
+		const mapErr = validateGoogleMapsLink(form.googleMapsLink);
+		if (mapErr) return mapErr;
+
+		const timingsErr = validateTimings(timings);
+		if (timingsErr) return timingsErr;
+
+		return null;
+	}, [shopId, loading, wallet, form, timings]);
+
+	const canSubmit = !saving && !validationError;
 
 	const handleSubmit = async (e) => {
 		e.preventDefault();
@@ -318,11 +284,18 @@ function ShopProfileSettings() {
 		setSuccessMessage(null);
 
 		const timingStrings = timings.map(serializeTiming);
+		const cleanedWalletNumber = wallet.number
+			.trim()
+			.replace(/[\s\-]/g, "")
+			.toUpperCase()
+			.replace(/^\+92(?=3\d{9}$)/, "0");
+
 		const payload = {
-			name: form.name.trim(),
-			address: form.address.trim(),
-			coordinates: [coordinates.lat, coordinates.lng],
-			imageFile: imageFileId,
+			wallet: {
+				bank: wallet.bank.trim(),
+				title: wallet.title.trim(),
+				number: cleanedWalletNumber,
+			},
 			contactNumber: form.contactNumber.trim(),
 			timings: timingStrings,
 			...(form.googleMapsLink.trim() ? { googleMapsLink: form.googleMapsLink.trim() } : {}),
@@ -356,7 +329,7 @@ function ShopProfileSettings() {
 	}
 
 	return (
-		<div className="db-detail__view" style={{ maxWidth: "820px", margin: "0 auto", padding: "28px" }}>
+		<div className="db-detail__view" style={{ maxWidth: "780px", margin: "0 auto", padding: "28px" }}>
 			{/* Page Header */}
 			<div style={{ marginBottom: "24px" }}>
 				<span
@@ -382,7 +355,7 @@ function ShopProfileSettings() {
 					Shop profile
 				</h2>
 				<p style={{ fontSize: "13.5px", color: "var(--color-text-secondary)" }}>
-					Register or manage your location with address, timings, and contact details.
+					Manage your wallet, contact and timings.
 				</p>
 			</div>
 
@@ -396,190 +369,104 @@ function ShopProfileSettings() {
 					padding: "24px 28px",
 					display: "flex",
 					flexDirection: "column",
-					gap: "20px",
+					gap: "22px",
 				}}
 			>
 				{error && <div className="form-error">{error}</div>}
 
-				{/* 1. Shop Name */}
-				<div className="form-field" style={{ marginBottom: 0 }}>
-					<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
-						Shop name
-					</label>
-					<input
-						className="form-input"
-						type="text"
-						value={form.name}
-						onChange={(e) => updateForm("name", e.target.value)}
-						placeholder="Building or block name"
-						required
-					/>
-				</div>
+				{/* 1. Wallet Section (at the top) */}
+				<div
+					style={{
+						border: "1px solid var(--border-light)",
+						borderRadius: "var(--radius-md)",
+						padding: "16px 18px",
+						background: "var(--color-bg)",
+						display: "flex",
+						flexDirection: "column",
+						gap: "14px",
+					}}
+				>
+					<div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+						<div
+							style={{
+								width: "34px",
+								height: "34px",
+								borderRadius: "var(--radius-sm)",
+								background: "rgba(0, 217, 163, 0.12)",
+								color: "var(--color-primary)",
+								display: "flex",
+								alignItems: "center",
+								justifyContent: "center",
+								flexShrink: 0,
+							}}
+						>
+							<WalletIcon />
+						</div>
+						<div>
+							<h4 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--color-text-primary)" }}>
+								Wallet
+							</h4>
+							<p style={{ margin: 0, fontSize: "12px", color: "var(--color-text-secondary)", marginTop: "2px" }}>
+								Provide your bank account / mobile wallet where your earnings will be deposited.
+							</p>
+						</div>
+					</div>
 
-				{/* 2. Address */}
-				<div className="form-field" style={{ marginBottom: 0 }}>
-					<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
-						Address
-					</label>
-					<input
-						className="form-input"
-						type="text"
-						value={form.address}
-						onChange={(e) => updateForm("address", e.target.value)}
-						placeholder="Street, area, city"
-						required
-					/>
-				</div>
-
-				{/* 3. Location Section */}
-				<div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-					<div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: "8px" }}>
-						<label className="form-label" style={{ fontWeight: 600, fontSize: "13px", margin: 0 }}>
-							Location
+					{/* Bank / Provider Name */}
+					<div className="form-field" style={{ marginBottom: 0 }}>
+						<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
+							Bank / Wallet provider
 						</label>
-						<span style={{ fontSize: "12px", color: "var(--color-text-muted)" }}>
-							Click the map to drop a pin, or drag it to fine-tune
-						</span>
-					</div>
-
-					{/* Leaflet Map with Search Bar */}
-					<LocationPicker value={coordinates} onChange={setCoordinates} />
-
-					{/* Coordinates: Disabled / Auto-filled */}
-					<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginTop: "4px" }}>
-						<div>
-							<span style={{ fontSize: "11.5px", color: "var(--color-text-muted)", display: "block", marginBottom: "4px" }}>
-								Latitude
-							</span>
-							<input
-								className="form-input"
-								type="text"
-								value={coordinates?.lat !== undefined && coordinates?.lat !== null ? coordinates.lat.toFixed(5) : ""}
-								placeholder="00.00000"
-								disabled
-								readOnly
-								style={{
-									backgroundColor: "var(--color-bg-input)",
-									cursor: "not-allowed",
-									opacity: 0.8,
-									fontFamily: "monospace",
-								}}
-							/>
-						</div>
-						<div>
-							<span style={{ fontSize: "11.5px", color: "var(--color-text-muted)", display: "block", marginBottom: "4px" }}>
-								Longitude
-							</span>
-							<input
-								className="form-input"
-								type="text"
-								value={coordinates?.lng !== undefined && coordinates?.lng !== null ? coordinates.lng.toFixed(5) : ""}
-								placeholder="00.00000"
-								disabled
-								readOnly
-								style={{
-									backgroundColor: "var(--color-bg-input)",
-									cursor: "not-allowed",
-									opacity: 0.8,
-									fontFamily: "monospace",
-								}}
-							/>
-						</div>
-					</div>
-				</div>
-
-				{/* 4. Shop Image */}
-				<div className="form-field" style={{ marginBottom: 0 }}>
-					<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
-						Shop image
-					</label>
-					<div style={{ display: "flex", alignItems: "center", gap: "14px", flexWrap: "wrap", marginTop: "4px" }}>
 						<input
-							type="file"
-							accept="image/*"
-							disabled={isUploading}
-							onChange={(e) => handleImageChange(e.target.files?.[0] || null)}
-							style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}
+							className="form-input"
+							type="text"
+							value={wallet.bank}
+							onChange={(e) => updateWallet("bank", e.target.value)}
+							placeholder="e.g. Meezan Bank, EasyPaisa"
+							required
 						/>
-						{previewSrc && (
-							<div
-								onClick={() => setIsEnlargedImageOpen(true)}
-								style={{
-									position: "relative",
-									cursor: "pointer",
-									display: "inline-block",
-								}}
-								title="Click to enlarge image"
-							>
-								<img
-									src={previewSrc}
-									alt={imageName || form.name || "Shop preview"}
-									style={{
-										width: "50px",
-										height: "50px",
-										borderRadius: "var(--radius-md)",
-										border: "1px solid var(--border-light)",
-										objectFit: "cover",
-										display: "block",
-										transition: "transform var(--transition-fast), box-shadow var(--transition-fast)",
-									}}
-									onMouseEnter={(e) => {
-										e.currentTarget.style.transform = "scale(1.08)";
-										e.currentTarget.style.boxShadow = "var(--shadow-md)";
-									}}
-									onMouseLeave={(e) => {
-										e.currentTarget.style.transform = "scale(1)";
-										e.currentTarget.style.boxShadow = "none";
-									}}
-								/>
-								<div
-									style={{
-										position: "absolute",
-										bottom: "2px",
-										right: "2px",
-										background: "rgba(0, 0, 0, 0.65)",
-										borderRadius: "50%",
-										width: "16px",
-										height: "16px",
-										display: "flex",
-										alignItems: "center",
-										justifyContent: "center",
-										color: "#fff",
-										fontSize: "9px",
-										pointerEvents: "none",
-									}}
-								>
-									🔍
-								</div>
-							</div>
-						)}
 					</div>
-					<div style={{ fontSize: "11.5px", color: "var(--color-text-muted)", marginTop: "6px" }}>
-						{isUploading
-							? "Uploading image…"
-							: imageName
-							? `Selected: ${imageName}`
-							: imageFileId
-							? "Choose a file to replace the current image"
-							: "Please select an image for your shop"}
-						{previewSrc && !isUploading && (
-							<span
-								onClick={() => setIsEnlargedImageOpen(true)}
+
+					{/* Account Title & Account/IBAN Number in 2 columns */}
+					<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+						<div className="form-field" style={{ marginBottom: 0 }}>
+							<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
+								Account title
+							</label>
+							<input
+								className="form-input"
+								type="text"
+								value={wallet.title}
+								onChange={(e) => updateWallet("title", e.target.value)}
+								placeholder="e.g. Tehseen Riaz"
+								required
+							/>
+						</div>
+
+						<div className="form-field" style={{ marginBottom: 0 }}>
+							<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
+								IBAN / Account number
+							</label>
+							<input
+								className="form-input"
+								type="text"
+								value={wallet.number}
+								onChange={(e) => updateWallet("number", e.target.value)}
+								required
 								style={{
-									marginLeft: "8px",
-									color: "var(--color-primary)",
-									cursor: "pointer",
-									fontWeight: 600,
+									textTransform:
+										wallet.number.startsWith("PK") || wallet.number.startsWith("pk") ? "uppercase" : "none",
 								}}
-							>
-								(Click to view full image)
-							</span>
-						)}
+								placeholder="e.g. 03xxxxxxxx"
+							/>
+						</div>
 					</div>
-					{imageError && <div style={{ fontSize: "11.5px", color: "var(--color-accent)", marginTop: "4px" }}>{imageError}</div>}
+					<span style={{ fontSize: "11.5px", color: "var(--color-text-muted)" }}>
+						Supports 24-character IBAN, 8–20 digit bank account number, or mobile wallet (e.g. 03XXXXXXXXX).
+					</span>
 				</div>
 
-				{/* 5. Contact Number & Google Maps Link */}
+				{/* 2. Contact Number & Google Maps Link */}
 				<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
 					<div className="form-field" style={{ marginBottom: 0 }}>
 						<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
@@ -604,12 +491,11 @@ function ShopProfileSettings() {
 							type="url"
 							value={form.googleMapsLink}
 							onChange={(e) => updateForm("googleMapsLink", e.target.value)}
-							placeholder="https://maps.app.goo.gl/…"
 						/>
 					</div>
 				</div>
 
-				{/* 6. Timings */}
+				{/* 3. Timings */}
 				<div>
 					<div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "8px" }}>
 						<label className="form-label" style={{ fontWeight: 600, fontSize: "13px", margin: 0 }}>
@@ -735,7 +621,7 @@ function ShopProfileSettings() {
 					</div>
 				</div>
 
-				{/* 7. Action Bar & Submit */}
+				{/* 4. Action Bar & Submit */}
 				<div style={{ marginTop: "10px", display: "flex", flexDirection: "column", gap: "8px" }}>
 					<button
 						type="submit"
@@ -796,7 +682,6 @@ function ShopProfileSettings() {
 				>
 					<div
 						onClick={(e) => {
-							// Click directly on the card also dismisses
 							setShowSuccessPopup(false);
 						}}
 						style={{
@@ -816,7 +701,6 @@ function ShopProfileSettings() {
 							cursor: "pointer",
 						}}
 					>
-						{/* Green circle with checkmark/tick icon */}
 						<div
 							style={{
 								width: "64px",
@@ -875,105 +759,6 @@ function ShopProfileSettings() {
 						>
 							Click anywhere to dismiss
 						</span>
-					</div>
-				</div>
-			)}
-
-			{/* Enlarged Shop Image Lightbox Modal */}
-			{isEnlargedImageOpen && previewSrc && (
-				<div
-					onClick={() => setIsEnlargedImageOpen(false)}
-					style={{
-						position: "fixed",
-						inset: 0,
-						zIndex: 10000,
-						display: "flex",
-						alignItems: "center",
-						justifyContent: "center",
-						background: "rgba(0, 0, 0, 0.78)",
-						backdropFilter: "blur(6px)",
-						cursor: "zoom-out",
-						animation: "fadeIn 180ms ease-out both",
-						padding: "32px",
-					}}
-				>
-					<div
-						onClick={(e) => e.stopPropagation()}
-						style={{
-							position: "relative",
-							maxWidth: "90vw",
-							maxHeight: "88vh",
-							display: "flex",
-							flexDirection: "column",
-							alignItems: "center",
-							justifyContent: "center",
-							cursor: "default",
-							animation: "popIn 260ms cubic-bezier(0.16, 1, 0.3, 1) both",
-						}}
-					>
-						{/* Close Button */}
-						<button
-							type="button"
-							onClick={() => setIsEnlargedImageOpen(false)}
-							style={{
-								position: "absolute",
-								top: "-16px",
-								right: "-16px",
-								width: "36px",
-								height: "36px",
-								borderRadius: "50%",
-								background: "var(--color-bg-card)",
-								border: "1px solid var(--border-light)",
-								color: "var(--color-text-primary)",
-								display: "flex",
-								alignItems: "center",
-								justifyContent: "center",
-								fontSize: "16px",
-								fontWeight: 700,
-								cursor: "pointer",
-								boxShadow: "0 4px 16px rgba(0, 0, 0, 0.4)",
-								zIndex: 1,
-								transition: "transform var(--transition-fast)",
-							}}
-							onMouseEnter={(e) => {
-								e.currentTarget.style.transform = "scale(1.1)";
-							}}
-							onMouseLeave={(e) => {
-								e.currentTarget.style.transform = "scale(1)";
-							}}
-							title="Close image preview"
-						>
-							✕
-						</button>
-
-						{/* Enlarged Image */}
-						<img
-							src={previewSrc}
-							alt={imageName || form.name || "Enlarged shop preview"}
-							style={{
-								maxWidth: "100%",
-								maxHeight: "82vh",
-								borderRadius: "var(--radius-lg)",
-								boxShadow: "0 24px 60px rgba(0, 0, 0, 0.5)",
-								border: "1px solid rgba(255, 255, 255, 0.15)",
-								objectFit: "contain",
-								background: "var(--color-bg-card)",
-							}}
-						/>
-
-						{/* Caption & Instructions */}
-						<div
-							style={{
-								marginTop: "12px",
-								fontSize: "12.5px",
-								color: "#ffffff",
-								opacity: 0.9,
-								textAlign: "center",
-								textShadow: "0 1px 3px rgba(0,0,0,0.8)",
-							}}
-						>
-							{imageName || form.name || "Shop Image"} • Click anywhere outside or press Esc to close
-						</div>
 					</div>
 				</div>
 			)}

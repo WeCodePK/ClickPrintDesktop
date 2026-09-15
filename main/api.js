@@ -3,7 +3,7 @@ const { BrowserWindow } = require("electron");
 const { getAuth, setAuth, setJobs, clearAuth } = require("./state");
 const { listPrinters } = require("./printers");
 
-const API_BASE_URL = "https://clickprintbackend.wckd.pk"
+const API_BASE_URL = "https://api.clickprint.pk"
 
 // The backend now nests each route's payload under a named key inside `data`
 // (e.g. { data: { jobs: [...] } } instead of { data: [...] }). Unwrap that named
@@ -232,70 +232,6 @@ async function fetchFileBuffer(fileId) {
 	}
 }
 
-// Uploads a file (e.g. shop image) to /api/files
-async function uploadFile(buffer, fileName) {
-	try {
-		const formData = new FormData();
-		const blob = new Blob([buffer]);
-		formData.append("file", blob, fileName);
-		formData.append("convert", "false");
-
-		const response = await fetch(`${API_BASE_URL}/api/files`, {
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${getAuth().token}`,
-			},
-			body: formData,
-		});
-		return await readJson(response);
-	} catch (error) {
-		console.error("[API] uploadFile error:", error);
-		return apiError(error);
-	}
-}
-
-// Downloads an image file and returns a base64 data URL with detected MIME type
-async function fetchImageData(fileId) {
-	if (!fileId) return null;
-	try {
-		const res = await fetchFileBuffer(fileId);
-		if (!res.ok || !res.buffer) return null;
-		const base64 = Buffer.from(res.buffer).toString("base64");
-		let mime = "image/png";
-		const bytes = new Uint8Array(res.buffer.slice(0, 4));
-		if (bytes[0] === 0xff && bytes[1] === 0xd8) mime = "image/jpeg";
-		else if (bytes[0] === 0x89 && bytes[1] === 0x50) mime = "image/png";
-		else if (bytes[0] === 0x52 && bytes[1] === 0x49) mime = "image/webp";
-		return `data:${mime};base64,${base64}`;
-	} catch (error) {
-		console.error("[API] fetchImageData error:", error);
-		return null;
-	}
-}
-
-// Searches places using OpenStreetMap Nominatim
-async function searchLocation(query) {
-	try {
-		const trimmed = (query || "").trim();
-		if (!trimmed) return { success: true, data: [] };
-		const response = await fetch(
-			`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(trimmed)}&limit=5&addressdetails=1`,
-			{
-				headers: {
-					"User-Agent": "ClickPrintDesktop/1.0.1 (support@wecode.com.pk)",
-				},
-			}
-		);
-		if (!response.ok) {
-			return { success: false, message: `Geocoding error (${response.status})`, data: [] };
-		}
-		const data = await response.json();
-		return { success: true, data: Array.isArray(data) ? data : [] };
-	} catch (error) {
-		console.error("[API] searchLocation error:", error);
-		return { success: false, message: error.message, data: [] };
-	}
-}
 
 // Resolves the shop id, preferring the value saved at verify time and falling
 // back to decoding it out of the JWT payload.
@@ -718,9 +654,6 @@ module.exports = {
 	fetchJobs,
 	fetchHistory,
 	fetchFileBuffer,
-	uploadFile,
-	fetchImageData,
-	searchLocation,
 	updateJobStatus,
 	markJobFailed,
 	isJobFailing,
