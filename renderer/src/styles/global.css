@@ -3417,6 +3417,330 @@ body,
 	color: var(--color-text-muted);
 }
 
+/* ── Jobs & History table panel ── */
+
+.jobtbl-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	margin-bottom: 14px;
+}
+
+.jobtbl-toolbar__left {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 12px;
+	flex: 1;
+	min-width: 0;
+}
+
+/* Pins Download to the row's far right, directly under the Jobs/History switch. */
+.jobtbl-toolbar__right {
+	flex-shrink: 0;
+	margin-left: auto;
+}
+
+.jobtbl-toolbar .db-search {
+	position: static;
+	flex: 1;
+	min-width: 200px;
+	max-width: 360px;
+	margin-bottom: 0;
+}
+
+.jobtbl-filter {
+	width: auto;
+	min-width: 150px;
+	padding: 9px 12px;
+	font-size: 13px;
+}
+
+/* Download / Columns dropdown buttons. */
+.jobtbl-dropdown {
+	position: relative;
+	flex-shrink: 0;
+}
+
+.jobtbl-toolbar-btn {
+	flex: 0 0 auto;
+	width: auto;
+	padding: 9px 14px;
+	font-size: 13px;
+}
+
+.jobtbl-toolbar-btn svg {
+	width: 12px;
+	height: 12px;
+}
+
+/* Download button — accent-filled call to action, distinct from the neutral
+   outline buttons (Columns, pagination) alongside it. */
+.jobtbl-download-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	flex: 0 0 auto;
+	border: none;
+	padding: 9px 14px;
+	border-radius: var(--radius-md);
+	background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-light) 100%);
+	color: #ffffff;
+	font-family: var(--font-family);
+	font-size: 13px;
+	font-weight: 700;
+	cursor: pointer;
+	box-shadow: var(--shadow-accent);
+	transition: all var(--transition-base);
+}
+
+.jobtbl-download-btn:hover {
+	transform: translateY(-1px);
+	box-shadow: 0 8px 20px rgba(255, 79, 0, 0.3);
+}
+
+.jobtbl-download-btn svg {
+	width: 12px;
+	height: 12px;
+}
+
+.jobtbl-dropdown__menu {
+	display: none;
+	position: absolute;
+	top: calc(100% + 6px);
+	right: 0;
+	z-index: 5;
+	min-width: 140px;
+	background: var(--color-bg-card);
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-md);
+	padding: 6px;
+	flex-direction: column;
+	gap: 2px;
+}
+
+/* Hover-triggered menu (Download): opens on hover, and stays open while the
+   pointer travels the gap between the button and the menu. */
+.jobtbl-dropdown--hover:hover .jobtbl-dropdown__menu,
+.jobtbl-dropdown__menu:hover {
+	display: flex;
+}
+
+/* Click-triggered menu (Columns) is shown/hidden via React state, so it just
+   needs to render as flex whenever it's in the DOM. */
+.jobtbl-dropdown:not(.jobtbl-dropdown--hover) .jobtbl-dropdown__menu {
+	display: flex;
+}
+
+.jobtbl-dropdown__menu button {
+	display: block;
+	width: 100%;
+	text-align: left;
+	padding: 8px 10px;
+	border: none;
+	background: transparent;
+	border-radius: var(--radius-sm);
+	color: var(--color-text-primary);
+	font-family: var(--font-family);
+	font-size: 13px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: background var(--transition-fast);
+}
+
+.jobtbl-dropdown__menu button:hover {
+	background: rgba(134, 150, 160, 0.1);
+}
+
+.jobtbl-col-option {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 10px;
+	border-radius: var(--radius-sm);
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--color-text-primary);
+	cursor: pointer;
+	transition: background var(--transition-fast);
+}
+
+.jobtbl-col-option:hover {
+	background: rgba(134, 150, 160, 0.1);
+}
+
+.jobtbl-col-option input {
+	accent-color: var(--color-primary);
+	width: 15px;
+	height: 15px;
+	cursor: pointer;
+}
+
+.jobtbl-wrap {
+	overflow-x: auto;
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-md);
+}
+
+.jobtbl {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 13px;
+	white-space: nowrap;
+}
+
+.jobtbl thead {
+	background: rgba(134, 150, 160, 0.08);
+}
+
+.jobtbl th {
+	text-align: left;
+	padding: 10px 14px;
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.3px;
+	color: var(--color-text-muted);
+}
+
+.jobtbl td {
+	padding: 11px 14px;
+	border-top: 1px solid var(--border-light);
+	color: var(--color-text-primary);
+}
+
+.jobtbl tbody tr {
+	cursor: pointer;
+	transition: background var(--transition-fast);
+}
+
+.jobtbl tbody tr:hover {
+	background: rgba(134, 150, 160, 0.06);
+}
+
+.jobtbl__sub {
+	margin-top: 2px;
+	font-size: 11.5px;
+	color: var(--color-text-muted);
+}
+
+.jobtbl__empty {
+	padding: 30px 10px;
+	text-align: center;
+	color: var(--color-text-muted);
+	white-space: normal;
+}
+
+.jobtbl__view-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	border: none;
+	background: transparent;
+	color: var(--color-text-muted);
+	border-radius: var(--radius-sm);
+	cursor: pointer;
+	transition: all var(--transition-fast);
+}
+
+.jobtbl__view-btn:hover {
+	color: var(--color-primary);
+	background: rgba(0, 217, 163, 0.1);
+}
+
+.jobtbl-status {
+	display: inline-flex;
+	align-items: center;
+	padding: 3px 10px;
+	border-radius: var(--radius-pill);
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: capitalize;
+	width: fit-content;
+}
+
+.jobtbl-status--pending   { background: rgba(255, 87, 10, 0.12); color: var(--color-accent); }
+.jobtbl-status--active    { background: rgba(0, 217, 163, 0.14); color: var(--color-primary); }
+.jobtbl-status--completed { background: rgba(0, 217, 163, 0.14); color: var(--color-primary); }
+.jobtbl-status--danger    { background: rgba(255, 79, 0, 0.12); color: var(--color-accent); }
+
+.jobtbl-pagination {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin-top: 14px;
+}
+
+.jobtbl-pagination__left {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px;
+}
+
+.jobtbl-pagination__info {
+	font-size: 12.5px;
+	color: var(--color-text-muted);
+}
+
+.jobtbl-pagesize {
+	padding: 5px 10px;
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-sm);
+	background: var(--color-bg-card);
+	color: var(--color-text-primary);
+	font-family: var(--font-family);
+	font-size: 12.5px;
+	cursor: pointer;
+}
+
+.jobtbl-pagination__btns {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.jobtbl-pagination__page {
+	font-size: 12.5px;
+	font-weight: 700;
+	color: var(--color-text-secondary);
+}
+
+.jobtbl-pagination__btns .btn-outline {
+	flex: 0 0 auto;
+	padding: 7px 14px;
+	font-size: 12.5px;
+	width: auto;
+}
+
+.jobtbl-detail-grid {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 14px;
+	margin-bottom: 20px;
+}
+
+.jobtbl-detail-label {
+	display: block;
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.3px;
+	color: var(--color-text-muted);
+	margin-bottom: 4px;
+}
+
+@media (max-width: 640px) {
+	.jobtbl-detail-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* ── Bar chart ── */
 
 .bars {

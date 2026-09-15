@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { computeStats, buildEarningsSeries, EARNINGS_RANGES } from "../statsUtils";
 import { useAutoPrint } from "../AutoPrintContext";
+import JobsPanel from "../components/JobsPanel";
 import {
 	WalletIcon,
 	StackIcon,
@@ -320,6 +321,7 @@ function DashboardTab() {
 						<OutcomesPanel stats={stats} />
 						<TotalsPanel stats={stats} />
 						<ServicesPanel services={stats.topServices} maxUnits={stats.topServiceUnits} />
+						<JobsPanel />
 					</div>
 				</>
 			) : null}
