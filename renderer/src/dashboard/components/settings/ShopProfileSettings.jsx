@@ -147,7 +147,10 @@ function validateTimings(timings) {
 }
 
 
-function ShopProfileSettings() {
+// `embedded` drops the page header and the in-form submit button so a host (the
+// onboarding flow) can submit via an external `<button form={formId}>`; it gets
+// the submit state through `onStatusChange` and is told about a save via `onSaved`.
+function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved }) {
 	const [shopId, setShopId] = useState("");
 	const [wallet, setWallet] = useState({
 		bank: "",
@@ -265,7 +268,11 @@ function ShopProfileSettings() {
 		return null;
 	}, [shopId, loading, wallet, form, timings]);
 
-	const canSubmit = !saving && !validationError;
+	const canSubmit = !saving && !loading && !validationError;
+
+	useEffect(() => {
+		onStatusChange?.({ canSubmit, saving, validationError });
+	}, [canSubmit, saving, validationError, onStatusChange]);
 
 	const handleSubmit = async (e) => {
 		e.preventDefault();
@@ -304,8 +311,12 @@ function ShopProfileSettings() {
 		try {
 			const result = await window.electronAPI.updateShop(shopId, payload);
 			if (result.success) {
-				setSuccessMessage("Shop profile updated successfully.");
-				setShowSuccessPopup(true);
+				if (embedded) {
+					onSaved?.();
+				} else {
+					setSuccessMessage("Shop profile updated successfully.");
+					setShowSuccessPopup(true);
+				}
 			} else {
 				setError(result.message || "Failed to update shop profile.");
 			}
@@ -318,19 +329,22 @@ function ShopProfileSettings() {
 	};
 
 	if (loading) {
-		return (
-			<div className="db-detail__view">
-				<div className="db-coming-soon">
-					<div className="spinner spinner--dark" />
-					<p>Loading shop profile…</p>
-				</div>
+		const spinner = (
+			<div className="db-coming-soon">
+				<div className="spinner spinner--dark" />
+				<p>Loading shop profile…</p>
 			</div>
 		);
+		return embedded ? spinner : <div className="db-detail__view">{spinner}</div>;
 	}
 
 	return (
-		<div className="db-detail__view" style={{ maxWidth: "780px", margin: "0 auto", padding: "28px" }}>
+		<div
+			className={embedded ? undefined : "db-detail__view"}
+			style={embedded ? undefined : { maxWidth: "780px", margin: "0 auto", padding: "28px" }}
+		>
 			{/* Page Header */}
+			{!embedded && (
 			<div style={{ marginBottom: "24px" }}>
 				<span
 					style={{
@@ -358,8 +372,10 @@ function ShopProfileSettings() {
 					Manage your wallet, contact and timings.
 				</p>
 			</div>
+			)}
 
 			<form
+				id={formId}
 				onSubmit={handleSubmit}
 				style={{
 					background: "var(--color-bg-card)",
@@ -623,6 +639,7 @@ function ShopProfileSettings() {
 
 				{/* 4. Action Bar & Submit */}
 				<div style={{ marginTop: "10px", display: "flex", flexDirection: "column", gap: "8px" }}>
+					{!embedded && (
 					<button
 						type="submit"
 						className="btn-gradient"
@@ -640,6 +657,7 @@ function ShopProfileSettings() {
 					>
 						{saving ? "Saving changes…" : "Save changes"}
 					</button>
+					)}
 
 					{/* Red hint text describing what is wrong when button is disabled */}
 					{!saving && validationError && (
