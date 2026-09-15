@@ -111,7 +111,7 @@ function OutcomesPanel({ stats }) {
 	)`;
 
 	return (
-		<div className="panel">
+		<div className="panel panel--span2">
 			<div className="panel__head">
 				<h3 className="panel__title">Job Outcomes</h3>
 			</div>
@@ -318,8 +318,8 @@ function DashboardTab() {
 						onRangeChange={setEarningsRange}
 					/>
 						<OutcomesPanel stats={stats} />
-						<ServicesPanel services={stats.topServices} maxUnits={stats.topServiceUnits} />
 						<TotalsPanel stats={stats} />
+						<ServicesPanel services={stats.topServices} maxUnits={stats.topServiceUnits} />
 					</div>
 				</>
 			) : null}
