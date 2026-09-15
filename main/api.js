@@ -106,7 +106,7 @@ function selectShop(shop) {
 
 async function fetchJobs() {
 	try {
-		const response = await fetch(`${API_BASE_URL}/api/jobs/shops/${getAuth().shopId}`, {
+		const response = await fetch(`${API_BASE_URL}/api/jobs/shop/${getAuth().shopId}`, {
 			headers: {
 		"Content-Type": "application/json",
 		Authorization: `Bearer ${getAuth().token}`,
