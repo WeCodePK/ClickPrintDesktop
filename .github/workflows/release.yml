@@ -19,6 +19,12 @@ concurrency:
 permissions:
   contents: write
 
+# How many releases to keep. Older ones are deleted, tag and all, after each
+# successful publish. Keeping a handful means a client that is a few versions
+# behind can still fetch the old blockmap for a differential download.
+env:
+  KEEP_RELEASES: 5
+
 jobs:
   release:
     runs-on: windows-latest
@@ -63,3 +69,20 @@ jobs:
         run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The updater only ever reads the newest release, so everything older is
+      # dead weight that clutters the tag list. Runs after a successful publish
+      # and never fails the job: the release is already out by this point, and a
+      # failed cleanup is not worth marking it red over.
+      - name: Prune superseded releases
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "repos/${{ github.repository }}/releases?per_page=100" \
+            --jq '.[].tag_name' > tags.txt
+          node scripts/prune-releases.js "$KEEP_RELEASES" < tags.txt | while read -r TAG; do
+            echo "Deleting release $TAG"
+            gh release delete "$TAG" --yes --cleanup-tag --repo "${{ github.repository }}"
+          done
