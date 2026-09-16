@@ -108,6 +108,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	maximizeWindow: () => ipcRenderer.send("window:maximize"),
 	closeWindow: () => ipcRenderer.send("window:close"),
 
+	// Startup behaviour — whether Windows launches the app (into the tray) at
+	// sign-in. Closing the window always minimises to the tray, so the app keeps
+	// printing in the background either way.
+	getOpenAtLogin: () => ipcRenderer.invoke("app:get-open-at-login"),
+	setOpenAtLogin: (enabled) => ipcRenderer.invoke("app:set-open-at-login", enabled),
+
 	// Auto-update
 	getAppVersion: () => ipcRenderer.invoke("app:get-version"),
 	getUpdateStatus: () => ipcRenderer.invoke("app:get-update-status"),

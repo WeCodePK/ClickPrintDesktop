@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { computeStats, buildEarningsSeries, EARNINGS_RANGES } from "../statsUtils";
 import { useAutoPrint } from "../AutoPrintContext";
+import JobsPanel from "../components/JobsPanel";
 import {
 	WalletIcon,
 	StackIcon,
@@ -111,7 +112,7 @@ function OutcomesPanel({ stats }) {
 	)`;
 
 	return (
-		<div className="panel">
+		<div className="panel panel--span2">
 			<div className="panel__head">
 				<h3 className="panel__title">Job Outcomes</h3>
 			</div>
@@ -318,8 +319,9 @@ function DashboardTab() {
 						onRangeChange={setEarningsRange}
 					/>
 						<OutcomesPanel stats={stats} />
-						<ServicesPanel services={stats.topServices} maxUnits={stats.topServiceUnits} />
 						<TotalsPanel stats={stats} />
+						<ServicesPanel services={stats.topServices} maxUnits={stats.topServiceUnits} />
+						<JobsPanel />
 					</div>
 				</>
 			) : null}

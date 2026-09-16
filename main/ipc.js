@@ -236,6 +236,7 @@ function registerIpcHandlers(getMainWindow) {
 		}
 	});
 
+
 	// ── Shop printers (registered on the backend) ─────────────────────────────
 	ipcMain.handle("printers:fetch", async () => {
 		console.log("[IPC] printers:fetch");

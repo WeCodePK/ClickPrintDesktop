@@ -3,7 +3,7 @@ const { BrowserWindow } = require("electron");
 const { getAuth, setAuth, setJobs, clearAuth } = require("./state");
 const { listPrinters } = require("./printers");
 
-const API_BASE_URL = "https://clickprintbackend.wckd.pk"
+const API_BASE_URL = "https://api.clickprint.pk"
 
 // The backend now nests each route's payload under a named key inside `data`
 // (e.g. { data: { jobs: [...] } } instead of { data: [...] }). Unwrap that named
@@ -106,7 +106,7 @@ function selectShop(shop) {
 
 async function fetchJobs() {
 	try {
-		const response = await fetch(`${API_BASE_URL}/api/jobs/shops/${getAuth().shopId}`, {
+		const response = await fetch(`${API_BASE_URL}/api/jobs/shop/${getAuth().shopId}`, {
 			headers: {
 		"Content-Type": "application/json",
 		Authorization: `Bearer ${getAuth().token}`,
@@ -231,6 +231,7 @@ async function fetchFileBuffer(fileId) {
 		return { ok: false };
 	}
 }
+
 
 // Resolves the shop id, preferring the value saved at verify time and falling
 // back to decoding it out of the JWT payload.
@@ -550,7 +551,7 @@ function stopJobsSse() {
 function _connectSse() {
 	if (!getAuth().token || !_onJobsUpdate) return;
 
-	// The live jobs stream is scoped to the chosen shop: /api/events/:shopId.
+	// The live jobs stream is scoped to the chosen shop: /api/events/shop/:shopId.
 	// Without a selected shop there's nothing to stream — bail (selectShop, which
 	// runs before beginJobsSync, guarantees this is set for a normal login).
 	const shopId = getShopId();
@@ -562,7 +563,7 @@ function _connectSse() {
 
 	_setSseStatus("connecting");
 
-	const endpoint = `${API_BASE_URL}/api/events/${shopId}`;
+	const endpoint = `${API_BASE_URL}/api/events/shop/${shopId}`;
 
 	_sse = new EventSource(endpoint, {
 		headers: { Authorization: `Bearer ${getAuth().token}` },

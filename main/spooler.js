@@ -35,7 +35,8 @@ const GONE_FLAGS = JS.DELETING | JS.DELETED;
 const DONE_FLAGS = JS.PRINTED | JS.COMPLETE;
 
 const TICK_MS = 1200; // shared poll cadence while any verification is active
-const IDENTIFY_TIMEOUT_MS = 8000; // job never appears → fast printer, assume success
+const IDENTIFY_TIMEOUT_MS = 8000; // spool confirmed, job never appears → fast printer, assume success
+const SPOOL_TIMEOUT_MS = 60000; // no spool callback and job never appears → it never spooled
 const ERROR_TIMEOUT_MS = 60000; // error flags persisting this long → failure
 const STUCK_TIMEOUT_MS = 300000; // no page progress for this long → failure
 const MAX_POLL_FAILURES = 5; // consecutive query failures before giving up (assume success)
@@ -177,10 +178,19 @@ function _evaluate(track, rows, now) {
 			_identified(track, fresh.Id);
 			if (track.onPhase) track.onPhase("verifying");
 			// fall through to tracking evaluation below
-		} else if (now - track.startedAt > IDENTIFY_TIMEOUT_MS) {
-			// Never showed up: the printer finished it between the spool callback
-			// and our first sighting. Chromium confirmed spooling, so call it done.
-			_finish(track, "success", "completed before first poll");
+		} else if (track.spool) {
+			// Chromium has answered; give the job IDENTIFY_TIMEOUT_MS after that to
+			// show up. If it never does, the answer decides: a confirmed spool means
+			// a fast printer finished it between polls, a refusal means nothing went
+			// out. A sighting (above) always overrides the answer.
+			if (now - track.spool.at <= IDENTIFY_TIMEOUT_MS) return;
+			if (track.spool.ok) _finish(track, "success", "completed before first poll");
+			else _finish(track, "error", `spool failed${track.spool.reason ? `: ${track.spool.reason}` : ""}`);
+			return;
+		} else if (now - track.startedAt > SPOOL_TIMEOUT_MS) {
+			// No callback (normal for PDFs, see files.js startPrint) and nothing
+			// ever appeared in the queue.
+			_finish(track, "error", "never reached the print queue");
 			return;
 		} else {
 			return;
@@ -281,12 +291,22 @@ async function snapshotPrinter(device) {
 
 // Watches the printer's queue until our job (the one not in `beforeIds`)
 // reaches a terminal state. Resolves { outcome: "success"|"cancelled"|"error"|
-// "stuck"|"aborted", detail }. Never rejects. `beforeIds === null` (snapshot
-// failed / non-Windows) resolves success immediately — trust the spool callback.
-function trackPrintJob(device, beforeIds, { onPhase, onIdentified } = {}) {
+// "stuck"|"aborted", detail }. Never rejects. Start it as soon as the job is
+// handed to Chromium: `spool` is the print callback as a promise of
+// { ok, reason }, and it only decides the outcome when the job is never seen in
+// the queue. `beforeIds === null` (snapshot failed / non-Windows) can't observe
+// anything, so only an explicit spool refusal counts as a failure there.
+function trackPrintJob(device, beforeIds, { onPhase, onIdentified, spool = Promise.resolve({ ok: true }) } = {}) {
 	if (beforeIds === null || process.platform !== "win32") {
 		if (onIdentified) onIdentified(null);
-		return Promise.resolve({ outcome: "success", detail: "untracked" });
+		// Refusals come back fast; a silent callback is trusted, like the
+		// poll-failure fallback in _poll.
+		const silent = new Promise((resolve) => setTimeout(() => resolve(null), IDENTIFY_TIMEOUT_MS));
+		return Promise.race([spool, silent]).then((r) =>
+			r && !r.ok
+				? { outcome: "error", detail: `spool failed${r.reason ? `: ${r.reason}` : ""}` }
+				: { outcome: "success", detail: "untracked" }
+		);
 	}
 	// The engine's spool lock guarantees at most one document per printer is in
 	// the identify phase. If that ever slips, both would race for the same fresh
@@ -299,7 +319,7 @@ function trackPrintJob(device, beforeIds, { onPhase, onIdentified } = {}) {
 
 	const id = _nextTrackId++;
 	return new Promise((resolve) => {
-		_tracks.set(id, {
+		const track = {
 			id,
 			device,
 			phase: "identify",
@@ -310,11 +330,16 @@ function trackPrintJob(device, beforeIds, { onPhase, onIdentified } = {}) {
 			lastProgressAt: Date.now(),
 			errorSince: null,
 			startedAt: Date.now(),
+			spool: null, // { ok, reason, at } once Chromium's print callback fires
 			settled: false,
 			identifiedFired: false,
 			onPhase,
 			onIdentified,
 			resolve,
+		};
+		_tracks.set(id, track);
+		spool.then((r) => {
+			track.spool = { ok: !!r?.ok, reason: r?.reason || null, at: Date.now() };
 		});
 		_ensureTimer();
 		_poll(); // immediate first look — fast printers finish quickly

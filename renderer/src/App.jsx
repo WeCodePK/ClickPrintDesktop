@@ -1,16 +1,21 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import TitleBar from "./components/TitleBar";
 import LoginScreen from "./screens/LoginScreen";
 import OtpScreen from "./screens/OtpScreen";
 import ShopSelectScreen from "./screens/ShopSelectScreen";
 import DashboardScreen from "./screens/DashboardScreen";
+import OnboardingScreen from "./screens/OnboardingScreen";
+import { checkSetup, isSetupComplete } from "./onboarding/setupStatus";
+import { LogoutIcon, RetryIcon } from "./dashboard/icons";
 
 function App() {
-	const [screen, setScreen] = useState("login"); // "login" | "otp" | "selectShop" | "dashboard"
+	const [screen, setScreen] = useState("login"); // "login" | "otp" | "selectShop" | "setup" | "onboarding" | "dashboard"
 	const [phoneNumber, setPhoneNumber] = useState("");
 	const [shops, setShops] = useState([]); // shops to choose from after verify
 	const [shopProfile, setShopProfile] = useState(null);
 	const [restoring, setRestoring] = useState(true); // checking for a saved session
+	const [setupStatus, setSetupStatus] = useState(null);
+	const [setupError, setSetupError] = useState(null);
 	const [theme, setTheme] = useState(() => {
 		const savedTheme = localStorage.getItem("theme");
 		if (savedTheme) return savedTheme;
@@ -23,6 +28,26 @@ function App() {
 		document.documentElement.setAttribute("data-theme", theme);
 		localStorage.setItem("theme", theme);
 	}, [theme]);
+
+	// Runs once per session start (restore or login): an incomplete shop setup
+	// routes to onboarding instead of the dashboard. A failed check is shown with
+	// a retry rather than letting the operator past onboarding.
+	const runSetupCheck = useCallback(async () => {
+		setSetupError(null);
+		setScreen("setup");
+		try {
+			const status = await checkSetup();
+			if (isSetupComplete(status)) {
+				setScreen("dashboard");
+			} else {
+				setSetupStatus(status);
+				setScreen("onboarding");
+			}
+		} catch (err) {
+			console.error("[Renderer] setup check failed:", err);
+			setSetupError(err.message || "Couldn't check your shop setup.");
+		}
+	}, []);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -37,7 +62,7 @@ function App() {
 					window.location.hash = "#/jobs";
 					setShopProfile({ _id: auth.shopId, name: auth.shopName ?? "" });
 					setPhoneNumber(auth.phoneNumber || "");
-					setScreen("dashboard");
+					runSetupCheck();
 				}
 			})
 			.catch((err) => console.warn("[Renderer] session restore failed:", err))
@@ -47,7 +72,7 @@ function App() {
 		return () => {
 			cancelled = true;
 		};
-	}, []);
+	}, [runSetupCheck]);
 
 	const toggleTheme = () => {
 		setTheme((prev) => (prev === "dark" ? "light" : "dark"));
@@ -66,8 +91,13 @@ function App() {
 	const enterDashboard = (profile) => {
 		window.location.hash = "#/jobs";
 		setShopProfile(profile);
-		setScreen("dashboard");
+		runSetupCheck();
 	};
+
+	const handleOnboardingComplete = useCallback(() => {
+		setSetupStatus(null);
+		setScreen("dashboard");
+	}, []);
 
 	// Called once the OTP is verified. `data` is the verify response payload,
 	// including data.shops (the shops this user owns). A single shop is selected
@@ -101,6 +131,8 @@ function App() {
 		setShopProfile(null);
 		setPhoneNumber("");
 		setShops([]);
+		setSetupStatus(null);
+		setSetupError(null);
 		setScreen("login");
 	};
 
@@ -110,6 +142,55 @@ function App() {
 				<TitleBar theme={theme} onToggleTheme={toggleTheme} />
 				<div className="app-content" style={{ alignItems: "center", justifyContent: "center" }}>
 					<div className="spinner spinner--dark" />
+				</div>
+			</div>
+		);
+	}
+
+	if (screen === "setup") {
+		return (
+			<div className="app-container">
+				<TitleBar theme={theme} onToggleTheme={toggleTheme} />
+				<div className="app-content">
+					<div className="onb-gate">
+						{setupError ? (
+							<div className="onb-gate__card">
+								<h2 className="onb-gate__title">Couldn’t check your shop setup</h2>
+								<p className="onb-gate__text">{setupError}</p>
+								<div className="onb-gate__actions">
+									<button type="button" className="btn-outline" onClick={handleLogout}>
+										<LogoutIcon />
+										Log out
+									</button>
+									<button type="button" className="btn-gradient" onClick={runSetupCheck}>
+										<RetryIcon />
+										Try again
+									</button>
+								</div>
+							</div>
+						) : (
+							<>
+								<div className="spinner spinner--dark" />
+								<p className="onb-gate__text">Checking your shop setup…</p>
+							</>
+						)}
+					</div>
+				</div>
+			</div>
+		);
+	}
+
+	if (screen === "onboarding" && setupStatus) {
+		return (
+			<div className="app-container">
+				<TitleBar theme={theme} onToggleTheme={toggleTheme} />
+				<div className="app-content">
+					<OnboardingScreen
+						shopName={shopProfile?.name}
+						initialStatus={setupStatus}
+						onComplete={handleOnboardingComplete}
+						onLogout={handleLogout}
+					/>
 				</div>
 			</div>
 		);
