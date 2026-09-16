@@ -50,7 +50,14 @@ autoUpdater.on('error', (err) => {
 
 // Let the renderer trigger a restart + install, read the version, or replay the
 // current update status (for a banner that mounts after events already fired).
-ipcMain.on('app:restart-to-update', () => autoUpdater.quitAndInstall());
+//
+// Both flags matter. The first installs silently: the NSIS installer is the
+// "assisted" kind (nsis.oneClick is false) so a *first* install can pick its
+// directory, but without /S an update drags the operator back through the
+// wizard's progress and Finish pages. The second relaunches the app once the
+// installer finishes -- electron-updater only forces a relaunch on its own for
+// the non-silent path, so a silent install without it would just exit.
+ipcMain.on('app:restart-to-update', () => autoUpdater.quitAndInstall(true, true));
 ipcMain.handle('app:get-version', () => app.getVersion());
 ipcMain.handle('app:get-update-status', () => updateStatus);
 
