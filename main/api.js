@@ -551,7 +551,7 @@ function stopJobsSse() {
 function _connectSse() {
 	if (!getAuth().token || !_onJobsUpdate) return;
 
-	// The live jobs stream is scoped to the chosen shop: /api/events/:shopId.
+	// The live jobs stream is scoped to the chosen shop: /api/events/shop/:shopId.
 	// Without a selected shop there's nothing to stream — bail (selectShop, which
 	// runs before beginJobsSync, guarantees this is set for a normal login).
 	const shopId = getShopId();
@@ -563,7 +563,7 @@ function _connectSse() {
 
 	_setSseStatus("connecting");
 
-	const endpoint = `${API_BASE_URL}/api/events/${shopId}`;
+	const endpoint = `${API_BASE_URL}/api/events/shop/${shopId}`;
 
 	_sse = new EventSource(endpoint, {
 		headers: { Authorization: `Bearer ${getAuth().token}` },
