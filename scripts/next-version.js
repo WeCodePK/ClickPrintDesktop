@@ -1,13 +1,21 @@
-// Derives the next release version from the tags of existing GitHub releases,
-// so package.json never has to carry a real version number. Reads newline
-// separated tags on stdin (as produced by `gh api .../releases`).
+// Derives the next release version, so package.json never has to be bumped for
+// an ordinary release. Two things feed into it:
 //
-//   node scripts/next-version.js [patch|minor|major] [baseline]
+//   * the highest existing GitHub release tag, patch-bumped — the default, so a
+//     plain push to prod ships x.y.(z+1) without anyone editing a file
+//   * the version declared in package.json, which acts as a floor — commit a
+//     higher one (1.1.0, 2.0.0) and that is what ships instead
 //
-// The baseline is only used when the repo has no releases yet.
+// The higher of the two wins. That is also what keeps the result collision
+// free: the patch bump always sits above every existing release, so a declared
+// version that has merely gone stale, or that matches a tag already handed out,
+// can never be released a second time.
+//
+//   node scripts/next-version.js <declared-version> < tags.txt
+//
+// Reads newline separated tags on stdin (as produced by `gh api .../releases`).
 
-const bump = process.argv[2] || 'patch';
-const baseline = process.argv[3] || '0.0.0';
+const declaredArg = process.argv[2] || '0.0.0';
 
 const SEMVER = /^v?(\d+)\.(\d+)\.(\d+)$/;
 
@@ -16,30 +24,34 @@ function parse(tag) {
   return match ? match.slice(1, 4).map(Number) : null;
 }
 
-// Ignores prereleases and anything else that isn't a plain X.Y.Z tag.
-function highest(tags) {
-  return tags
-    .map(parse)
-    .filter(Boolean)
-    .sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2])
-    .pop();
+function compare(a, b) {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
 }
 
-function increment([major, minor, patch]) {
-  if (bump === 'major') return [major + 1, 0, 0];
-  if (bump === 'minor') return [major, minor + 1, 0];
+// Ignores prereleases and anything else that isn't a plain X.Y.Z tag.
+function highest(tags) {
+  return tags.map(parse).filter(Boolean).sort(compare).pop();
+}
+
+function nextPatch([major, minor, patch]) {
   return [major, minor, patch + 1];
 }
 
 let stdin = '';
 process.stdin.on('data', (chunk) => (stdin += chunk));
 process.stdin.on('end', () => {
-  const current = highest(stdin.split('\n')) || parse(baseline);
+  const declared = parse(declaredArg);
 
-  if (!current) {
-    console.error(`Invalid baseline version: ${baseline}`);
+  if (!declared) {
+    console.error(`Invalid version in package.json: ${declaredArg}`);
     process.exit(1);
   }
 
-  console.log(increment(current).join('.'));
+  const latest = highest(stdin.split('\n'));
+
+  // With no releases yet there is nothing to bump past, so package.json is
+  // taken at face value rather than incremented.
+  const candidate = latest ? nextPatch(latest) : declared;
+
+  console.log((compare(candidate, declared) >= 0 ? candidate : declared).join('.'));
 });

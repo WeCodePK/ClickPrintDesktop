@@ -3,13 +3,6 @@ name: Release
 on:
   push:
     branches: [prod]
-  workflow_dispatch:
-    inputs:
-      bump:
-        description: "Version bump to apply"
-        type: choice
-        options: [patch, minor, major]
-        default: patch
 
 # Two releases building at once would resolve to the same next version.
 concurrency:
@@ -39,8 +32,9 @@ jobs:
 
       - run: npm ci
 
-      # The real version lives in GitHub releases, not in package.json. The
-      # version in package.json is only a baseline for the very first release.
+      # An ordinary push patch-bumps the newest release, so routine work needs
+      # no version edit at all. To ship a minor or major instead, commit a
+      # higher version in package.json: it acts as a floor on the result.
       - name: Resolve next version
         id: version
         shell: bash
@@ -52,7 +46,6 @@ jobs:
           gh api "repos/${{ github.repository }}/releases?per_page=100" \
             --jq '.[].tag_name' > tags.txt
           VERSION=$(node scripts/next-version.js \
-            "${{ inputs.bump || 'patch' }}" \
             "$(node -p "require('./package.json').version")" < tags.txt)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Releasing v$VERSION"
