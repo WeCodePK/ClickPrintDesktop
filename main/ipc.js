@@ -27,7 +27,7 @@ const {
 	setPingNotifier,
 	getSseStatus,
 } = require("./api");
-const { syncJobFiles, getStatusMap, setNotifier, openFile } = require("./files");
+const { syncJobFiles, getStatusMap, setNotifier, openFile, ensureProof, openProof } = require("./files");
 const { listPrinters, listAllPrinters, printTestPage } = require("./printers");
 const { getJobs } = require("./state");
 const engine = require("./printEngine");
@@ -232,6 +232,25 @@ function registerIpcHandlers(getMainWindow) {
 			return { success: true };
 		} catch (error) {
 			console.error(`[IPC] files:open ${fileId} error:`, error.message);
+			return { success: false, message: error.message };
+		}
+	});
+
+	// Payment proofs download with the rest of a job's files; these two exist for
+	// the details pane — a manual retry after a failed download, and opening the
+	// proof full-size in the OS viewer.
+	ipcMain.handle("files:ensure-proof", async (_event, fileId) => {
+		console.log(`[IPC] files:ensure-proof → ${fileId}`);
+		return { success: await ensureProof(fileId) };
+	});
+
+	ipcMain.handle("files:open-proof", async (_event, fileId) => {
+		console.log(`[IPC] files:open-proof → ${fileId}`);
+		try {
+			await openProof(fileId);
+			return { success: true };
+		} catch (error) {
+			console.error(`[IPC] files:open-proof ${fileId} error:`, error.message);
 			return { success: false, message: error.message };
 		}
 	});

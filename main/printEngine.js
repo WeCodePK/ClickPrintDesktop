@@ -745,13 +745,15 @@ async function autoFailJob(jobId) {
 }
 
 // Terminal-state cleanup shared by complete/cancel/fail: drop tasks, delete
-// cached files, prune progress.
+// cached files (including the job's payment proof, if it had one), prune
+// progress.
 function finalizeJob(jobId, fileIds) {
 	dropJobTasks(jobId);
 	pruneJobProgress(jobId);
 	if (fileIds?.length) {
 		files.deleteJobFiles(fileIds).catch((err) => console.error("[Engine] file cleanup failed:", err));
 	}
+	files.deleteJobProof(jobId).catch((err) => console.error("[Engine] proof cleanup failed:", err));
 	emit();
 }
 

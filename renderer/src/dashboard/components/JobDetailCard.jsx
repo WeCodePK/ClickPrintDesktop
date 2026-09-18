@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
 	PdfGlyph,
 	UserGlyph,
@@ -8,6 +9,7 @@ import {
 	RetryIcon,
 	CheckFilledIcon,
 	AlertFilledIcon,
+	WalletIcon,
 } from "../icons";
 import { useFiles } from "../FilesContext";
 import { getJobPrintMode, getJobTotalPages, getBlockedReason } from "../jobUtils";
@@ -290,6 +292,137 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, on
 	);
 }
 
+// Full-size view of a payment proof, since the thumbnail is too small to read a
+// transaction id off. "Open in viewer" hands it to the OS image viewer, where it
+// can be zoomed properly.
+function ProofLightbox({ src, fileId, onClose, onImageError }) {
+	const { openProof } = useFiles();
+
+	useEffect(() => {
+		const onKeyDown = (event) => {
+			if (event.key === "Escape") onClose();
+		};
+		window.addEventListener("keydown", onKeyDown);
+		return () => window.removeEventListener("keydown", onKeyDown);
+	}, [onClose]);
+
+	return (
+		<div className="modal-overlay" onClick={onClose}>
+			<div className="proof-lightbox" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+				<div className="proof-lightbox__head">
+					<h3 className="proof-lightbox__title">Payment Proof</h3>
+					<div className="proof-lightbox__actions">
+						<button className="btn-outline btn-sm" onClick={() => openProof(fileId)}>
+							<EyeIcon />
+							Open in viewer
+						</button>
+						<button className="btn-outline btn-sm" onClick={onClose}>
+							Close
+						</button>
+					</div>
+				</div>
+				<img className="proof-lightbox__img" src={src} alt="Payment proof" onError={onImageError} />
+			</div>
+		</div>
+	);
+}
+
+// The customer's proof of payment (a transfer screenshot), downloaded in the
+// background the moment its job lands — so the common case is simply the cached
+// image. The other states cover a download still in flight, one that failed
+// (retryable), a proof whose bytes aren't an image the preview can render, and a
+// job whose cache has already been cleaned up on completion, where the proof is
+// fetched on demand instead (History).
+function PaymentProof({ fileId }) {
+	const { fileStatus, proofUrl, ensureProof, openProof } = useFiles();
+	const [zoomed, setZoomed] = useState(false);
+	const [imageError, setImageError] = useState(false);
+	// Bumped on every retry so the cached (possibly 404) response isn't reused.
+	const [reloadKey, setReloadKey] = useState(0);
+
+	const status = fileStatus[fileId];
+
+	// Selecting a different job reuses this component — start its state clean.
+	useEffect(() => {
+		setZoomed(false);
+		setImageError(false);
+	}, [fileId]);
+
+	const src = `${proofUrl(fileId)}${reloadKey ? `?r=${reloadKey}` : ""}`;
+
+	const retry = () => {
+		setImageError(false);
+		setReloadKey((key) => key + 1);
+		ensureProof(fileId);
+	};
+
+	return (
+		<div className="payment-proof">
+			<span className="receipt-label payment-proof__label">
+				<WalletIcon />
+				Payment Proof
+			</span>
+			{status === "ready" && !imageError ? (
+				<>
+					<button
+						type="button"
+						className="payment-proof__thumb"
+						onClick={() => setZoomed(true)}
+						title="Click to enlarge"
+					>
+						<img src={src} alt="Payment proof" onError={() => setImageError(true)} />
+					</button>
+					{zoomed && (
+						<ProofLightbox
+							src={src}
+							fileId={fileId}
+							onClose={() => setZoomed(false)}
+							onImageError={() => {
+								setImageError(true);
+								setZoomed(false);
+							}}
+						/>
+					)}
+				</>
+			) : status === "downloading" ? (
+				<div className="payment-proof__placeholder">
+					<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)" }} />
+					<span>Downloading…</span>
+				</div>
+			) : status === "error" ? (
+				<div className="payment-proof__placeholder">
+					<span>Couldn't download the payment proof.</span>
+					<button type="button" className="btn-outline btn-sm" onClick={retry}>
+						<RetryIcon />
+						Retry
+					</button>
+				</div>
+			) : imageError ? (
+				// Downloaded, but not something the preview can draw (e.g. a PDF
+				// receipt instead of a screenshot) — or the cached copy has since been
+				// cleaned up. Either way the OS viewer is the way through: openProof
+				// re-downloads first if needed.
+				<div className="payment-proof__placeholder">
+					<span>This payment proof can't be previewed here.</span>
+					<button type="button" className="btn-outline btn-sm" onClick={() => openProof(fileId)}>
+						<EyeIcon />
+						Open in viewer
+					</button>
+				</div>
+			) : (
+				// No download has been attempted in this session — the job's cache was
+				// dropped when it reached a terminal state (History).
+				<div className="payment-proof__placeholder">
+					<button type="button" className="btn-outline btn-sm" onClick={retry}>
+						<EyeIcon />
+						Load payment proof
+					</button>
+				</div>
+			)}
+		</div>
+	);
+}
+
 //  Detail card shared by the Print Jobs and History tabs:
 //   ┌────────────┬──────────────────┐
 //   │ Job detail │                  │
@@ -384,6 +517,14 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showP
 							<span className="receipt-total-label">Print Charge</span>
 							<span className="receipt-total-value">Rs. {cost?.total ?? entry.price}</span>
 						</div>
+						{/* Only jobs that came with a paymentProofFile have one — the field
+						    is optional. */}
+						{entry.paymentProofFileId && (
+							<>
+								<div className="receipt-divider" />
+								<PaymentProof fileId={entry.paymentProofFileId} />
+							</>
+						)}
 					</div>
 				</div>
 

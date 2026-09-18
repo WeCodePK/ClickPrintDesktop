@@ -78,6 +78,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	// Open a cached file in the OS default viewer / native print dialog.
 	openFile: (fileId) => ipcRenderer.invoke("files:open", fileId),
 
+	// A job's optional payment proof (the customer's transfer screenshot). It is
+	// downloaded with the job's printing files, so its progress arrives on the same
+	// `files:updated` channel, keyed by the proof's own file id.
+	proofUrl: (fileId) => `clickfile://proof/${fileId}`,
+	// Re-attempt a proof download that failed, or fetch one whose job has already
+	// been cleaned up (History).
+	ensureProof: (fileId) => ipcRenderer.invoke("files:ensure-proof", fileId),
+	openProof: (fileId) => ipcRenderer.invoke("files:open-proof", fileId),
+
 	// Shop printers (registered on the backend)
 	fetchPrinters: () => ipcRenderer.invoke("printers:fetch"),
 	createPrinter: (name) => ipcRenderer.invoke("printers:create", name),

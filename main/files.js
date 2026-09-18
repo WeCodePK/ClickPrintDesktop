@@ -5,9 +5,11 @@ const { app, protocol, shell, BrowserWindow, dialog } = require("electron");
 const { fetchFileBuffer } = require("./api");
 const spooler = require("./spooler");
 
-// Job files are downloaded once and cached on disk under userData. All files are
-// treated as PDFs (per product spec) and served to the renderer through a
-// dedicated `clickfile://` protocol so previews can embed them directly.
+// Job files are downloaded once and cached on disk under userData. Printing
+// files are all treated as PDFs (per product spec); a job's optional payment
+// proof is an operator-facing image, so it keeps its own type (see below). Both
+// are served to the renderer through a dedicated `clickfile://` protocol so
+// previews can embed them directly.
 
 const FILE_SCHEME = "clickfile";
 
@@ -23,6 +25,15 @@ function getFilesDir() {
 		fs.mkdirSync(_filesDir, { recursive: true });
 	}
 	return _filesDir;
+}
+
+let _proofsDir = null;
+function getProofsDir() {
+	if (!_proofsDir) {
+		_proofsDir = path.join(app.getPath("userData"), "payment-proofs");
+		fs.mkdirSync(_proofsDir, { recursive: true });
+	}
+	return _proofsDir;
 }
 
 function localPath(fileId) {
@@ -167,7 +178,11 @@ async function _syncOneJob(job, onJobFailed) {
 // Downloads every job's files in the background (bounded concurrency). Safe to
 // call repeatedly — cached/in-flight files and already-failed jobs are skipped.
 // `onJobFailed(jobId)` fires once per job that has an unrecoverable download.
+// Payment proofs ride along on the same call (see _syncJobProofs) so a new job
+// arrives with everything the operator needs already local.
 function syncJobFiles(jobs, onJobFailed) {
+	_syncJobProofs(jobs);
+
 	const pending = (jobs || []).filter((j) => !_failedJobs.has(j._id) && _jobFileIds(j).length > 0);
 	if (pending.length === 0) return;
 	_runLimited(pending, 3, (job) => _syncOneJob(job, onJobFailed)).catch((err) =>
@@ -194,6 +209,221 @@ async function deleteFile(fileId) {
 // point (History shows metadata only), so there's no reason to keep them.
 async function deleteJobFiles(fileIds) {
 	await Promise.all((fileIds || []).map(deleteFile));
+}
+
+// ── Payment proofs ────────────────────────────────────────────────────────────
+// A job may carry an optional `paymentProofFile` — the id of a screenshot the
+// customer uploaded to evidence their transfer. It comes from the same
+// /api/files/:fileId endpoint as the printing files, but it is never printed:
+// it's only shown to the operator in the job details pane. Two consequences
+// shape everything below.
+//   1. It is not a PDF, so its type can't be assumed the way localPath does.
+//      The bytes are sniffed, the extension is kept on disk, and the protocol
+//      handler serves the matching content type.
+//   2. It is not required to fulfil the job, so a proof that won't download
+//      NEVER fails the job — worst case the operator sees a retry affordance.
+
+// Extension -> content type for everything we're willing to identify. Anything
+// else is stored as .bin and served as a download, so the operator can still
+// open it in a native app even if the preview can't render it.
+const PROOF_CONTENT_TYPES = {
+	png: "image/png",
+	jpg: "image/jpeg",
+	gif: "image/gif",
+	webp: "image/webp",
+	bmp: "image/bmp",
+	pdf: "application/pdf",
+};
+
+// Identifies a proof from its magic bytes, falling back to the server's
+// Content-Type header. Returns null when neither is recognised.
+function _sniffProofExt(buffer, contentType) {
+	const bytes = new Uint8Array(buffer);
+	const at = (offset, ...signature) => signature.every((byte, i) => bytes[offset + i] === byte);
+
+	if (at(0, 0x89, 0x50, 0x4e, 0x47)) return "png";
+	if (at(0, 0xff, 0xd8, 0xff)) return "jpg";
+	if (at(0, 0x47, 0x49, 0x46, 0x38)) return "gif";
+	if (at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x45, 0x42, 0x50)) return "webp";
+	if (at(0, 0x42, 0x4d)) return "bmp";
+	if (at(0, 0x25, 0x50, 0x44, 0x46)) return "pdf";
+
+	const mime = String(contentType || "").split(";")[0].trim().toLowerCase();
+	return Object.keys(PROOF_CONTENT_TYPES).find((ext) => PROOF_CONTENT_TYPES[ext] === mime) || null;
+}
+
+// fileId -> path on disk. The extension isn't derivable from the id, so a cache
+// miss falls back to scanning the directory. In practice every proof downloaded
+// this session is in the map; the scan is what makes a leftover file from a
+// previous session usable if the startup wipe (clearProofCache) couldn't run.
+const _proofPaths = new Map();
+
+function proofPath(fileId) {
+	if (!fileId) return null;
+	if (_proofPaths.has(fileId)) return _proofPaths.get(fileId);
+	let found = null;
+	try {
+		for (const name of fs.readdirSync(getProofsDir())) {
+			if (name.startsWith(`${fileId}.`) && !name.endsWith(".part")) {
+				found = path.join(getProofsDir(), name);
+				break;
+			}
+		}
+	} catch (error) {
+		console.error("[Files] could not scan payment proofs:", error.message);
+	}
+	if (found) _proofPaths.set(fileId, found);
+	return found;
+}
+
+function isProofReady(fileId) {
+	const target = proofPath(fileId);
+	if (!target) return false;
+	try {
+		return fs.statSync(target).size > 0;
+	} catch {
+		_proofPaths.delete(fileId); // deleted underneath us — force a re-scan next time
+		return false;
+	}
+}
+
+// Ensures a job's payment proof is on disk, downloading it if needed. Status is
+// reported through the same per-file channel as the printing files, so the
+// renderer's FilesContext tracks both without knowing the difference.
+async function ensureProof(fileId) {
+	if (!fileId) return false;
+
+	if (isProofReady(fileId)) {
+		if (_status[fileId] !== "ready") _setStatus(fileId, "ready");
+		return true;
+	}
+	if (_inflight.has(fileId)) return true;
+
+	_inflight.add(fileId);
+	_setStatus(fileId, "downloading");
+	try {
+		let attempt = await fetchFileBuffer(fileId);
+		if (!attempt.ok || !attempt.buffer) {
+			console.warn(`[Files] payment proof ${fileId} failed to download, retrying once…`);
+			attempt = await fetchFileBuffer(fileId);
+		}
+		if (!attempt.ok || !attempt.buffer) throw new Error("download failed");
+
+		const ext = _sniffProofExt(attempt.buffer, attempt.contentType);
+		if (!ext) console.warn(`[Files] payment proof ${fileId}: unrecognised type "${attempt.contentType}"`);
+
+		// Same temp-then-rename dance as the printing files so a half-written
+		// proof is never served.
+		const dest = path.join(getProofsDir(), `${fileId}.${ext || "bin"}`);
+		const tmp = `${dest}.part`;
+		await fsp.writeFile(tmp, Buffer.from(attempt.buffer));
+		await fsp.rename(tmp, dest);
+		_proofPaths.set(fileId, dest);
+		_setStatus(fileId, "ready");
+		console.log(`[Files] downloaded payment proof ${fileId} (${ext || "unknown type"})`);
+		return true;
+	} catch (error) {
+		console.error(`[Files] failed to download payment proof ${fileId} (after retry):`, error.message);
+		_setStatus(fileId, "error");
+		return false;
+	} finally {
+		_inflight.delete(fileId);
+	}
+}
+
+// The proof id off a raw backend job. The field is documented as a file id, but
+// tolerate a populated document the way _jobFileIds does.
+function _jobProofId(job) {
+	const proof = job?.paymentProofFile;
+	if (!proof) return null;
+	return typeof proof === "string" ? proof : proof._id || null;
+}
+
+// jobId -> proof file id, so the proof can be dropped along with the rest of a
+// job's cache when it reaches a terminal state (see deleteJobProof).
+const _jobProofs = new Map();
+
+// Downloads the payment proof of every job that has one. A proof that errored
+// is not retried here — repeated reconciles would hammer a file that isn't
+// coming back — but the renderer can ask for another attempt (files:ensure-proof),
+// which is what its retry affordance does.
+function _syncJobProofs(jobs) {
+	const pending = [];
+	for (const job of jobs || []) {
+		const proofId = _jobProofId(job);
+		if (!proofId) continue;
+		_jobProofs.set(job._id, proofId);
+		if (isProofReady(proofId) || _inflight.has(proofId) || _status[proofId] === "error") continue;
+		pending.push(proofId);
+	}
+	if (pending.length === 0) return;
+	_runLimited(pending, 3, ensureProof).catch((err) =>
+		console.error("[Files] payment proof sync error:", err)
+	);
+}
+
+// Drops a job's cached payment proof on the same terminal-state cleanup that
+// deletes its printing files.
+async function deleteJobProof(jobId) {
+	const proofId = _jobProofs.get(jobId);
+	if (!proofId) return;
+	_jobProofs.delete(jobId);
+	const target = proofPath(proofId);
+	_proofPaths.delete(proofId);
+	delete _status[proofId];
+	if (!target) return;
+	try {
+		await fsp.unlink(target);
+		console.log(`[Files] deleted payment proof ${proofId}`);
+	} catch (error) {
+		if (error.code !== "ENOENT") {
+			console.error(`[Files] failed to delete payment proof ${proofId}:`, error.message);
+		}
+	}
+}
+
+// Drops the whole payment-proof cache. Called once at startup: proofs left on
+// disk from the previous session are either stale (their job is done) or belong
+// to a still-active job, and the first reconcile re-downloads those. Without
+// this, a proof re-fetched on demand from History — which has no terminal
+// transition left to clean it up — would sit on disk forever.
+async function clearProofCache() {
+	_proofPaths.clear();
+	// Snapshot synchronously so a proof downloaded while the unlinks are in flight
+	// can't end up in the list at all; the _proofPaths check below then covers the
+	// one remaining case, a fresh download landing on a name we were about to
+	// delete.
+	let names = [];
+	try {
+		names = fs.readdirSync(getProofsDir());
+	} catch (error) {
+		console.error("[Files] could not read payment proof cache:", error.message);
+		return;
+	}
+	let cleared = 0;
+	await Promise.all(
+		names.map(async (name) => {
+			const fileId = name.split(".")[0];
+			if (_proofPaths.has(fileId)) return; // re-downloaded already
+			try {
+				await fsp.unlink(path.join(getProofsDir(), name));
+				cleared += 1;
+			} catch (error) {
+				if (error.code !== "ENOENT") console.error(`[Files] could not clear ${name}:`, error.message);
+			}
+		})
+	);
+	if (cleared) console.log(`[Files] cleared ${cleared} cached payment proof(s)`);
+}
+
+// Opens a payment proof in the OS default application — the operator's route to
+// a full-size, zoomable view of a screenshot the in-app preview shrinks.
+async function openProof(fileId) {
+	await ensureProof(fileId);
+	const target = proofPath(fileId);
+	if (!target) throw new Error("payment proof not ready");
+	const error = await shell.openPath(target);
+	if (error) throw new Error(error);
 }
 
 // Opens a cached file in the OS default application (e.g. the system PDF viewer).
@@ -384,15 +614,26 @@ function registerFileSchemePrivileges() {
 function registerFileProtocol() {
 	protocol.handle(FILE_SCHEME, async (request) => {
 		try {
-			// URL form: clickfile://file/<fileId>
+			// URL forms: clickfile://file/<fileId> for a printing file (always a PDF),
+			// clickfile://proof/<fileId> for a job's payment proof (type per bytes).
 			const url = new URL(request.url);
 			const fileId = decodeURIComponent(url.pathname.replace(/^\/+/, ""));
-			if (!fileId || !isReady(fileId)) {
-				return new Response("Not found", { status: 404 });
+			if (!fileId) return new Response("Not found", { status: 404 });
+
+			let target = null;
+			let contentType = "application/pdf";
+			if (url.host === "proof") {
+				target = isProofReady(fileId) ? proofPath(fileId) : null;
+				const ext = target ? path.extname(target).slice(1).toLowerCase() : "";
+				contentType = PROOF_CONTENT_TYPES[ext] || "application/octet-stream";
+			} else if (isReady(fileId)) {
+				target = localPath(fileId);
 			}
-			const data = await fsp.readFile(localPath(fileId));
+			if (!target) return new Response("Not found", { status: 404 });
+
+			const data = await fsp.readFile(target);
 			return new Response(data, {
-				headers: { "Content-Type": "application/pdf", "Cache-Control": "no-cache" },
+				headers: { "Content-Type": contentType, "Cache-Control": "no-cache" },
 			});
 		} catch (error) {
 			console.error("[Files] protocol error:", error.message);
@@ -413,6 +654,10 @@ module.exports = {
 	savePdfCopy,
 	printAndVerify,
 	deleteJobFiles,
+	ensureProof,
+	openProof,
+	deleteJobProof,
+	clearProofCache,
 	registerFileSchemePrivileges,
 	registerFileProtocol,
 };

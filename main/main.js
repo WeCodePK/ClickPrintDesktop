@@ -1,6 +1,6 @@
 const path = require('path');
 const { registerIpcHandlers } = require('./ipc');
-const { registerFileSchemePrivileges, registerFileProtocol } = require('./files');
+const { registerFileSchemePrivileges, registerFileProtocol, clearProofCache } = require('./files');
 const { loadPersistedAuth } = require('./state');
 const { startOfflineWatcher } = require('./printers');
 const { initLoginItem, isEnabled: isOpenAtLogin, setEnabled: setOpenAtLogin, startedHidden } = require('./startup');
@@ -203,6 +203,10 @@ if (hasInstanceLock) app.whenReady().then(() => {
 	loadPersistedAuth();
 	initLoginItem();
 	registerFileProtocol();
+	// Payment proofs are re-downloaded with the jobs they belong to, so last
+	// session's cache is never needed — and clearing it is what keeps the
+	// directory from growing (see clearProofCache).
+	clearProofCache();
 	createWindow(startedHidden());
 	createTray();
 	// Warm the printer offline-state cache and keep it fresh in the background so

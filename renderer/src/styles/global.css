@@ -2485,6 +2485,131 @@ body,
 	overflow-y: auto;
 }
 
+/* ── Payment proof (cost tile) ──
+   The customer's transfer screenshot, downloaded with the job's print files.
+   The thumbnail is deliberately small — it only has to prove a proof exists;
+   reading it happens in the lightbox or the OS viewer. */
+.payment-proof {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.payment-proof__label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.payment-proof__label svg {
+	width: 14px;
+	height: 14px;
+}
+
+.payment-proof__thumb {
+	width: 100%;
+	max-height: 170px;
+	padding: 0;
+	overflow: hidden;
+	background: #ffffff;
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-md);
+	cursor: zoom-in;
+	transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.payment-proof__thumb:hover {
+	border-color: var(--color-primary);
+	box-shadow: var(--shadow-sm);
+}
+
+.payment-proof__thumb img {
+	display: block;
+	width: 100%;
+	max-height: 170px;
+	/* Screenshots are portrait and tall — show the top of the image (where the
+	   amount and recipient usually are) rather than a centre-cropped band. */
+	object-fit: cover;
+	object-position: top center;
+}
+
+.payment-proof__placeholder {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 18px 14px;
+	text-align: center;
+	font-size: 11.5px;
+	font-weight: 600;
+	line-height: 1.4;
+	color: var(--color-text-muted);
+	background: rgba(134, 150, 160, 0.06);
+	border: 1.5px dashed var(--border-light);
+	border-radius: var(--radius-md);
+}
+
+/* .btn-outline is flex:1 by default (built for modal action rows) — pin it here
+   so it doesn't stretch to fill the placeholder. */
+.payment-proof__placeholder .btn-outline,
+.proof-lightbox__actions .btn-outline {
+	flex: 0 0 auto;
+	width: auto;
+	padding: 7px 14px;
+	white-space: nowrap;
+}
+
+.payment-proof__placeholder .btn-outline svg,
+.proof-lightbox__actions .btn-outline svg {
+	width: 14px;
+	height: 14px;
+	flex: none;
+}
+
+/* ── Payment proof lightbox ── */
+.proof-lightbox {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	width: 100%;
+	max-width: 560px;
+	max-height: 100%;
+	padding: 20px;
+	background: var(--color-bg-card);
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-md);
+	animation: fadeSlideIn var(--transition-base) both;
+}
+
+.proof-lightbox__head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+}
+
+.proof-lightbox__title {
+	font-size: 16px;
+	font-weight: 700;
+	color: var(--color-text-primary);
+}
+
+.proof-lightbox__actions {
+	display: flex;
+	gap: 8px;
+}
+
+.proof-lightbox__img {
+	min-height: 0;
+	max-width: 100%;
+	object-fit: contain;
+	background: #ffffff;
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-md);
+}
+
 .db-entry__price-actions {
 	flex-shrink: 0;
 	display: flex;

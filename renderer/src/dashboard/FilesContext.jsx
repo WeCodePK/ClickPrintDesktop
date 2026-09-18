@@ -3,7 +3,9 @@ import { createContext, useContext, useState, useEffect } from "react";
 // Tracks the download status of job files. The main process downloads files in
 // the background as jobs arrive and pushes per-file status updates over the
 // `files:updated` channel. Previews read this to decide whether to embed the
-// cached PDF or show a loading/placeholder state.
+// cached PDF or show a loading/placeholder state. A job's optional payment proof
+// downloads on the same beat and reports through the same map, keyed by its own
+// file id — hence the proof helpers alongside fileUrl.
 const FilesContext = createContext(null);
 
 export function FilesProvider({ children }) {
@@ -29,7 +31,15 @@ export function FilesProvider({ children }) {
 	}, []);
 
 	return (
-		<FilesContext.Provider value={{ fileStatus, fileUrl: window.electronAPI.fileUrl }}>
+		<FilesContext.Provider
+			value={{
+				fileStatus,
+				fileUrl: window.electronAPI.fileUrl,
+				proofUrl: window.electronAPI.proofUrl,
+				ensureProof: window.electronAPI.ensureProof,
+				openProof: window.electronAPI.openProof,
+			}}
+		>
 			{children}
 		</FilesContext.Provider>
 	);
