@@ -423,6 +423,18 @@ function PaymentProof({ fileId }) {
 	);
 }
 
+// Free text the customer attached to the job. `note` (the print instruction) and
+// `additionalComments` are separate optional fields on the backend, so each gets
+// its own row rather than being run together.
+function JobNoteRow({ label, text }) {
+	return (
+		<div className="receipt-row job-detail__note">
+			<span className="receipt-label">{label}</span>
+			<span className="receipt-value job-detail__note-text">"{text}"</span>
+		</div>
+	);
+}
+
 //  Detail card shared by the Print Jobs and History tabs:
 //   ┌────────────┬──────────────────┐
 //   │ Job detail │                  │
@@ -477,13 +489,9 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showP
 								{totalPages != null ? `${totalPages} ${totalPages === 1 ? "page" : "pages"}` : "—"}
 							</span>
 						</div>
-						{entry.note && (
-							<div className="receipt-row" style={{ alignItems: "flex-start", marginTop: "4px" }}>
-								<span className="receipt-label">User Note</span>
-								<span className="receipt-value" style={{ maxWidth: "200px", fontSize: "12px", color: "var(--color-text-secondary)", textAlign: "right", fontStyle: "italic" }}>
-									"{entry.note}"
-								</span>
-							</div>
+						{entry.note && <JobNoteRow label="User Note" text={entry.note} />}
+						{entry.additionalComments && (
+							<JobNoteRow label="Additional Comments" text={entry.additionalComments} />
 						)}
 					</div>
 				</div>
