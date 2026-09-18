@@ -3,7 +3,9 @@ import { useSearchParams } from "react-router-dom";
 import ListColumn from "../components/ListColumn";
 import AppSettings from "../components/settings/AppSettings";
 import ShopProfileSettings from "../components/settings/ShopProfileSettings";
-import { SettingsIcon, StoreIcon } from "../icons";
+import PrintersTab from "./PrintersTab";
+import ServicesTab from "./ServicesTab";
+import { SettingsIcon, StoreIcon, PrinterIcon, WalletIcon } from "../icons";
 
 const SECTIONS = [
 	{
@@ -18,7 +20,24 @@ const SECTIONS = [
 		description: "Manage shop details, location & timings",
 		Icon: StoreIcon,
 	},
+	{
+		id: "printers",
+		label: "Printers",
+		description: "Register, test and disable printers",
+		Icon: PrinterIcon,
+	},
+	{
+		id: "services",
+		label: "Services",
+		description: "Priced print options and their printers",
+		Icon: WalletIcon,
+	},
 ];
+
+// Printers and Services need both a list column and a detail pane of their own,
+// which won't fit beside the section list at the app's minimum width — so they
+// take over the whole area and offer a way back to the section list.
+const FULL_PANE_SECTIONS = { printers: PrintersTab, services: ServicesTab };
 
 // Settings tab — a left navigation column of setting sections with the selected
 // section's management UI rendering in the right detail pane.
@@ -45,6 +64,11 @@ function SettingsTab({ initialSection = "app" }) {
 		setActiveSection(id);
 		setSearchParams({ section: id }, { replace: true });
 	};
+
+	const FullPaneSection = FULL_PANE_SECTIONS[activeSection];
+	if (FullPaneSection) {
+		return <FullPaneSection onBack={() => handleSelectSection("app")} />;
+	}
 
 	return (
 		<>

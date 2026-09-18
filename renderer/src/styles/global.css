@@ -1240,6 +1240,36 @@ body,
 	justify-content: space-between;
 }
 
+/* Back to the Settings section list, for sections that take over the pane. */
+.db-list__back {
+	display: inline-flex;
+	align-items: center;
+	align-self: flex-start;
+	gap: 6px;
+	padding: 0;
+	border: none;
+	background: none;
+	color: var(--color-text-secondary);
+	font-family: var(--font-family);
+	font-size: 12.5px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: color var(--transition-fast);
+}
+
+.db-list__back:hover {
+	color: var(--color-primary);
+}
+
+.db-list__back-arrow {
+	display: inline-flex;
+	transition: transform var(--transition-fast);
+}
+
+.db-list__back:hover .db-list__back-arrow {
+	transform: translateX(-3px);
+}
+
 .db-list__title {
 	font-size: 16px;
 	font-weight: 700;
@@ -1693,13 +1723,7 @@ body,
 	margin: 8px 0;
 }
 
-.receipt-total-label {
-	font-size: 15px;
-	font-weight: 700;
-	color: var(--color-text-primary);
-}
-
-.receipt-total-value {
+.receipt-cost-value {
 	font-size: 20px;
 	font-weight: 800;
 	color: var(--color-primary); /* Sadapay green */
@@ -1922,7 +1946,7 @@ body,
 }
 
 .detail-tile--info  { grid-column: 1; grid-row: 1; }
-.detail-tile--cost  { grid-column: 1; grid-row: 2; }
+.detail-tile--proof { grid-column: 1; grid-row: 2; }
 .detail-tile--files { grid-column: 2; grid-row: 1 / span 2; }
 
 .detail-tile {
@@ -1940,6 +1964,22 @@ body,
 	flex-shrink: 0;
 	padding: 16px 18px;
 	border-bottom: 1px dashed var(--border-light);
+}
+
+.detail-tile__header--split {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+
+/* Section label inside a tile body (e.g. the cost rows under the job overview). */
+.detail-tile__subhead {
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.6px;
+	text-transform: uppercase;
+	color: var(--color-text-muted);
 }
 
 .detail-tile__body,
@@ -2510,55 +2550,110 @@ body,
 	overflow-wrap: anywhere;
 }
 
-/* ── Payment proof (cost tile) ──
-   The customer's transfer screenshot, downloaded with the job's print files.
-   The thumbnail is deliberately small — it only has to prove a proof exists;
-   reading it happens in the lightbox or the OS viewer. */
+/* ── Payment proof (its own tile) ──
+   The customer's transfer screenshot, downloaded with the job's print files. The
+   whole image is shown, fitted to the tile; the eye button opens it at full size
+   in the lightbox, and from there in the OS viewer. */
 .payment-proof {
-	display: flex;
-	flex-direction: column;
 	gap: 10px;
 }
 
-.payment-proof__label {
+.payment-proof__title {
 	display: flex;
 	align-items: center;
 	gap: 6px;
 }
 
-.payment-proof__label svg {
+.payment-proof__title svg {
 	width: 14px;
 	height: 14px;
+	color: var(--color-primary);
 }
 
-.payment-proof__thumb {
+.proof-eye-btn {
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 30px;
+	height: 30px;
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--color-text-muted);
+	cursor: pointer;
+	transition: all var(--transition-fast);
+}
+
+.proof-eye-btn svg {
+	width: 15px;
+	height: 15px;
+}
+
+.proof-eye-btn:hover {
+	color: var(--color-primary);
+	border-color: var(--color-primary);
+	background: rgba(0, 217, 163, 0.1);
+}
+
+.payment-proof__view {
+	position: relative;
+	flex: 1;
+	min-height: 0;
 	width: 100%;
-	max-height: 170px;
 	padding: 0;
 	overflow: hidden;
-	background: #ffffff;
+	/* Neutral backing, not white: screenshots are portrait and fitted whole, so
+	   the letterboxing beside them shouldn't read as part of the image. */
+	background: rgba(134, 150, 160, 0.1);
 	border: 1px solid var(--border-light);
 	border-radius: var(--radius-md);
 	cursor: zoom-in;
 	transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.payment-proof__thumb:hover {
+.payment-proof__view:hover {
 	border-color: var(--color-primary);
 	box-shadow: var(--shadow-sm);
 }
 
-.payment-proof__thumb img {
+/* The whole screenshot, fitted — an operator reading an amount off it shouldn't
+   have to guess at a cropped band. */
+.payment-proof__img {
 	display: block;
 	width: 100%;
-	max-height: 170px;
-	/* Screenshots are portrait and tall — show the top of the image (where the
-	   amount and recipient usually are) rather than a centre-cropped band. */
-	object-fit: cover;
-	object-position: top center;
+	height: 100%;
+	object-fit: contain;
+}
+
+.payment-proof__zoom {
+	position: absolute;
+	right: 8px;
+	bottom: 8px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	border-radius: var(--radius-sm);
+	background: rgba(17, 27, 33, 0.72);
+	color: #ffffff;
+	opacity: 0;
+	transition: opacity var(--transition-fast);
+}
+
+.payment-proof__zoom svg {
+	width: 15px;
+	height: 15px;
+}
+
+.payment-proof__view:hover .payment-proof__zoom,
+.payment-proof__view:focus-visible .payment-proof__zoom {
+	opacity: 1;
 }
 
 .payment-proof__placeholder {
+	flex: 1;
 	display: flex;
 	flex-direction: column;
 	align-items: center;
@@ -2598,7 +2693,7 @@ body,
 	flex-direction: column;
 	gap: 14px;
 	width: 100%;
-	max-width: 560px;
+	max-width: 900px;
 	max-height: 100%;
 	padding: 20px;
 	background: var(--color-bg-card);
@@ -2627,10 +2722,12 @@ body,
 }
 
 .proof-lightbox__img {
+	flex: 1;
 	min-height: 0;
+	width: 100%;
 	max-width: 100%;
 	object-fit: contain;
-	background: #ffffff;
+	background: rgba(134, 150, 160, 0.1);
 	border: 1px solid var(--border-light);
 	border-radius: var(--radius-md);
 }

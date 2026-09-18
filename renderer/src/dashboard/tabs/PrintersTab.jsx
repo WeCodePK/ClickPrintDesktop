@@ -9,10 +9,11 @@ import { PrinterIcon, PaperIcon, CheckIcon, TrashIcon } from "../icons";
 // How often the tab re-checks which registered printers are still reachable.
 const ONLINE_POLL_MS = 15000;
 
-// Printers tab: the shop's registered printers (GET /api/printers), each shown
-// with its live online/offline state. Adding opens a picker of the machine's
-// currently-online printers; removing deletes it from the backend.
-function PrintersTab() {
+// Printers settings section: the shop's registered printers (GET /api/printers),
+// each shown with its live online/offline state. Adding opens a picker of the
+// machine's currently-online printers; removing deletes it from the backend.
+// `onBack` returns to the Settings section list.
+function PrintersTab({ onBack }) {
 	const { refreshPrinterState } = useAutoPrint();
 
 	const [registered, setRegistered] = useState([]); // backend printers: { _id, name }
@@ -176,6 +177,7 @@ function PrintersTab() {
 			<ListColumn
 				title="Printers"
 				count={entries.length}
+				onBack={onBack}
 				action={
 					<button className="db-list__add" onClick={openAdd} title="Add a printer">
 						+ Add

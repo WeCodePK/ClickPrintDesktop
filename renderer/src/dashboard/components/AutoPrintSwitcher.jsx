@@ -93,7 +93,7 @@ function AutoPrintSwitcher() {
 
 					{loaded && !autoPrintEnabled && !canEnable && (
 						<div className="conn-popover__hint">
-							No printer is set up for automated printing. In the Services tab, mark a
+							No printer is set up for automated printing. In Settings → Services, mark a
 							printer “Use for automated printing” on a service first.
 						</div>
 					)}

@@ -292,7 +292,7 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, on
 	);
 }
 
-// Full-size view of a payment proof, since the thumbnail is too small to read a
+// Full-size view of a payment proof, since the tile is too small to read a
 // transaction id off. "Open in viewer" hands it to the OS image viewer, where it
 // can be zoomed properly.
 function ProofLightbox({ src, fileId, onClose, onImageError }) {
@@ -329,11 +329,11 @@ function ProofLightbox({ src, fileId, onClose, onImageError }) {
 
 // The customer's proof of payment (a transfer screenshot), downloaded in the
 // background the moment its job lands — so the common case is simply the cached
-// image. The other states cover a download still in flight, one that failed
-// (retryable), a proof whose bytes aren't an image the preview can render, and a
-// job whose cache has already been cleaned up on completion, where the proof is
-// fetched on demand instead (History).
-function PaymentProof({ fileId }) {
+// image, shown whole in its own tile. The other states cover a download still in
+// flight, one that failed (retryable), a proof whose bytes aren't an image the
+// preview can render, and a job whose cache has already been cleaned up on
+// completion, where the proof is fetched on demand instead (History).
+function PaymentProofTile({ fileId }) {
 	const { fileStatus, proofUrl, ensureProof, openProof } = useFiles();
 	const [zoomed, setZoomed] = useState(false);
 	const [imageError, setImageError] = useState(false);
@@ -341,6 +341,7 @@ function PaymentProof({ fileId }) {
 	const [reloadKey, setReloadKey] = useState(0);
 
 	const status = fileStatus[fileId];
+	const showing = !!fileId && status === "ready" && !imageError;
 
 	// Selecting a different job reuses this component — start its state clean.
 	useEffect(() => {
@@ -357,68 +358,95 @@ function PaymentProof({ fileId }) {
 	};
 
 	return (
-		<div className="payment-proof">
-			<span className="receipt-label payment-proof__label">
-				<WalletIcon />
-				Payment Proof
-			</span>
-			{status === "ready" && !imageError ? (
-				<>
+		<div className="detail-tile detail-tile--proof">
+			<div className="detail-tile__header detail-tile__header--split">
+				<h4 className="receipt-title payment-proof__title">
+					<WalletIcon />
+					Payment Proof
+				</h4>
+				{showing && (
 					<button
 						type="button"
-						className="payment-proof__thumb"
+						className="proof-eye-btn"
 						onClick={() => setZoomed(true)}
-						title="Click to enlarge"
+						title="View payment proof full size"
+						aria-label="View payment proof full size"
 					>
-						<img src={src} alt="Payment proof" onError={() => setImageError(true)} />
-					</button>
-					{zoomed && (
-						<ProofLightbox
-							src={src}
-							fileId={fileId}
-							onClose={() => setZoomed(false)}
-							onImageError={() => {
-								setImageError(true);
-								setZoomed(false);
-							}}
-						/>
-					)}
-				</>
-			) : status === "downloading" ? (
-				<div className="payment-proof__placeholder">
-					<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)" }} />
-					<span>Downloading…</span>
-				</div>
-			) : status === "error" ? (
-				<div className="payment-proof__placeholder">
-					<span>Couldn't download the payment proof.</span>
-					<button type="button" className="btn-outline btn-sm" onClick={retry}>
-						<RetryIcon />
-						Retry
-					</button>
-				</div>
-			) : imageError ? (
-				// Downloaded, but not something the preview can draw (e.g. a PDF
-				// receipt instead of a screenshot) — or the cached copy has since been
-				// cleaned up. Either way the OS viewer is the way through: openProof
-				// re-downloads first if needed.
-				<div className="payment-proof__placeholder">
-					<span>This payment proof can't be previewed here.</span>
-					<button type="button" className="btn-outline btn-sm" onClick={() => openProof(fileId)}>
 						<EyeIcon />
-						Open in viewer
 					</button>
-				</div>
-			) : (
-				// No download has been attempted in this session — the job's cache was
-				// dropped when it reached a terminal state (History).
-				<div className="payment-proof__placeholder">
-					<button type="button" className="btn-outline btn-sm" onClick={retry}>
-						<EyeIcon />
-						Load payment proof
-					</button>
-				</div>
-			)}
+				)}
+			</div>
+			<div className="detail-tile__body payment-proof">
+				{!fileId ? (
+					<div className="payment-proof__placeholder">
+						<span>No payment proof was attached to this job.</span>
+					</div>
+				) : showing ? (
+					<>
+						<button
+							type="button"
+							className="payment-proof__view"
+							onClick={() => setZoomed(true)}
+							title="Click to view full size"
+						>
+							<img
+								className="payment-proof__img"
+								src={src}
+								alt="Payment proof"
+								onError={() => setImageError(true)}
+							/>
+							<span className="payment-proof__zoom">
+								<EyeIcon />
+							</span>
+						</button>
+						{zoomed && (
+							<ProofLightbox
+								src={src}
+								fileId={fileId}
+								onClose={() => setZoomed(false)}
+								onImageError={() => {
+									setImageError(true);
+									setZoomed(false);
+								}}
+							/>
+						)}
+					</>
+				) : status === "downloading" ? (
+					<div className="payment-proof__placeholder">
+						<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)" }} />
+						<span>Downloading…</span>
+					</div>
+				) : status === "error" ? (
+					<div className="payment-proof__placeholder">
+						<span>Couldn't download the payment proof.</span>
+						<button type="button" className="btn-outline btn-sm" onClick={retry}>
+							<RetryIcon />
+							Retry
+						</button>
+					</div>
+				) : imageError ? (
+					// Downloaded, but not something the preview can draw (e.g. a PDF
+					// receipt instead of a screenshot) — or the cached copy has since been
+					// cleaned up. Either way the OS viewer is the way through: openProof
+					// re-downloads first if needed.
+					<div className="payment-proof__placeholder">
+						<span>This payment proof can't be previewed here.</span>
+						<button type="button" className="btn-outline btn-sm" onClick={() => openProof(fileId)}>
+							<EyeIcon />
+							Open in viewer
+						</button>
+					</div>
+				) : (
+					// No download has been attempted in this session — the job's cache was
+					// dropped when it reached a terminal state (History).
+					<div className="payment-proof__placeholder">
+						<button type="button" className="btn-outline btn-sm" onClick={retry}>
+							<EyeIcon />
+							Load payment proof
+						</button>
+					</div>
+				)}
+			</div>
 		</div>
 	);
 }
@@ -436,16 +464,26 @@ function JobNoteRow({ label, text }) {
 }
 
 //  Detail card shared by the Print Jobs and History tabs:
-//   ┌────────────┬──────────────────┐
-//   │ Job detail │                  │
-//   ├────────────┤   File previews  │
-//   │    Cost    │                  │
-//   └────────────┴──────────────────┘
+//   ┌───────────────┬──────────────────┐
+//   │ Job detail    │                  │
+//   │ + cost        │   File previews  │
+//   ├───────────────┤                  │
+//   │ Payment proof │                  │
+//   └───────────────┴──────────────────┘
 
 function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showPreview = true, printedFileIds, fileStates, onMarkJobFailed, printers, onPrinterMenuOpen, autoPrintOn }) {
 	const files = entry.files || [];
 	const cost = entry.cost;
 	const totalPages = getJobTotalPages(entry);
+	const costRows = [
+		...(cost?.lines || []).map((line, i) => ({
+			key: `line-${i}`,
+			item: line.item,
+			detail: `(${line.quantity} × Rs. ${line.rate})`,
+			subtotal: line.subtotal,
+		})),
+		...(cost?.extra || []).map((line, i) => ({ key: `extra-${i}`, item: line.item, subtotal: line.subtotal })),
+	];
 
 	return (
 		<div className="job-detail">
@@ -493,48 +531,28 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showP
 						{entry.additionalComments && (
 							<JobNoteRow label="Additional Comments" text={entry.additionalComments} />
 						)}
-					</div>
-				</div>
 
-				{/* Bottom-left — cost breakdown */}
-				<div className="detail-tile detail-tile--cost">
-					<div className="detail-tile__header">
-						<h4 className="receipt-title">Cost Breakdown</h4>
-					</div>
-					<div className="detail-tile__body detail-tile__body--scroll">
-						{cost ? (
+						{costRows.length > 0 && (
 							<>
-								{(cost.lines || []).map((line, i) => (
-									<div key={`line-${i}`} className="receipt-row">
+								<div className="receipt-divider" />
+								<span className="detail-tile__subhead">Cost Breakdown</span>
+								{costRows.map((row) => (
+									<div key={row.key} className="receipt-row">
 										<span className="receipt-label">
-											{line.item} <span style={{ color: "var(--color-text-muted)" }}>({line.quantity} × Rs. {line.rate})</span>
+											{row.item}
+											{row.detail && <span style={{ color: "var(--color-text-muted)" }}> {row.detail}</span>}
 										</span>
-										<span className="receipt-value">Rs. {line.subtotal}</span>
+										<span className="receipt-cost-value">Rs. {row.subtotal}</span>
 									</div>
 								))}
-								{(cost.extra || []).map((line, i) => (
-									<div key={`extra-${i}`} className="receipt-row">
-										<span className="receipt-label">{line.item}</span>
-										<span className="receipt-value">Rs. {line.subtotal}</span>
-									</div>
-								))}
-								<div className="receipt-divider" />
-							</>
-						) : null}
-						<div className="receipt-row">
-							<span className="receipt-total-label">Print Charge</span>
-							<span className="receipt-total-value">Rs. {cost?.total ?? entry.price}</span>
-						</div>
-						{/* Only jobs that came with a paymentProofFile have one — the field
-						    is optional. */}
-						{entry.paymentProofFileId && (
-							<>
-								<div className="receipt-divider" />
-								<PaymentProof fileId={entry.paymentProofFileId} />
 							</>
 						)}
 					</div>
 				</div>
+
+				{/* Bottom-left — payment proof. `paymentProofFileId` is optional, so the
+				    tile also covers the job that came without one. */}
+				<PaymentProofTile fileId={entry.paymentProofFileId} />
 
 				{/* Right — file previews (spans both rows, scrolls) */}
 				<div className="detail-tile detail-tile--files">

@@ -4,7 +4,7 @@ import { PrinterIcon, CheckIcon, RefreshIcon } from "../dashboard/icons";
 
 // Step 1: register at least one of this computer's printers with the shop.
 // Already-registered printers show as added; removing them is done from the
-// Printers tab, so this step only ever adds.
+// Printers settings section, so this step only ever adds.
 function PrintersStep({ onNext, ...layout }) {
 	const [registered, setRegistered] = useState([]);
 	const [installed, setInstalled] = useState([]);

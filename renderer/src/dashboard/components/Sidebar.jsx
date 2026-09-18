@@ -3,20 +3,17 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
 	HomeIcon,
 	PrintJobsIcon,
-	PrinterIcon,
 	HistoryIcon,
-	WalletIcon,
 	SettingsIcon,
 	LogoutIcon,
 } from "../icons";
 import ConnectionSwitcher from "./ConnectionSwitcher";
 import AutoPrintSwitcher from "./AutoPrintSwitcher";
 
+// Printers and Services live under Settings, so they aren't top-level tabs.
 const TABS = [
 	{ to: "jobs", label: "Jobs", Icon: PrintJobsIcon },
-	{ to: "printers", label: "Printers", Icon: PrinterIcon },
 	{ to: "history", label: "History", Icon: HistoryIcon },
-	{ to: "services", label: "Services", Icon: WalletIcon },
 ];
 
 // ── Leaf icon (matches the Claude Code reference) ────────────────────────────

@@ -7,10 +7,11 @@ import ServiceForm, { serviceLabel, sameKeys, printerIdOf, loadServicePrinters }
 import { useAutoPrint } from "../AutoPrintContext";
 import { TrashIcon, EditIcon, CheckIcon, BoltIcon, WalletIcon, PaperIcon, PagesIcon, StackIcon, EyeIcon } from "../icons";
 
-// Services tab: the shop's print services in a left list column (like the
-// Printers tab), with the selected service's configuration in the detail pane.
-// Creating or editing opens the form in a modal.
-function ServicesTab() {
+// Services settings section: the shop's print services in a left list column
+// (like the Printers section), with the selected service's configuration in the
+// detail pane. Creating or editing opens the form in a modal. `onBack` returns to
+// the Settings section list.
+function ServicesTab({ onBack }) {
 	// Service edits change where documents auto-route, so the shared routing
 	// state in AutoPrintContext is refreshed after every save/delete/toggle.
 	const { refreshPrinterState } = useAutoPrint();
@@ -161,6 +162,7 @@ function ServicesTab() {
 			<ListColumn
 				title="Services"
 				count={services.length}
+				onBack={onBack}
 				action={
 					<button className="db-list__add" onClick={() => setEditing({ keys: {} })} title="Add a service">
 						+ Add

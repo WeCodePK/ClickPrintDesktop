@@ -159,7 +159,7 @@ function ServiceForm({ service, printers, error, saving, onSave, onCancel }) {
 				{(noPrinters || printerSel.length === 0) && (
 					<span className="form-hint">
 						{noPrinters
-							? "Add a printer in the Printers tab before creating a service."
+							? "Add a printer in Settings → Printers before creating a service."
 							: "Select one or more printers to be assigned to this service."}
 					</span>
 				)}
