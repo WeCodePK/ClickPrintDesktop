@@ -45,6 +45,8 @@ export function transformJob(job) {
 		filesCount: files.length || 1,
 		price: job.cost?.total ?? job.price ?? (totalCopies || 1) * (anyColor ? 30 : 10),
 		note: job.note || "",
+		// Optional free text, separate from `note` on the backend.
+		additionalComments: job.additionalComments || "",
 		// Optional: id of the screenshot the customer uploaded as proof of payment.
 		// Documented as a bare file id; tolerate a populated document too.
 		paymentProofFileId:

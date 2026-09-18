@@ -2485,6 +2485,31 @@ body,
 	overflow-y: auto;
 }
 
+/* ── Job free-text rows (note / additional comments) ──
+   Both can run long, so the value wraps in its own column while the label stays
+   on one line. */
+.job-detail__note {
+	align-items: flex-start;
+	gap: 16px;
+	margin-top: 4px;
+}
+
+.job-detail__note .receipt-label {
+	flex-shrink: 0;
+	white-space: nowrap;
+}
+
+.job-detail__note-text {
+	max-width: 200px;
+	font-size: 12px;
+	font-weight: 600;
+	font-style: italic;
+	line-height: 1.45;
+	text-align: right;
+	color: var(--color-text-secondary);
+	overflow-wrap: anywhere;
+}
+
 /* ── Payment proof (cost tile) ──
    The customer's transfer screenshot, downloaded with the job's print files.
    The thumbnail is deliberately small — it only has to prove a proof exists;
