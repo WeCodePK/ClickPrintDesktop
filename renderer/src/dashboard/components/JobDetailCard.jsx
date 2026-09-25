@@ -13,6 +13,7 @@ import {
 } from "../icons";
 import { useFiles } from "../FilesContext";
 import { getJobPrintMode, getJobTotalPages, getBlockedReason } from "../jobUtils";
+import { getPdfThumb, forgetPdfThumb } from "../pdfThumbs";
 import PrintSplitButton from "./PrintSplitButton";
 
 function sidednessLabel(value) {
@@ -56,27 +57,80 @@ function blockedTitle(reason) {
 	}
 }
 
+// First page of the cached PDF (see pdfThumbs). A document that fails to
+// download or render — corrupt, truncated, not really a PDF — gets one big
+// Reload button, which fetches a fresh copy and renders again.
 function FileThumb({ file }) {
-	const { fileStatus, fileUrl } = useFiles();
+	const { fileStatus, fileUrl, redownloadFile } = useFiles();
 	const status = fileStatus[file.fileId];
+	// null while rendering | { url } | { failed: true } — tagged with its file so
+	// a render finishing after the operator moved on is never shown.
+	const [thumb, setThumb] = useState(null);
+	const [reloading, setReloading] = useState(false);
+	const [attempt, setAttempt] = useState(0);
 
-	if (status === "ready") {
-		return (
-			<div className="file-preview__thumb file-preview__thumb--pdf">
-				<iframe
-					className="file-preview__pdf"
-					src={`${fileUrl(file.fileId)}#toolbar=0&navpanes=0&view=FitH`}
-					title={file.name}
-				/>
-			</div>
+	useEffect(() => {
+		setThumb(null);
+		if (status !== "ready" || reloading) return;
+		let active = true;
+		getPdfThumb(file.fileId, fileUrl(file.fileId)).then(
+			(url) => active && setThumb({ fileId: file.fileId, url }),
+			(err) => {
+				console.warn(`[Renderer] preview failed for ${file.fileId}:`, err?.message || err);
+				if (active) setThumb({ fileId: file.fileId, failed: true });
+			}
 		);
-	}
+		return () => {
+			active = false;
+		};
+	}, [file.fileId, status, reloading, attempt, fileUrl]);
 
-	if (status === "downloading") {
+	const reload = async () => {
+		setReloading(true);
+		forgetPdfThumb(file.fileId);
+		try {
+			await redownloadFile(file.fileId);
+		} catch (err) {
+			console.error(`[Renderer] reload failed for ${file.fileId}:`, err);
+		}
+		forgetPdfThumb(file.fileId); // anything rendered from the old copy meanwhile
+		setReloading(false);
+		setAttempt((n) => n + 1);
+	};
+
+	const current = thumb?.fileId === file.fileId ? thumb : null;
+
+	if (status === "downloading" || reloading) {
 		return (
 			<div className="file-preview__thumb">
 				<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)" }} />
 				<span className="file-preview__thumb-label">Downloading…</span>
+			</div>
+		);
+	}
+
+	if (status === "error" || (status === "ready" && current?.failed)) {
+		return (
+			<button
+				type="button"
+				className="file-preview__thumb file-preview__reload"
+				onClick={reload}
+				title="This document couldn't be shown — download it again"
+			>
+				<RetryIcon />
+				<span className="file-preview__reload-label">Reload</span>
+			</button>
+		);
+	}
+
+	if (status === "ready") {
+		return (
+			<div className="file-preview__thumb file-preview__thumb--pdf">
+				{current?.url ? (
+					<img className="file-preview__page" src={current.url} alt={`First page of ${file.name}`} />
+				) : (
+					<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)" }} />
+				)}
 			</div>
 		);
 	}

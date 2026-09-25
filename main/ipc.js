@@ -27,7 +27,7 @@ const {
 	setPingNotifier,
 	getSseStatus,
 } = require("./api");
-const { syncJobFiles, getStatusMap, setNotifier, openFile, ensureProof, openProof } = require("./files");
+const { syncJobFiles, getStatusMap, setNotifier, openFile, redownloadFile, ensureProof, openProof } = require("./files");
 const { listPrinters, listAllPrinters, printTestPage } = require("./printers");
 const { getJobs } = require("./state");
 const engine = require("./printEngine");
@@ -234,6 +234,13 @@ function registerIpcHandlers(getMainWindow) {
 			console.error(`[IPC] files:open ${fileId} error:`, error.message);
 			return { success: false, message: error.message };
 		}
+	});
+
+	// The preview's Reload: replace a cached copy that won't render. Progress
+	// arrives on files:updated like any other download.
+	ipcMain.handle("files:redownload", async (_event, fileId) => {
+		console.log(`[IPC] files:redownload → ${fileId}`);
+		return { success: await redownloadFile(fileId) };
 	});
 
 	// Payment proofs download with the rest of a job's files; these two exist for

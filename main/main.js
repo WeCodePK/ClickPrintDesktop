@@ -148,7 +148,8 @@ function createWindow(startHidden) {
 		icon: path.join(__dirname, "..", "assets", "icon.ico"),
 		webPreferences: {
 			preload: path.join(__dirname, "preload.js"),
-			plugins: true, // enable Chromium's built-in PDF viewer for previews
+			// No `plugins`: previews are rendered with pdf.js, so this window never
+			// embeds Chromium's PDF viewer. Print windows enable it for themselves.
 			// Allow the renderer to play notification sounds without a per-event
 			// user gesture (Chromium blocks programmatic audio by default).
 			autoplayPolicy: "no-user-gesture-required",

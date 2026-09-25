@@ -35,6 +35,7 @@ export function FilesProvider({ children }) {
 			value={{
 				fileStatus,
 				fileUrl: window.electronAPI.fileUrl,
+				redownloadFile: window.electronAPI.redownloadFile,
 				proofUrl: window.electronAPI.proofUrl,
 				ensureProof: window.electronAPI.ensureProof,
 				openProof: window.electronAPI.openProof,

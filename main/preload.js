@@ -77,6 +77,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	fileUrl: (fileId) => `clickfile://file/${fileId}`,
 	// Open a cached file in the OS default viewer / native print dialog.
 	openFile: (fileId) => ipcRenderer.invoke("files:open", fileId),
+	// Replace a cached file with a fresh download (preview Reload).
+	redownloadFile: (fileId) => ipcRenderer.invoke("files:redownload", fileId),
 
 	// A job's optional payment proof (the customer's transfer screenshot). It is
 	// downloaded with the job's printing files, so its progress arrives on the same
