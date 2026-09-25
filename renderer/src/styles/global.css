@@ -143,6 +143,7 @@ body {
 /* ── Custom Title Bar ── */
 
 .title-bar {
+	position: relative;
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
@@ -192,6 +193,16 @@ body {
 	align-items: center;
 	gap: 0;
 	-webkit-app-region: no-drag;
+}
+
+/* Centred on the window itself — the brand and the window controls differ in
+   width, so centring between them would sit off-centre. */
+.title-bar__slot {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	display: flex;
+	transform: translate(-50%, -50%);
 }
 
 .title-bar__theme-toggle {
@@ -1893,6 +1904,68 @@ body,
 	color: var(--color-accent-hover);
 }
 
+.db-list__section--manual {
+	color: var(--color-accent);
+}
+
+.db-list__section--manual .db-list__section-count {
+	background: rgba(255, 87, 10, 0.12);
+	color: var(--color-accent);
+}
+
+/* ── Jobs list split into two halves ──
+   Search stays pinned on top; below it the print queue and the
+   manual-intervention jobs each take half the height and scroll on their own. */
+.db-list__entries--split {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	padding: 0;
+}
+
+.jobs-list__controls {
+	flex-shrink: 0;
+	padding: 8px 8px 0;
+}
+
+/* Pinned by the layout here, so it doesn't need to stick. */
+.jobs-list__controls .db-search {
+	position: static;
+}
+
+.jobs-pane {
+	flex: 1 1 0;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.jobs-pane--manual {
+	border-top: 1px solid var(--border-light);
+}
+
+/* Sits outside the scroll area's 8px inset — add it back so this heading lines
+   up with the section headings in the half above. */
+.jobs-pane > .db-list__section {
+	flex-shrink: 0;
+	padding-left: 24px;
+	padding-right: 24px;
+}
+
+.jobs-pane__scroll {
+	flex: 1;
+	min-height: 0;
+	overflow-y: auto;
+	padding: 0 8px 8px;
+}
+
+.jobs-pane__empty {
+	padding: 20px 12px;
+	text-align: center;
+	font-size: 12.5px;
+	color: var(--color-text-muted);
+}
+
 /* A job needing manual intervention — accent edge so it reads as actionable. */
 .db-entry--attention {
 	border-left: 3px solid var(--color-accent);
@@ -2525,9 +2598,9 @@ body,
 	overflow-y: auto;
 }
 
-/* ── Job free-text rows (note / additional comments) ──
-   Both can run long, so the value wraps in its own column while the label stays
-   on one line. */
+/* ── Job free-text row (additional comments) ──
+   It can run long, so the value wraps in its own column while the label stays on
+   one line. */
 .job-detail__note {
 	align-items: flex-start;
 	gap: 16px;
@@ -4414,48 +4487,73 @@ body,
    Automated printing
    ============================================================ */
 
-/* Pause/resume bar under the Print Jobs search when auto-print is on. */
-.queue-bar {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 10px;
-	margin-bottom: 8px;
-	padding: 8px 10px 8px 12px;
-	border-radius: var(--radius-md);
-	background: rgba(0, 230, 173, 0.1);
-	border: 1px solid var(--color-primary);
-}
-
-.queue-bar__status {
-	font-size: 12px;
-	font-weight: 700;
-	color: var(--color-primary);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.queue-bar__btn {
-	flex-shrink: 0;
+/* Automated-printing reminder + queue pause/resume, centred in the title bar
+   while auto-print is on (AutoPrintTitleStatus). */
+.title-status {
+	-webkit-app-region: no-drag; /* the title bar drags the window; this must click */
 	display: inline-flex;
 	align-items: center;
-	gap: 6px;
-	padding: 6px 12px;
-	border-radius: var(--radius-sm);
+	gap: 8px;
+	height: 28px;
+	padding: 0 3px 0 12px;
+	border: 1px solid var(--color-primary);
+	border-radius: var(--radius-pill);
+	background: rgba(0, 230, 173, 0.1);
+	color: var(--color-primary);
+	font-size: 12px;
+	font-weight: 700;
+	white-space: nowrap;
+	animation: fadeIn 200ms ease both;
+}
+
+.title-status--paused {
+	border-color: var(--color-accent);
+	background: rgba(255, 87, 10, 0.1);
+	color: var(--color-accent);
+}
+
+.title-status__dot {
+	flex-shrink: 0;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: currentColor;
+}
+
+.title-status__dot--live {
+	animation: queuePulse 1.4s ease-in-out infinite;
+}
+
+.title-status__btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	height: 22px;
+	padding: 0 10px;
 	border: 1px solid var(--border-light);
+	border-radius: var(--radius-pill);
 	background: var(--color-bg-card);
 	color: var(--color-text-primary);
 	font-family: var(--font-family);
-	font-size: 12px;
+	font-size: 11.5px;
 	font-weight: 700;
 	cursor: pointer;
 	transition: all var(--transition-fast);
 }
 
-.queue-bar__btn:hover {
+.title-status__btn svg {
+	width: 11px;
+	height: 11px;
+}
+
+.title-status__btn:hover {
 	border-color: var(--color-primary);
 	color: var(--color-primary);
+}
+
+.title-status--paused .title-status__btn:hover {
+	border-color: var(--color-accent);
+	color: var(--color-accent);
 }
 
 /* Per-entry queue state line in the job list. */
@@ -4473,7 +4571,8 @@ body,
 	color: var(--color-primary);
 }
 
-.db-entry__queue--paused {
+.db-entry__queue--paused,
+.db-entry__queue--manual {
 	color: var(--color-accent);
 }
 

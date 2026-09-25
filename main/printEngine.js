@@ -10,6 +10,7 @@ const spooler = require("./spooler");
 const registry = require("./printerRegistry");
 const store = require("./store");
 const { getJobs } = require("./state");
+const { manualPrintReasons, requiresManualPrinting } = require("./jobRules");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The print engine: owns ALL print orchestration and state in the main process.
@@ -32,6 +33,10 @@ const { getJobs } = require("./state");
 //    moment, not all up front.
 //  - "Printed" means verified against the Windows spooler (files.printAndVerify),
 //    not merely spooled.
+//  - A job with additional comments or a payment proof is NEVER automated
+//    (jobRules): addTasks refuses to queue it in "auto" mode and schedule()
+//    withdraws any automated task of such a job before it can reach a printer.
+//    The operator prints it by hand.
 //  - Failure policy — a failure is ALWAYS permanent (never retried behind the
 //    operator's back) and NEVER fails the job:
 //      manual — the document is flagged; a print-all batch stops there. The
@@ -133,6 +138,17 @@ let _emitTimer = null;
 
 // ── snapshot / events ────────────────────────────────────────────────────────
 
+// { [jobId]: ["additional-comments" | "payment-proof", ...] } for every current
+// job that automated printing must leave to the operator.
+function manualOnlyJobs() {
+	const out = {};
+	for (const job of getJobs()) {
+		const reasons = manualPrintReasons(job);
+		if (reasons.length) out[job._id] = reasons;
+	}
+	return out;
+}
+
 function getSnapshot() {
 	const fileMap = {};
 	const queuedJobIds = [];
@@ -162,6 +178,9 @@ function getSnapshot() {
 		resumePrompt: engine.resumePrompt,
 		// { [jobId]: "operator" | "failure" } — automated printing held per job.
 		autoPaused: Object.fromEntries(engine.autoPausedJobs),
+		// Jobs automated printing never takes (see manualOnlyJobs); the renderer
+		// keeps their manual print controls available while it's on.
+		manualOnly: manualOnlyJobs(),
 		queuedJobIds,
 		printedFiles: engine.printedFiles,
 		files: fileMap,
@@ -293,6 +312,12 @@ function findTask(jobId, fileId) {
 // reset failed tasks and apply overrides; auto-enqueue leaves existing tasks
 // alone. In-flight tasks are never touched.
 function addTasks(job, mode, overrideDevice = null, { onlyFileId = null, explicit = false, sequential = false } = {}) {
+	// Every automated enqueue comes through here, so this is where a job that
+	// needs a human is kept out of automated printing.
+	if (mode === "auto" && requiresManualPrinting(job)) {
+		console.log(`[Engine] job ${job._id} needs manual printing (${manualPrintReasons(job).join(", ")}) — not automated`);
+		return false;
+	}
 	let added = false;
 	for (const file of jobFileList(job)) {
 		if (onlyFileId && file.fileId !== onlyFileId) continue;
@@ -378,6 +403,14 @@ function withSpoolLock(device, fn) {
 // file ready, queue reconcile, unpause.
 function schedule() {
 	if (!engine.running) return;
+
+	// Second gate behind addTasks, at the last point before paper: an automated
+	// task never dispatches for a job that needs manual printing, however it got
+	// queued. A waiting task holds no printer slot, so dropping it is clean.
+	const manualOnly = manualOnlyJobs();
+	engine.tasks = engine.tasks.filter(
+		(t) => !(t.mode === "auto" && t.status === "waiting" && manualOnly[t.jobId])
+	);
 
 	// Jobs that currently have a document at a printer. A print-all batch sends
 	// its documents ONE AT A TIME: the next dispatches only once the previous one
@@ -815,8 +848,8 @@ function onJobsReconciled(jobs) {
 		// last closed, ASK — with the number of jobs that would start printing
 		// immediately, since some may have printed just before the app closed.
 		if (!engine.autoPrint && store.get(AUTO_PRINT_ARMED_KEY) === true) {
-			const pendingJobs = activeJobs.filter((j) =>
-				jobFileList(j).some((f) => !isFilePrinted(j._id, f.fileId))
+			const pendingJobs = activeJobs.filter(
+				(j) => !requiresManualPrinting(j) && jobFileList(j).some((f) => !isFilePrinted(j._id, f.fileId))
 			).length;
 			engine.resumePrompt = { pendingJobs };
 			console.log(`[Engine] automated printing was on last session — asking to resume (${pendingJobs} job(s) pending)`);

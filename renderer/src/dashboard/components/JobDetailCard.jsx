@@ -451,9 +451,7 @@ function PaymentProofTile({ fileId }) {
 	);
 }
 
-// Free text the customer attached to the job. `note` (the print instruction) and
-// `additionalComments` are separate optional fields on the backend, so each gets
-// its own row rather than being run together.
+// Free text the customer attached to the job (`additionalComments`).
 function JobNoteRow({ label, text }) {
 	return (
 		<div className="receipt-row job-detail__note">
@@ -527,7 +525,6 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showP
 								{totalPages != null ? `${totalPages} ${totalPages === 1 ? "page" : "pages"}` : "—"}
 							</span>
 						</div>
-						{entry.note && <JobNoteRow label="User Note" text={entry.note} />}
 						{entry.additionalComments && (
 							<JobNoteRow label="Additional Comments" text={entry.additionalComments} />
 						)}
@@ -535,14 +532,28 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showP
 						{costRows.length > 0 && (
 							<>
 								<div className="receipt-divider" />
-								<span className="detail-tile__subhead">Cost Breakdown</span>
+								{/* One line per document. A lone line carries the emphasis
+								    itself; several read as plain rows, with the emphasised
+								    total beside the heading. */}
+								{costRows.length > 1 ? (
+									<div className="receipt-row">
+										<span className="detail-tile__subhead">Cost Breakdown</span>
+										<span className="receipt-cost-value">
+											Rs. {cost?.total ?? costRows.reduce((sum, row) => sum + (Number(row.subtotal) || 0), 0)}
+										</span>
+									</div>
+								) : (
+									<span className="detail-tile__subhead">Cost Breakdown</span>
+								)}
 								{costRows.map((row) => (
 									<div key={row.key} className="receipt-row">
 										<span className="receipt-label">
 											{row.item}
 											{row.detail && <span style={{ color: "var(--color-text-muted)" }}> {row.detail}</span>}
 										</span>
-										<span className="receipt-cost-value">Rs. {row.subtotal}</span>
+										<span className={costRows.length > 1 ? "receipt-value" : "receipt-cost-value"}>
+											Rs. {row.subtotal}
+										</span>
 									</div>
 								))}
 							</>
