@@ -15,13 +15,13 @@ export function formatTime(isoString) {
 }
 
 // Normalise a single file entry so the UI always has a display name + settings.
-// The backend nests the document under `file` ({ _id, originalName, numberOfPages })
+// The backend nests the document under `file` ({ _id, name, numberOfPages })
 // with print settings alongside it; older fallbacks are kept for safety.
 function transformFile(entry, index) {
 	const doc = entry.file || {};
 	return {
 		fileId: doc._id || entry.fileId || entry.hash || `file-${index}`,
-		name: doc.originalName || entry.name || entry.fileName || `Document ${index + 1}`,
+		name: doc.name || entry.name || entry.fileName || `Document ${index + 1}`,
 		numberOfPages: doc.numberOfPages ?? entry.numberOfPages,
 		settings: entry.settings || {},
 	};

@@ -66,7 +66,7 @@ function jobFileList(job) {
 		if (!fileId) return;
 		out.push({
 			fileId,
-			name: entry.file?.originalName || entry.name || `Document ${i + 1}`,
+			name: entry.file?.name || entry.name || `Document ${i + 1}`,
 			settings: entry.settings || {},
 		});
 	});

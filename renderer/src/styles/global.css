@@ -3581,6 +3581,20 @@ body,
 
 .dash__error { color: var(--color-accent); font-weight: 600; }
 
+/* Offline notice above the dashboard when it's showing saved results. */
+.dash__stale {
+	margin-bottom: 16px;
+	padding: 10px 14px;
+	border: 1px solid var(--color-accent-light);
+	border-radius: var(--radius-md);
+	background: rgba(255, 87, 10, 0.08);
+	color: var(--color-accent);
+	font-size: 12.5px;
+	font-weight: 600;
+	line-height: 1.5;
+	animation: fadeSlideIn 250ms ease both;
+}
+
 /* ── KPI cards (kanban-style board) ── */
 
 .kpi-row {

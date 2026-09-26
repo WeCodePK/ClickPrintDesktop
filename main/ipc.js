@@ -30,6 +30,7 @@ const {
 const { syncJobFiles, getStatusMap, setNotifier, openFile, redownloadFile, ensureProof, openProof } = require("./files");
 const { listPrinters, listAllPrinters, printTestPage } = require("./printers");
 const { getJobs } = require("./state");
+const historyCache = require("./historyCache");
 const engine = require("./printEngine");
 
 function registerIpcHandlers(getMainWindow) {
@@ -147,6 +148,7 @@ function registerIpcHandlers(getMainWindow) {
 		engine.stop();
 		stopJobsSse();
 		clearAuthState();
+		await historyCache.clear();
 		return { success: true };
 	});
 
@@ -169,9 +171,21 @@ function registerIpcHandlers(getMainWindow) {
 		return result;
 	});
 
+	// A successful fetch is remembered; a failed one (offline, server down) falls
+	// back to the last good copy, marked `stale` with the time it was fetched, so
+	// the screens keep showing data instead of an error.
 	ipcMain.handle("history:fetch", async () => {
 		console.log("[IPC] history:fetch");
-		return await fetchHistory();
+		const { shopId } = getAuthState();
+		const result = await fetchHistory();
+		if (result.success) {
+			historyCache.save(shopId, result.data || []);
+			return result;
+		}
+		const cached = historyCache.load(shopId);
+		if (!cached) return result;
+		console.warn(`[IPC] history:fetch failed (${result.message}) — serving copy from ${cached.fetchedAt}`);
+		return { success: true, data: cached.data, stale: true, fetchedAt: cached.fetchedAt, message: result.message };
 	});
 
 	ipcMain.handle("shop:fetch", async () => {

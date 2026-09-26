@@ -87,7 +87,7 @@ async function settle() {
 	for (let i = 0; i < 30; i++) await new Promise((resolve) => setImmediate(resolve));
 }
 
-const doc = (id) => ({ file: { _id: id, originalName: `${id}.pdf` }, settings: { pageType: "A4" } });
+const doc = (id) => ({ file: { _id: id, name: `${id}.pdf` }, settings: { pageType: "A4" } });
 const job = (id, extra = {}, docIds = [`${id}-f1`]) => ({
 	_id: id,
 	status: "submitted",

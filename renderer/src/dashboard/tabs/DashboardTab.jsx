@@ -36,6 +36,14 @@ function useCountUp(target, duration = 950) {
 
 const rupees = (n) => `Rs. ${Math.round(n).toLocaleString("en-US")}`;
 
+// "2:41 PM" today, "Sep 24, 2:41 PM" otherwise — a saved copy may be days old.
+function formatWhen(date) {
+	const time = date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+	return date.toDateString() === new Date().toDateString()
+		? time
+		: `${date.toLocaleDateString("en-US", { month: "short", day: "numeric" })}, ${time}`;
+}
+
 // Kanban-style KPI card with an animated value.
 function KpiCard({ icon, label, value, sub, accent, currency, delay = 0 }) {
 	const animated = useCountUp(value);
@@ -200,6 +208,9 @@ function DashboardTab() {
 	const [stats, setStats] = useState(null);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState(null);
+	// Set when the backend couldn't be reached and main served its saved copy:
+	// { fetchedAt: Date }.
+	const [stale, setStale] = useState(null);
 	const [earningsRange, setEarningsRange] = useState("24h");
 
 	const earningsSeries = useMemo(
@@ -215,6 +226,7 @@ function DashboardTab() {
 			const result = await window.electronAPI.fetchHistory();
 			if (result.success) {
 				setStats(computeStats(result.data || []));
+				setStale(result.stale ? { fetchedAt: new Date(result.fetchedAt) } : null);
 			} else {
 				setError(result.message || "Failed to load history.");
 			}
@@ -237,22 +249,39 @@ function DashboardTab() {
 					<h1 className="dash__title">Dashboard</h1>
 					<p className="dash__sub">
 						{stats
-							? `Live overview · updated ${stats.generatedAt.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}`
+							? stale
+								? `Offline · showing results from ${formatWhen(stale.fetchedAt)}`
+								: `Live overview · updated ${formatWhen(stats.generatedAt)}`
 							: "Live overview of your print shop"}
 					</p>
 				</div>
 				<button className="dash__refresh" onClick={load} disabled={loading}>
 					<RefreshIcon />
-					Refresh
+					{loading && stats ? "Refreshing…" : "Refresh"}
 				</button>
 			</div>
 
-			{loading ? (
+			{stats && (stale || error) && (
+				<div className="dash__stale" role="status">
+					{stale ? (
+						<>
+							Couldn’t reach the server. Showing the last saved results, from{" "}
+							{formatWhen(stale.fetchedAt)} — press Refresh to try again.
+						</>
+					) : (
+						<>Couldn’t refresh ({error}). Showing the results already on screen.</>
+					)}
+				</div>
+			)}
+
+			{/* The spinner only stands in for missing data: a refresh keeps the
+			    current numbers on screen until new ones arrive. */}
+			{loading && !stats ? (
 				<div className="dash__state">
 					<div className="spinner spinner--dark" />
 					<p>Crunching the numbers…</p>
 				</div>
-			) : error ? (
+			) : error && !stats ? (
 				<div className="dash__state">
 					<p className="dash__error">{error}</p>
 					<button className="btn-outline" style={{ flex: "0 0 auto" }} onClick={load}>Try again</button>
