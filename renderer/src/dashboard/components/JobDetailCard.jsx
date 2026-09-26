@@ -12,7 +12,7 @@ import {
 	WalletIcon,
 } from "../icons";
 import { useFiles } from "../FilesContext";
-import { getJobPrintMode, getJobTotalPages, getBlockedReason } from "../jobUtils";
+import { getJobTotalPages, getBlockedReason } from "../jobUtils";
 import { getPdfThumb, forgetPdfThumb } from "../pdfThumbs";
 import PrintSplitButton from "./PrintSplitButton";
 
@@ -569,13 +569,14 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showP
 							<span className="receipt-label">Total Files</span>
 							<span className="receipt-value">{entry.filesCount} {entry.filesCount === 1 ? "document" : "documents"}</span>
 						</div>
-						<div className="receipt-row">
+						{/* this is not a utmost information, already printing mode is displayed in each job */}
+						{/* <div className="receipt-row">
 							<span className="receipt-label">Printing Mode</span>
 							<span className="receipt-value">{getJobPrintMode(entry)}</span>
-						</div>
+						</div> */}
 						<div className="receipt-row">
 							<span className="receipt-label">Total Pages</span>
-							<span className="receipt-value" style={{ color: "var(--color-accent)", fontWeight: 700 }}>
+							<span className="receipt-value">
 								{totalPages != null ? `${totalPages} ${totalPages === 1 ? "page" : "pages"}` : "—"}
 							</span>
 						</div>
