@@ -9,9 +9,8 @@ import { TrashIcon, EditIcon, CheckIcon, BoltIcon, WalletIcon, PaperIcon, PagesI
 
 // Services settings section: the shop's print services in a left list column
 // (like the Printers section), with the selected service's configuration in the
-// detail pane. Creating or editing opens the form in a modal. `onBack` returns to
-// the Settings section list.
-function ServicesTab({ onBack }) {
+// detail pane. Creating or editing opens the form in a modal.
+function ServicesTab() {
 	// Service edits change where documents auto-route, so the shared routing
 	// state in AutoPrintContext is refreshed after every save/delete/toggle.
 	const { refreshPrinterState } = useAutoPrint();
@@ -162,7 +161,6 @@ function ServicesTab({ onBack }) {
 			<ListColumn
 				title="Services"
 				count={services.length}
-				onBack={onBack}
 				action={
 					<button className="db-list__add" onClick={() => setEditing({ keys: {} })} title="Add a service">
 						+ Add

@@ -24,9 +24,9 @@ export const STEPS = [
 		label: "Configuration",
 		Icon: SettingsIcon,
 		title: "Configure your shop",
-		description: "Set how the app runs on this computer, where your earnings are paid, and when you're open.",
+		description: "Set where your earnings are paid, how customers reach you, and when you're open.",
 		info:
-			"App preferences apply to this computer only. Your shop profile — payout wallet, contact number and opening hours — is shown to customers and used to pay you. Wallet, contact number and timings are required to finish setup.",
+			"Your shop profile — payout wallet, contact number and opening hours — is shown to customers and used to pay you. Wallet, contact number and timings are required to finish setup.",
 	},
 ];
 

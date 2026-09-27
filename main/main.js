@@ -3,7 +3,7 @@ const { registerIpcHandlers } = require('./ipc');
 const { registerFileSchemePrivileges, registerFileProtocol, clearProofCache } = require('./files');
 const { loadPersistedAuth } = require('./state');
 const { startOfflineWatcher } = require('./printers');
-const { initLoginItem, isEnabled: isOpenAtLogin, setEnabled: setOpenAtLogin, startedHidden } = require('./startup');
+const { initLoginItem, startedHidden } = require('./startup');
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
 const { autoUpdater } = require('electron-updater');
 
@@ -61,14 +61,6 @@ ipcMain.on('app:restart-to-update', () => autoUpdater.quitAndInstall(true, true)
 ipcMain.handle('app:get-version', () => app.getVersion());
 ipcMain.handle('app:get-update-status', () => updateStatus);
 
-// Launch-at-login preference, surfaced in the Settings tab and the tray menu.
-ipcMain.handle('app:get-open-at-login', () => isOpenAtLogin());
-ipcMain.handle('app:set-open-at-login', (_event, enabled) => {
-	const value = setOpenAtLogin(enabled);
-	refreshTrayMenu();
-	return value;
-});
-
 // Privileged scheme registration must happen before the app is ready.
 registerFileSchemePrivileges();
 
@@ -106,16 +98,6 @@ function refreshTrayMenu() {
 		{
 			label: 'Open ClickPrint',
 			click: showWindow,
-		},
-		{ type: 'separator' },
-		{
-			label: 'Start when I sign in',
-			type: 'checkbox',
-			checked: isOpenAtLogin(),
-			click: (item) => {
-				setOpenAtLogin(item.checked);
-				refreshTrayMenu();
-			},
 		},
 		{ type: 'separator' },
 		{

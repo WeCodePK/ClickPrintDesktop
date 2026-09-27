@@ -8,6 +8,7 @@ import {
 	LogoutIcon,
 } from "../icons";
 import ConnectionSwitcher from "./ConnectionSwitcher";
+import WhatsAppStatusButton from "./WhatsAppStatusButton";
 import AutoPrintSwitcher from "./AutoPrintSwitcher";
 
 // Printers and Services live under Settings, so they aren't top-level tabs.
@@ -101,8 +102,10 @@ function UpdateBanner() {
 // Left vertical navigation (WhatsApp-style). Each item is a router NavLink so the state follows the URL.
 function Sidebar() {
 	const location = useLocation();
+	// Settings → WhatsApp highlights the WhatsApp shortcut instead.
 	const isSettingsActive =
-		location.pathname.includes("settings") || location.pathname.includes("profile");
+		(location.pathname.includes("settings") && !location.search.includes("section=whatsapp")) ||
+		location.pathname.includes("profile");
 
 	return (
 		<nav className="db-sidebar">
@@ -143,6 +146,9 @@ function Sidebar() {
 
 				{/* ── Automated-printing toggle ── */}
 				<AutoPrintSwitcher />
+
+				{/* ── WhatsApp link status (shortcut to Settings → WhatsApp) ── */}
+				<WhatsAppStatusButton />
 
 				{/* ── SSE connection status + shop switcher ── */}
 				<ConnectionSwitcher />

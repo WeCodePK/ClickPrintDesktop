@@ -25,12 +25,15 @@ const {
 	stopJobsSse,
 	setSseStatusNotifier,
 	setPingNotifier,
+	setWhatsAppSendHandler,
 	getSseStatus,
+	getShopId,
 } = require("./api");
 const { syncJobFiles, getStatusMap, setNotifier, openFile, ensureProof, openProof } = require("./files");
 const { listPrinters, listAllPrinters, printTestPage } = require("./printers");
 const { getJobs } = require("./state");
 const engine = require("./printEngine");
+const whatsapp = require("./whatsapp");
 
 function registerIpcHandlers(getMainWindow) {
 	const send = (channel, ...args) => {
@@ -75,6 +78,9 @@ function registerIpcHandlers(getMainWindow) {
 	// to the renderer. Shared by fresh logins and restored sessions.
 	const beginJobsSync = () => {
 		engine.start();
+		// Reconnects an already-linked WhatsApp for this shop (unlinked ones wait
+		// for the operator to press Connect in the WhatsApp drawer).
+		whatsapp.start(getShopId());
 		startJobsSse((jobs) => {
 			pushJobs(jobs);
 			// Acknowledge new jobs to the backend and download their files.
@@ -97,6 +103,11 @@ function registerIpcHandlers(getMainWindow) {
 	// documents leave the registry and foreign load is re-counted, keeping load
 	// balancing honest.
 	setPingNotifier(() => engine.reconcilePrinterQueues());
+
+	// WhatsApp: link-state pushes drive the sidebar dot and drawer; the backend's
+	// "whatsappSend" SSE events go straight out through the linked socket.
+	whatsapp.setNotifier((snapshot) => send("whatsapp:status", snapshot));
+	setWhatsAppSendHandler((payload) => whatsapp.sendText(payload));
 
 	// Push live SSE connection-state changes to the renderer (drives the
 	// connection indicator next to the settings/logout icons).
@@ -146,6 +157,7 @@ function registerIpcHandlers(getMainWindow) {
 	ipcMain.handle("auth:logout", async () => {
 		engine.stop();
 		stopJobsSse();
+		whatsapp.disconnect();
 		clearAuthState();
 		return { success: true };
 	});
@@ -308,6 +320,21 @@ function registerIpcHandlers(getMainWindow) {
 			console.error("[IPC] printers:test error:", error.message);
 			return { success: false, message: error.message };
 		}
+	});
+
+	// ── WhatsApp (linked-device socket lives in main) ──────────────────────────
+	ipcMain.handle("whatsapp:get-status", async () => {
+		return whatsapp.getSnapshot();
+	});
+
+	ipcMain.handle("whatsapp:connect", async () => {
+		console.log("[IPC] whatsapp:connect");
+		return await whatsapp.connect();
+	});
+
+	ipcMain.handle("whatsapp:unlink", async () => {
+		console.log("[IPC] whatsapp:unlink");
+		return await whatsapp.unlink();
 	});
 
 	// ── Print engine (all orchestration/state lives in main) ───────────────────

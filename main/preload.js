@@ -22,6 +22,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		return () => ipcRenderer.removeListener("sse:status", handler);
 	},
 
+	// WhatsApp linked device — status snapshot { state, qr, me, error } where
+	// state is "idle" | "connecting" | "qr" | "open" | "reconnecting" |
+	// "logged_out". `qr` is a PNG data URL while waiting for a scan.
+	getWhatsAppStatus: () => ipcRenderer.invoke("whatsapp:get-status"),
+	onWhatsAppStatus: (callback) => {
+		const handler = (_event, status) => callback(status);
+		ipcRenderer.on("whatsapp:status", handler);
+		return () => ipcRenderer.removeListener("whatsapp:status", handler);
+	},
+	connectWhatsApp: () => ipcRenderer.invoke("whatsapp:connect"),
+	unlinkWhatsApp: () => ipcRenderer.invoke("whatsapp:unlink"),
+
 	// Jobs — the list is pushed authoritatively from main; operator actions are
 	// commands handled entirely by the main-process print engine.
 	fetchJobs: () => ipcRenderer.invoke("jobs:fetch"),
@@ -116,12 +128,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	minimizeWindow: () => ipcRenderer.send("window:minimize"),
 	maximizeWindow: () => ipcRenderer.send("window:maximize"),
 	closeWindow: () => ipcRenderer.send("window:close"),
-
-	// Startup behaviour — whether Windows launches the app (into the tray) at
-	// sign-in. Closing the window always minimises to the tray, so the app keeps
-	// printing in the background either way.
-	getOpenAtLogin: () => ipcRenderer.invoke("app:get-open-at-login"),
-	setOpenAtLogin: (enabled) => ipcRenderer.invoke("app:set-open-at-login", enabled),
 
 	// Auto-update
 	getAppVersion: () => ipcRenderer.invoke("app:get-version"),

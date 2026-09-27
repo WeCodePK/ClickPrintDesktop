@@ -12,8 +12,7 @@ const ONLINE_POLL_MS = 15000;
 // Printers settings section: the shop's registered printers (GET /api/printers),
 // each shown with its live online/offline state. Adding opens a picker of the
 // machine's currently-online printers; removing deletes it from the backend.
-// `onBack` returns to the Settings section list.
-function PrintersTab({ onBack }) {
+function PrintersTab() {
 	const { refreshPrinterState } = useAutoPrint();
 
 	const [registered, setRegistered] = useState([]); // backend printers: { _id, name }
@@ -177,7 +176,6 @@ function PrintersTab({ onBack }) {
 			<ListColumn
 				title="Printers"
 				count={entries.length}
-				onBack={onBack}
 				action={
 					<button className="db-list__add" onClick={openAdd} title="Add a printer">
 						+ Add

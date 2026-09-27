@@ -1,14 +1,12 @@
 import { useState } from "react";
 import StepLayout from "./StepLayout";
 import InfoTip from "./InfoTip";
-import AppSettings from "../dashboard/components/settings/AppSettings";
 import ShopProfileSettings from "../dashboard/components/settings/ShopProfileSettings";
-import { SettingsIcon, StoreIcon } from "../dashboard/icons";
+import { StoreIcon } from "../dashboard/icons";
 
 const PROFILE_FORM_ID = "onboarding-profile-form";
 
-// Step 3: everything from the Settings tab. The footer's Finish button submits
-// the shop profile form; app preferences save as soon as they're toggled.
+// Step 3: the shop profile. The footer's Finish button submits its form.
 function SettingsStep({ onFinish, ...layout }) {
 	const [status, setStatus] = useState({ canSubmit: false, saving: false, validationError: null });
 
@@ -23,18 +21,6 @@ function SettingsStep({ onFinish, ...layout }) {
 			nextProps={{ type: "submit", form: PROFILE_FORM_ID, onClick: undefined }}
 		>
 			<section className="onb-section" style={{ animationDelay: "60ms" }}>
-				<h3 className="onb-section__title">
-					<span className="onb-section__icon"><SettingsIcon /></span>
-					App preferences
-					<InfoTip
-						label="About app preferences"
-						text="These apply to this computer only. Starting with Windows keeps orders arriving and printing after a restart, even if nobody opens ClickPrint."
-					/>
-				</h3>
-				<AppSettings embedded />
-			</section>
-
-			<section className="onb-section" style={{ animationDelay: "140ms" }}>
 				<h3 className="onb-section__title">
 					<span className="onb-section__icon"><StoreIcon /></span>
 					Shop profile

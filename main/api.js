@@ -493,6 +493,25 @@ async function pingShopStatus(shopId){
 	}
 }
 
+// ── WhatsApp ──────────────────────────────────────────────────────────────────
+
+// Forwards incoming WhatsApp messages (the raw Baileys messages.upsert event) to
+// the backend. `body` arrives pre-serialized — whatsapp.js encodes Buffers and
+// protobuf Longs itself.
+async function postWhatsAppWebhook(body) {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/webhooks/whatsapp`, {
+			method: "POST",
+			headers: authHeaders(),
+			body,
+		});
+		return await readJson(response);
+	} catch (error) {
+		console.error("[API] postWhatsAppWebhook error:", error);
+		return apiError(error);
+	}
+}
+
 let _sse = null;
 let _sseTimer = null;
 let _onJobsUpdate = null;
@@ -512,12 +531,21 @@ let _onSseStatus = null;
 // (the engine imports api).
 let _onPing = null;
 
+// Fired on every "whatsappSend" SSE event with its parsed payload
+// ({ id, to, text }). Set by ipc.js; api.js must not import whatsapp.js (it
+// imports api for the webhook).
+let _onWhatsAppSend = null;
+
 function setSseStatusNotifier(cb) {
 	_onSseStatus = cb;
 }
 
 function setPingNotifier(cb) {
 	_onPing = cb;
+}
+
+function setWhatsAppSendHandler(cb) {
+	_onWhatsAppSend = cb;
 }
 
 function getSseStatus() {
@@ -584,6 +612,19 @@ function _connectSse() {
 	_sse.addEventListener("jobsUpdate", (event) => {
 		console.log("[SSE] jobsUpdate:", event.data);
 		_reconcile();
+	});
+
+	// The backend asking to send a WhatsApp text from the shop's linked number.
+	_sse.addEventListener("whatsappSend", (event) => {
+		let payload;
+		try {
+			payload = JSON.parse(event.data);
+		} catch {
+			console.error("[SSE] whatsappSend: invalid JSON:", event.data);
+			return;
+		}
+		console.log("[SSE] whatsappSend:", payload?.id, "→", payload?.to);
+		if (_onWhatsAppSend) _onWhatsAppSend(payload);
 	});
 
 	_sse.addEventListener("ping", async () => {
@@ -662,5 +703,8 @@ module.exports = {
 	stopJobsSse,
 	setSseStatusNotifier,
 	setPingNotifier,
+	setWhatsAppSendHandler,
 	getSseStatus,
+	getShopId,
+	postWhatsAppWebhook,
 };

@@ -18,11 +18,14 @@
     "release": "npm run build:renderer && dotenv -e .env -- electron-builder --publish always --win"
   },
   "dependencies": {
+    "baileys": "^7.0.0-rc14",
     "electron-store": "^8.1.0",
     "electron-updater": "^6.8.9",
     "eventsource": "^1.1.2",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",
+    "pino": "^10.3.1",
+    "qrcode": "^1.5.4",
     "react-router-dom": "^7.18.0"
   },
   "devDependencies": {
