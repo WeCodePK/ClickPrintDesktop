@@ -1521,15 +1521,6 @@ body,
 	text-overflow: ellipsis;
 }
 
-/* Queue position with the job's status badge beneath it. */
-.db-entry__qcol {
-	flex-shrink: 0;
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	gap: 5px;
-}
-
 /* A compact version of the status pill for the job list. */
 .db-entry__status.db-status {
 	padding: 2px 6px;
@@ -1570,7 +1561,18 @@ body,
 	color: var(--color-text-secondary);
 }
 
-/* The job code, then the channel icon, on the row's top line. */
+/* Channel icon stacked above the received time, on the right of the row. */
+.db-entry__stack {
+	flex-shrink: 0;
+	align-self: stretch;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	justify-content: space-between;
+	gap: 3px;
+}
+
+/* The job code, then the job's status badge, on the row's top line. */
 .db-entry__code-row {
 	display: flex;
 	align-items: center;
