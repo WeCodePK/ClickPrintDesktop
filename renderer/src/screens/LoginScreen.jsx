@@ -23,7 +23,8 @@ function LoginScreen({ onOtpSent }) {
 			const result = await window.electronAPI.sendOtp(fullNumber);
 
 			if (result.success) {
-				onOtpSent(fullNumber);
+				// The backend's OTP config (code length, resend wait) drives the OTP screen.
+				onOtpSent(fullNumber, result.data?.config);
 			} else {
 				setError(result.message || "Failed to send OTP. Please try again.");
 			}
@@ -102,12 +103,13 @@ function LoginScreen({ onOtpSent }) {
 							placeholder="3012345678"
 							value={phone}
 							onChange={(e) => {
-								const val = e.target.value.replace(/\D/g, "");
+								// Digits only, at most the 10 after +92. A local-format number
+								// pasted with its leading 0 ("03012345678") drops the 0.
+								const val = e.target.value.replace(/\D/g, "").replace(/^0/, "").slice(0, 10);
 								setPhone(val);
 								setError("");
 							}}
 							onKeyDown={handleKeyDown}
-							maxLength={11}
 							autoFocus
 						/>
 					</div>

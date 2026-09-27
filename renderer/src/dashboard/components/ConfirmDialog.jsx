@@ -1,11 +1,13 @@
 import { useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 
 // Confirmation popup: a question as the title, one short line of consequence,
 // and the buttons in a row — Cancel on the left, the action (named for what it
 // does) on the right. `tone` colours the action: "danger" (red) for destructive
 // actions, "warning" (yellow) for proceed-with-caution ones, "primary" (green,
 // the default) otherwise. Focus starts on Cancel so a stray Enter never fires
-// the action, and Esc cancels.
+// the action, and Esc cancels. Rendered into <body>, so where it's used (e.g.
+// inside the sidebar's stacking context) never decides what it covers.
 function ConfirmDialog({
 	title,
 	message,
@@ -28,7 +30,7 @@ function ConfirmDialog({
 		return () => window.removeEventListener("keydown", onKeyDown);
 	}, [onCancel]);
 
-	return (
+	return createPortal(
 		<div className="modal-overlay" onClick={onCancel}>
 			<div
 				className="modal-card"
@@ -52,7 +54,8 @@ function ConfirmDialog({
 					</button>
 				</div>
 			</div>
-		</div>
+		</div>,
+		document.body
 	);
 }
 

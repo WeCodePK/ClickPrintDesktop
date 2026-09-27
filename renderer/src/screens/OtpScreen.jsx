@@ -1,8 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { readOtpConfig } from "./otpConfig";
 
-function OtpScreen({ phoneNumber, onBack, onVerified }) {
-	const [codes, setCodes] = useState(["", "", "", "", ""]);
-	const [timer, setTimer] = useState(60);
+const emptyCode = (length) => Array(length).fill("");
+
+function OtpScreen({ phoneNumber, otpConfig, onBack, onVerified }) {
+	const [config, setConfig] = useState(() => readOtpConfig(otpConfig));
+	const { codeLength } = config;
+	const [codes, setCodes] = useState(() => emptyCode(config.codeLength));
+	const [timer, setTimer] = useState(config.resendSeconds);
 	const [verifying, setVerifying] = useState(false);
 	const [resending, setResending] = useState(false);
 	const [showErrorModal, setShowErrorModal] = useState(false);
@@ -20,7 +25,8 @@ function OtpScreen({ phoneNumber, onBack, onVerified }) {
 	}, [timer]);
 
 	const formattedPhone = phoneNumber
-		? `+${phoneNumber.slice(0, 2)} ${phoneNumber.slice(2)}`
+		? // "923235400291" → "+92 323 5400291": country code, carrier code, subscriber.
+			`+${phoneNumber.slice(0, 2)} ${phoneNumber.slice(2, 5)} ${phoneNumber.slice(5)}`
 		: "";
 
 	const formatTimer = (seconds) => {
@@ -38,19 +44,19 @@ function OtpScreen({ phoneNumber, onBack, onVerified }) {
 			newCodes[index] = value;
 			setCodes(newCodes);
 
-			if (value && index < 4) {
+			if (value && index < codeLength - 1) {
 				inputRefs.current[index + 1]?.focus();
 			}
 
 			if (
 				newCodes.every((c) => c !== "") &&
-				index === 4 &&
+				index === codeLength - 1 &&
 				!verifying
 			) {
 				handleVerify(newCodes.join(""));
 			}
 		},
-		[codes, verifying]
+		[codes, verifying, codeLength]
 	);
 
 	const handleKeyDown = (e, index) => {
@@ -64,19 +70,19 @@ function OtpScreen({ phoneNumber, onBack, onVerified }) {
 		const pasted = e.clipboardData
 			.getData("text")
 			.replace(/\D/g, "")
-			.slice(0, 5);
+			.slice(0, codeLength);
 		if (pasted.length === 0) return;
 
 		const newCodes = [...codes];
-		for (let i = 0; i < 5; i++) {
+		for (let i = 0; i < codeLength; i++) {
 			newCodes[i] = pasted[i] || "";
 		}
 		setCodes(newCodes);
 
 		const nextEmpty = newCodes.findIndex((c) => c === "");
-		inputRefs.current[nextEmpty === -1 ? 4 : nextEmpty]?.focus();
+		inputRefs.current[nextEmpty === -1 ? codeLength - 1 : nextEmpty]?.focus();
 
-		if (pasted.length === 5 && !verifying) {
+		if (pasted.length === codeLength && !verifying) {
 			handleVerify(pasted);
 		}
 	};
@@ -116,8 +122,11 @@ function OtpScreen({ phoneNumber, onBack, onVerified }) {
 		try {
 			const result = await window.electronAPI.sendOtp(phoneNumber);
 			if (result.success) {
-				setCodes(["", "", "", "", ""]);
-				setTimer(60);
+				// A resend can come back with a different config — follow it.
+				const next = readOtpConfig(result.data?.config);
+				setConfig(next);
+				setCodes(emptyCode(next.codeLength));
+				setTimer(next.resendSeconds);
 				inputRefs.current[0]?.focus();
 			} else {
 				setErrorMessage(
@@ -136,7 +145,7 @@ function OtpScreen({ phoneNumber, onBack, onVerified }) {
 	const handleClearAndRetry = () => {
 		setShowErrorModal(false);
 		setIsNotRegistered(false);
-		setCodes(["", "", "", "", ""]);
+		setCodes(emptyCode(codeLength));
 		inputRefs.current[0]?.focus();
 	};
 

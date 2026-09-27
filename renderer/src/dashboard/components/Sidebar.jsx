@@ -10,6 +10,7 @@ import {
 import ConnectionSwitcher from "./ConnectionSwitcher";
 import WhatsAppStatusButton from "./WhatsAppStatusButton";
 import AutoPrintSwitcher from "./AutoPrintSwitcher";
+import ConfirmDialog from "./ConfirmDialog";
 
 // Printers and Services live under Settings, so they aren't top-level tabs.
 const TABS = [
@@ -100,8 +101,9 @@ function UpdateBanner() {
 }
 
 // Left vertical navigation (WhatsApp-style). Each item is a router NavLink so the state follows the URL.
-function Sidebar() {
+function Sidebar({ onLogout }) {
 	const location = useLocation();
+	const [confirmingLogout, setConfirmingLogout] = useState(false);
 	// Settings → WhatsApp highlights the WhatsApp shortcut instead.
 	const isSettingsActive =
 		(location.pathname.includes("settings") && !location.search.includes("section=whatsapp")) ||
@@ -110,16 +112,20 @@ function Sidebar() {
 	return (
 		<nav className="db-sidebar">
 			<div className="db-sidebar__top">
-				<div className="tooltip-wrapper">
-					<NavLink
-						to="home"
-						className={({ isActive }) =>
-							`db-sidebar__home-btn ${isActive ? "db-sidebar__home-btn--active" : ""}`
-						}
-					>
-						<HomeIcon />
-					</NavLink>
-					<span className="tooltip-text">Dashboard</span>
+				{/* Its own header-height block, so the rule under it lines up with the
+				    list columns' header rules (Jobs, History…). */}
+				<div className="db-sidebar__home">
+					<div className="tooltip-wrapper">
+						<NavLink
+							to="home"
+							className={({ isActive }) =>
+								`db-sidebar__home-btn ${isActive ? "db-sidebar__home-btn--active" : ""}`
+							}
+						>
+							<HomeIcon />
+						</NavLink>
+						<span className="tooltip-text">Dashboard</span>
+					</div>
 				</div>
 
 				<div className="db-sidebar__nav">
@@ -166,18 +172,32 @@ function Sidebar() {
 					<span className="tooltip-text">Settings</span>
 				</div>
 
+				{/* Full-width rule setting Logout apart, like the one under Dashboard. */}
+				<div className="db-sidebar__divider" aria-hidden="true" />
+
 				<div className="tooltip-wrapper">
-					<NavLink
-						to="logout"
-						className={({ isActive }) => `db-tab ${isActive ? "db-tab--active" : ""}`}
-					>
+					<button type="button" className="db-tab" onClick={() => setConfirmingLogout(true)} aria-label="Log out">
 						<span className="db-tab__icon" style={{ color: "var(--color-accent)" }}>
 							<LogoutIcon />
 						</span>
-					</NavLink>
+					</button>
 					<span className="tooltip-text">Logout</span>
 				</div>
 			</div>
+
+			{confirmingLogout && (
+				<ConfirmDialog
+					title="Log out?"
+					message="You'll need to sign in again to receive and print jobs."
+					confirmLabel="Log out"
+					tone="danger"
+					onConfirm={() => {
+						setConfirmingLogout(false);
+						onLogout?.();
+					}}
+					onCancel={() => setConfirmingLogout(false)}
+				/>
+			)}
 		</nav>
 	);
 }

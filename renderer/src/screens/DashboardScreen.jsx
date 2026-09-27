@@ -7,7 +7,6 @@ import PrintJobsTab from "../dashboard/tabs/PrintJobsTab";
 import HistoryTab from "../dashboard/tabs/HistoryTab";
 import DashboardTab from "../dashboard/tabs/DashboardTab";
 import SettingsTab from "../dashboard/tabs/SettingsTab";
-import LogoutTab from "../dashboard/tabs/LogoutTab";
 
 function DashboardScreen({ shopProfile, onLogout }) {
 	return (
@@ -16,7 +15,7 @@ function DashboardScreen({ shopProfile, onLogout }) {
 				<AutoPrintProvider>
 					<HashRouter>
 						<Routes>
-							<Route element={<DashboardLayout />}>
+							<Route element={<DashboardLayout onLogout={onLogout} />}>
 								<Route index element={<Navigate to="jobs" replace />} />
 								<Route path="jobs" element={<PrintJobsTab />} />
 								<Route path="history" element={<HistoryTab />} />
@@ -27,7 +26,8 @@ function DashboardScreen({ shopProfile, onLogout }) {
 								<Route path="services" element={<Navigate to="/settings?section=services" replace />} />
 								<Route path="profile" element={<SettingsTab initialSection="profile" />} />
 								<Route path="settings" element={<SettingsTab />} />
-								<Route path="logout" element={<LogoutTab onLogout={onLogout} />} />
+								{/* Logging out is a confirmation popup from the sidebar now. */}
+								<Route path="logout" element={<Navigate to="/jobs" replace />} />
 								<Route path="*" element={<Navigate to="jobs" replace />} />
 							</Route>
 						</Routes>

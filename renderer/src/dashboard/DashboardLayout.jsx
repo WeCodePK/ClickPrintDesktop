@@ -2,12 +2,12 @@ import { Outlet } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import AutoPrintTitleStatus from "./components/AutoPrintTitleStatus";
 
-function DashboardLayout() {
+function DashboardLayout({ onLogout }) {
 	return (
 		<div className="dashboard">
 			<AutoPrintTitleStatus />
 			<div className="db-body">
-				<Sidebar />
+				<Sidebar onLogout={onLogout} />
 				<Outlet />
 			</div>
 		</div>

@@ -251,8 +251,8 @@ function DashboardTab() {
 						{stats
 							? stale
 								? `Offline · showing results from ${formatWhen(stale.fetchedAt)}`
-								: `Live overview · updated ${formatWhen(stats.generatedAt)}`
-							: "Live overview of your print shop"}
+								: `Last updated ${formatWhen(stats.generatedAt)}`
+							: "Loading…"}
 					</p>
 				</div>
 				<button className="dash__refresh" onClick={load} disabled={loading}>

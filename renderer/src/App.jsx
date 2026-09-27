@@ -11,6 +11,8 @@ import { LogoutIcon, RetryIcon } from "./dashboard/icons";
 function App() {
 	const [screen, setScreen] = useState("login"); // "login" | "otp" | "selectShop" | "setup" | "onboarding" | "dashboard"
 	const [phoneNumber, setPhoneNumber] = useState("");
+	// { codeLength, resendInMs } from the /api/auth/otp response.
+	const [otpConfig, setOtpConfig] = useState(null);
 	const [shops, setShops] = useState([]); // shops to choose from after verify
 	const [shopProfile, setShopProfile] = useState(null);
 	const [restoring, setRestoring] = useState(true); // checking for a saved session
@@ -78,8 +80,9 @@ function App() {
 		setTheme((prev) => (prev === "dark" ? "light" : "dark"));
 	};
 
-	const navigateToOtp = (number) => {
+	const navigateToOtp = (number, config) => {
 		setPhoneNumber(number);
+		setOtpConfig(config || null);
 		setScreen("otp");
 	};
 
@@ -218,6 +221,7 @@ function App() {
 				{screen === "otp" && (
 					<OtpScreen
 						phoneNumber={phoneNumber}
+						otpConfig={otpConfig}
 						onBack={navigateToLogin}
 						onVerified={handleVerified}
 					/>
