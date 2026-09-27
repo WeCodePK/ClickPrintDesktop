@@ -23,6 +23,7 @@ const EMPTY_SNAPSHOT = {
 	manualOnly: {},
 	queuedJobIds: [],
 	printedFiles: {},
+	settingsOverrides: {},
 	files: {},
 };
 
@@ -40,12 +41,12 @@ function toastMessage({ kind, who, fileName }) {
 		// A manually-printed document failed. The job is deliberately left open —
 		// the operator retries, or fails the job explicitly from its failure box.
 		case "doc-failed-print":
-			return `“${fileName}” couldn't be printed. The job is still open — retry it, or mark the job as failed.`;
+			return `“${fileName}” (job ${who}) couldn't be printed. The job is still open — retry it, or mark the job as failed.`;
 		// Automated printing hit a failure and parked the job for a human.
 		case "auto-paused-failure":
 			return `“${fileName}” failed to print — automated printing is paused for job (${who}). It needs your attention.`;
 		case "pdf-cancel":
-			return `Saving “${fileName}” as PDF was cancelled. To cancel the job, use the Decline Job button.`;
+			return `Saving “${fileName}” (job ${who}) as PDF was cancelled. To cancel the job, use the Cancel button.`;
 		case "fail-report-error":
 			return "Couldn't mark the job as failed — please try again.";
 		// The click never got as far as queueing anything: the job couldn't be
@@ -257,6 +258,13 @@ export function AutoPrintProvider({ children }) {
 	// Stop a running print-all: queued docs withdrawn, in-flight doc finishes.
 	const stopPrintJob = useCallback((jobId) => window.electronAPI.stopPrintJob(jobId), []);
 
+	// Operator overrides of a document's print settings (null restores the
+	// customer's). The engine re-pushes its snapshot with the change applied.
+	const setFileSettings = useCallback(
+		(jobId, fileId, patch) => window.electronAPI.setFileSettings(jobId, fileId, patch),
+		[]
+	);
+
 	const failJob = useCallback((job) => window.electronAPI.markJobFailed(job._id), []);
 	const declineJob = useCallback((jobId) => window.electronAPI.declineJob(jobId), []);
 	const completeJob = useCallback((jobId, opts) => window.electronAPI.completeJob(jobId, opts), []);
@@ -286,6 +294,9 @@ export function AutoPrintProvider({ children }) {
 		disableAutoPrint,
 		printFileManual,
 		printAllManual,
+		// { [jobId]: { [fileId]: { ...changed settings } } }
+		settingsOverrides: snapshot.settingsOverrides || {},
+		setFileSettings,
 		failJob,
 		declineJob,
 		completeJob,

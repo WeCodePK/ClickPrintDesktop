@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from "react";
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
 import { transformJob } from "./jobUtils";
 
 // Shared live job list — fetched once via GET /api/jobs and kept up-to-date over
@@ -78,10 +78,18 @@ export function JobsProvider({ children }) {
 		};
 	}, []);
 
+	// Manual refresh (the list header's refresh button): re-fetches the job list
+	// without the full loading state, so the list stays on screen meanwhile.
+	const refreshJobs = useCallback(async () => {
+		const result = await window.electronAPI.fetchJobs();
+		if (result?.success) setPrintJobs((result.data || []).map(transformJob));
+		else console.error("[Renderer] failed to refresh jobs:", result?.message);
+	}, []);
+
 	// The list is authoritative from main (jobs:updated carries the engine's own
 	// status transitions) — consumers only read, never mutate.
 	return (
-		<JobsContext.Provider value={{ printJobs, jobsLoading }}>
+		<JobsContext.Provider value={{ printJobs, jobsLoading, refreshJobs }}>
 			{children}
 		</JobsContext.Provider>
 	);

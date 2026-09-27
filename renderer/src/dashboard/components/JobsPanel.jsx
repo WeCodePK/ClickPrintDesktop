@@ -2,11 +2,13 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { useJobs } from "../JobsContext";
-import { transformJob } from "../jobUtils";
+import { transformJob, formatJobCode } from "../jobUtils";
+import JobCode from "./JobCode";
 import { SearchIcon, EyeIcon, ChevronDownIcon } from "../icons";
 
 // Toggleable columns for the Jobs & History table (order they render in).
 const JOBTBL_COLUMNS = [
+	{ key: "code", label: "Code" },
 	{ key: "status", label: "Status" },
 	{ key: "createdBy", label: "Created By" },
 	{ key: "cost", label: "Cost" },
@@ -35,6 +37,7 @@ function JobStatusBadge({ status }) {
 		s === "completed" ? "jobtbl-status--completed" :
 		s === "cancelled" || s === "failed" ? "jobtbl-status--danger" :
 		s === "printing" || s === "processing" ? "jobtbl-status--active" :
+		s === "queued" ? "jobtbl-status--queued" :
 		"jobtbl-status--pending";
 	return <span className={`jobtbl-status ${cls}`}>{status}</span>;
 }
@@ -72,6 +75,7 @@ function JobsPanel() {
 
 	// Which columns render, beyond the always-present "#" index.
 	const [cols, setCols] = useState({
+		code: true,
 		status: true,
 		createdBy: true,
 		cost: true,
@@ -99,6 +103,7 @@ function JobsPanel() {
 			const matchStatus = view === "all" || item.rawStatus === view;
 			const matchQuery =
 				!q ||
+				(formatJobCode(item.code) || "").toLowerCase().includes(q) ||
 				(item.createdBy?.name || "").toLowerCase().includes(q) ||
 				(item.createdBy?.number || "").includes(q);
 			return matchStatus && matchQuery;
@@ -115,6 +120,7 @@ function JobsPanel() {
 
 	const downloadCSV = () => {
 		const headers = ["#"];
+		if (cols.code) headers.push("Code");
 		if (cols.status) headers.push("Status");
 		if (cols.createdBy) headers.push("Created By");
 		if (cols.cost) headers.push("Cost");
@@ -122,6 +128,7 @@ function JobsPanel() {
 
 		const rows = visible.map((item, index) => {
 			const row = [String(index + 1)];
+			if (cols.code) row.push(`"${formatJobCode(item.code) || ""}"`);
 			if (cols.status) row.push(`"${item.rawStatus}"`);
 			if (cols.createdBy) row.push(`"${createdByLabel(item)}"`);
 			if (cols.cost) row.push(`"${item.price}"`);
@@ -146,6 +153,7 @@ function JobsPanel() {
 		doc.text(`${tab === "jobs" ? "Jobs" : "History"} Report`, 14, 15);
 
 		const headers = ["#"];
+		if (cols.code) headers.push("Code");
 		if (cols.status) headers.push("Status");
 		if (cols.createdBy) headers.push("Created By");
 		if (cols.cost) headers.push("Cost");
@@ -153,6 +161,7 @@ function JobsPanel() {
 
 		const tableData = visible.map((item, index) => {
 			const row = [String(index + 1)];
+			if (cols.code) row.push(formatJobCode(item.code) || "—");
 			if (cols.status) row.push(item.rawStatus);
 			if (cols.createdBy) row.push(createdByLabel(item));
 			if (cols.cost) row.push(rupees(item.price));
@@ -203,7 +212,7 @@ function JobsPanel() {
 						<input
 							className="db-search__input"
 							type="text"
-							placeholder="Search by name or number..."
+							placeholder="Search by code, name or number..."
 							value={query}
 							onChange={(e) => setQuery(e.target.value)}
 						/>
@@ -274,6 +283,7 @@ function JobsPanel() {
 					<thead>
 						<tr>
 							<th>#</th>
+							{cols.code && <th>Code</th>}
 							{cols.status && <th>Status</th>}
 							{cols.createdBy && <th>Created by</th>}
 							{cols.cost && <th>Cost</th>}
@@ -294,6 +304,7 @@ function JobsPanel() {
 							paginated.map((item, i) => (
 								<tr key={item._id} onClick={() => setSelected(item)}>
 									<td>{(page - 1) * pageSize + i + 1}</td>
+									{cols.code && <td>{item.code ? <JobCode code={item.code} /> : "—"}</td>}
 									{cols.status && <td><JobStatusBadge status={item.rawStatus} /></td>}
 									{cols.createdBy && (
 										<td>
@@ -354,6 +365,10 @@ function JobsPanel() {
 					<div className="modal-card modal-card--wide" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
 						<h3 className="modal-title">{tab === "jobs" ? "Job Details" : "History Details"}</h3>
 						<div className="jobtbl-detail-grid">
+							<div>
+								<span className="jobtbl-detail-label">Code</span>
+								<p>{formatJobCode(selected.code) || "—"}</p>
+							</div>
 							<div>
 								<span className="jobtbl-detail-label">Status</span>
 								<JobStatusBadge status={selected.rawStatus} />

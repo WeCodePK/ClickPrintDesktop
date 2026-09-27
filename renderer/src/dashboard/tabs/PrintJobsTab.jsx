@@ -1,24 +1,31 @@
 import { useState, useEffect, useCallback } from "react";
 import { useJobs } from "../JobsContext";
 import { useAutoPrint } from "../AutoPrintContext";
-import { ACTIVE_STATUSES, getJobPrintMode } from "../jobUtils";
+import { ACTIVE_STATUSES, jobLabel, applySettingsOverrides, formatPhone } from "../jobUtils";
 import ListColumn from "../components/ListColumn";
 import WelcomePane from "../components/WelcomePane";
 import JobDetailCard from "../components/JobDetailCard";
+import JobListCard from "../components/JobListCard";
+import RefreshButton from "../components/RefreshButton";
+import EmptyState from "../components/EmptyState";
 import ConfirmDialog from "../components/ConfirmDialog";
 import PrintSplitButton from "../components/PrintSplitButton";
-import { CheckIcon, TrashIcon, SearchIcon, PrinterIcon, PauseIcon, PlayIcon } from "../icons";
+import { CheckIcon, CrossIcon, SearchIcon, PrinterIcon, PauseIcon, PlayIcon, FolderIcon, ChevronDownIcon } from "../icons";
 
 // Statuses from which the backend won't allow a direct jump to "completed" — the
 // job must pass through "printing" first. The main-process engine performs the
 // step-through when asked to force-complete.
 const PRE_PRINT_STATUSES = new Set(["draft", "submitted", "queued"]);
 
+const MANUAL_COLLAPSED_KEY = "clickprint:manualPaneCollapsed";
+
+const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
 // Print Jobs tab: active job queue on the left, job details on the right. All
 // print execution/orchestration lives in the main-process engine (mirrored via
 // AutoPrintContext); this tab renders the UI and sends commands.
 function PrintJobsTab() {
-	const { printJobs, jobsLoading } = useJobs();
+	const { printJobs, jobsLoading, refreshJobs } = useJobs();
 	const {
 		autoPrintEnabled,
 		queueInfoFor,
@@ -39,12 +46,32 @@ function PrintJobsTab() {
 		jobManualOnly,
 		setJobAutoPaused,
 		refreshPrinterState,
+		settingsOverrides,
+		setFileSettings,
 	} = useAutoPrint();
 
 	const [selectedId, setSelectedId] = useState(null);
+	// Whether the Manual intervention pane is folded down to its header. A
+	// per-operator convenience, remembered on this machine.
+	const [manualCollapsed, setManualCollapsed] = useState(() => {
+		try {
+			return localStorage.getItem(MANUAL_COLLAPSED_KEY) === "1";
+		} catch {
+			return false;
+		}
+	});
+	const toggleManualCollapsed = () =>
+		setManualCollapsed((collapsed) => {
+			try {
+				localStorage.setItem(MANUAL_COLLAPSED_KEY, collapsed ? "0" : "1");
+			} catch {
+				// Storage unavailable — the toggle still works for this session.
+			}
+			return !collapsed;
+		});
 	const [pendingCancel, setPendingCancel] = useState(null);
 	const [pendingComplete, setPendingComplete] = useState(null);
-	// Set when a decline was refused because the job is already printing — the
+	// Set when a cancel was refused because the job is already printing — the
 	// backend can't cancel from there, so we explain it and offer the refund.
 	const [declineBlocked, setDeclineBlocked] = useState(null);
 	const [query, setQuery] = useState("");
@@ -69,20 +96,19 @@ function PrintJobsTab() {
 	}, [refreshPrinters]);
 
 	// Oldest job first (queue order). formattedNumber is a display-friendly phone.
+	// The operator's setting overrides are applied here, so the list rows and the
+	// detail card both show what will actually print.
 	const entries = printJobs
 		.filter((j) => ACTIVE_STATUSES.has(j.rawStatus))
 		.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
-		.map((job) => {
-			const n = job.createdBy?.number || "";
-			const sn = n.startsWith("0") ? n.slice(1) : n;
-			const formattedNumber = "0".concat(sn.slice(2));
-			return { ...job, formattedNumber };
-		});
+		.map((job) =>
+			applySettingsOverrides({ ...job, formattedNumber: formatPhone(job.createdBy?.number) || "" }, settingsOverrides[job._id])
+		);
 
 	const q = query.trim().toLowerCase();
 	const visible = q
 		? entries.filter((e) =>
-				`${e.formattedNumber || ""} ${e.createdBy?.name || ""}`.toLowerCase().includes(q)
+				`${e.code || ""} #${e.code || ""} ${e.formattedNumber || ""} ${e.createdBy?.name || ""}`.toLowerCase().includes(q)
 			)
 		: entries;
 
@@ -141,12 +167,22 @@ function PrintJobsTab() {
 		if (!result?.success) console.error("[Renderer] failed to force-complete job:", result?.message);
 	};
 
-	const handlePreviewFile = async (file) => {
+	// Opens a document's PDF, or with { raw: true } the customer's original upload.
+	const handleOpenFile = async (file, opts) => {
 		try {
-			const result = await window.electronAPI.openFile(file.fileId);
+			const result = await window.electronAPI.openFile(file.fileId, opts);
 			if (!result?.success) throw new Error(result?.message || "open failed");
 		} catch (err) {
-			console.error("[Renderer] failed to preview file:", err);
+			console.error("[Renderer] failed to open file:", err);
+		}
+	};
+
+	const handleViewFiles = async (jobId) => {
+		try {
+			const result = await window.electronAPI.openJobFolder(jobId);
+			if (!result?.success) throw new Error(result?.message || "open failed");
+		} catch (err) {
+			console.error("[Renderer] failed to open job folder:", err);
 		}
 	};
 
@@ -193,38 +229,17 @@ function PrintJobsTab() {
 		return <span className="db-entry__queue">In queue · Nº{info.place}</span>;
 	};
 
-	const renderEntry = (entry) => {
-		const queueIndex = entries.indexOf(entry);
-		const attention = jobNeedsAttention(entry._id);
-		return (
-			<button
-				key={entry._id}
-				className={`db-entry db-entry--job ${selectedId === entry._id ? "db-entry--top" : ""} ${
-					attention ? "db-entry--attention" : ""
-				}`}
-				onClick={() => setSelectedId(entry._id)}
-			>
-				<span className="db-entry__qnum">{queueIndex + 1}</span>
-				<div className="db-entry__info">
-					<div className="db-entry__line">
-						<span className="db-entry__name">{entry.formattedNumber || "Unknown number"}</span>
-						<span className="db-entry__price">Rs. {entry.price}</span>
-					</div>
-					<div className="db-entry__line">
-						<span className="db-entry__sub">
-							{entry.createdBy?.name ? `${entry.createdBy.name} · ` : ""}
-							{entry.copies} {entry.copies === 1 ? "copy" : "copies"} · {getJobPrintMode(entry, true)} · {entry.filesCount} {entry.filesCount === 1 ? "file" : "files"}
-						</span>
-						<span className="db-entry__right">
-							<span className="db-entry__time">{entry.time}</span>
-							<span className={`db-entry__dot db-entry__dot--${entry.status}`} />
-						</span>
-					</div>
-					{queueLine(entry._id)}
-				</div>
-			</button>
-		);
-	};
+	const renderEntry = (entry) => (
+		<JobListCard
+			key={entry._id}
+			entry={entry}
+			position={entries.indexOf(entry) + 1}
+			selected={selectedId === entry._id}
+			attention={jobNeedsAttention(entry._id)}
+			footer={queueLine(entry._id)}
+			onClick={() => setSelectedId(entry._id)}
+		/>
+	);
 
 	// Top half: the print queue, led by jobs the engine parked after a failed
 	// document (they need a human). Bottom half: jobs automated printing never
@@ -243,14 +258,20 @@ function PrintJobsTab() {
 
 	return (
 		<>
-			<ListColumn title="Jobs" count={visible.length} bodyClassName="db-list__entries--split">
+			<ListColumn
+				title="Jobs"
+				count={visible.length}
+				action={<RefreshButton onRefresh={refreshJobs} label="Refresh jobs" />}
+				className="db-list--jobs"
+				bodyClassName="db-list__entries--split"
+			>
 				<div className="jobs-list__controls">
 					<div className="db-search">
 						<SearchIcon />
 						<input
 							className="db-search__input"
 							type="text"
-							placeholder="Search jobs"
+							placeholder="Search by code, name or number"
 							value={query}
 							onChange={(e) => setQuery(e.target.value)}
 						/>
@@ -272,7 +293,11 @@ function PrintJobsTab() {
 						<div className="jobs-pane">
 							<div className="jobs-pane__scroll">
 								{attentionJobs.length + queueJobs.length === 0 ? (
-									<p className="jobs-pane__empty">{q ? "No matching jobs" : "No jobs in the queue"}</p>
+									q ? (
+										<EmptyState art="search" title="No matching jobs" />
+									) : (
+										<EmptyState art="tray" title="No jobs in the queue" />
+									)
 								) : (
 									<>
 										{attentionJobs.length > 0 && sectionHeader("Needs attention", attentionJobs.length, "attention")}
@@ -283,14 +308,37 @@ function PrintJobsTab() {
 							</div>
 						</div>
 
-						{/* Only when there's something to show — otherwise the queue gets
-						    the full height. */}
-						{manualJobs.length > 0 && (
-							<div className="jobs-pane jobs-pane--manual">
-								{sectionHeader("Manual intervention", manualJobs.length, "manual")}
-								<div className="jobs-pane__scroll">{manualJobs.map(renderEntry)}</div>
-							</div>
-						)}
+						{/* Manual intervention folds away like a VS Code pane: its header always
+						    stays, docked at the bottom when folded, and the queue above takes the
+						    freed height (so an empty section needn't cost the queue any room). */}
+						<div className={`jobs-pane jobs-pane--manual ${manualCollapsed ? "jobs-pane--collapsed" : ""}`}>
+							<button
+								type="button"
+								className="db-list__section db-list__section--manual db-list__section--toggle"
+								onClick={toggleManualCollapsed}
+								aria-expanded={!manualCollapsed}
+								title={manualCollapsed ? "Show manual intervention" : "Hide manual intervention"}
+							>
+								<span className="db-list__section-chevron">
+									<ChevronDownIcon />
+								</span>
+								<span className="db-list__section-title">Manual intervention</span>
+								<span className="db-list__section-count">{manualJobs.length}</span>
+							</button>
+							{!manualCollapsed && (
+								<div className="jobs-pane__scroll">
+									{manualJobs.length === 0 ? (
+										q ? (
+											<EmptyState art="search" title="No matching jobs" />
+										) : (
+											<EmptyState art="all-clear" title="No jobs need manual intervention" />
+										)
+									) : (
+										manualJobs.map(renderEntry)
+									)}
+								</div>
+							)}
+						</div>
 					</>
 				)}
 			</ListColumn>
@@ -316,7 +364,8 @@ function PrintJobsTab() {
 					return (
 						<JobDetailCard
 							entry={selectedEntry}
-							onPreviewFile={handlePreviewFile}
+							onOpenFile={handleOpenFile}
+							onChangeFileSettings={(file, patch) => setFileSettings(selectedEntry._id, file.fileId, patch)}
 							onPrintFile={handlePrintFile}
 							printedFileIds={jobPrinted}
 							fileStates={jobStates}
@@ -327,21 +376,34 @@ function PrintJobsTab() {
 							headerActions={
 								selectedEntry.status !== "completed" ? (
 									<>
-										<button
-											className="btn-outline btn-outline-danger"
-											onClick={() => setPendingCancel(selectedEntry)}
-											disabled={actionsLocked}
-										>
-											<TrashIcon />
-											Decline Job
-										</button>
+										{/* The two ways to close a job, joined into one control. */}
+										<div className="btn-segmented" role="group" aria-label="Close job">
+											<button
+												className="btn-outline btn-segmented__item btn-segmented__item--decline"
+												onClick={() => setPendingCancel(selectedEntry)}
+												disabled={actionsLocked}
+												title="Cancel this job — the customer is notified"
+											>
+												<CrossIcon />
+												Cancel
+											</button>
+											<button
+												className="btn-outline btn-segmented__item btn-segmented__item--complete"
+												onClick={() => setPendingComplete(selectedEntry)}
+												disabled={actionsLocked}
+												title="Mark this job as complete — the customer is notified"
+											>
+												<CheckIcon />
+												Complete
+											</button>
+										</div>
 										<button
 											className="btn-outline"
-											onClick={() => setPendingComplete(selectedEntry)}
-											disabled={actionsLocked}
+											onClick={() => handleViewFiles(selectedEntry._id)}
+											title="Open this job's downloaded files in File Explorer"
 										>
-											<CheckIcon />
-											Mark as Complete
+											<FolderIcon />
+											View files
 										</button>
 										{/* The per-job master switch replaces Print-all while
 										    automated printing is driving this job. */}
@@ -371,7 +433,7 @@ function PrintJobsTab() {
 										{autoDriving ? null : (
 											// While the batch has queued docs the control is Stop; the
 											// running state lives in the helper line below the button
-											// (where "Routed by service" sits when idle). During the
+											// (empty when idle). During the
 											// post-stop drain (in-flight doc finishing, nothing queued)
 											// it's Print-all again — clicking it simply resumes.
 											<PrintSplitButton
@@ -407,57 +469,45 @@ function PrintJobsTab() {
 
 			{pendingCancel && (
 				<ConfirmDialog
-					title="Decline this job?"
-					message={`Are you sure you want to cancel "${pendingCancel.fileName}"? This will notify the customer and cannot be undone.`}
-					confirmLabel="Yes, decline"
+					title={`Cancel ${jobLabel(pendingCancel)}?`}
+					message="The customer will be notified. This can't be undone."
+					confirmLabel="Cancel job"
+					// Not "Cancel" — that's what this dialog's action is called.
 					cancelLabel="Keep job"
-					danger
+					tone="danger"
 					onConfirm={handleConfirmCancel}
 					onCancel={() => setPendingCancel(null)}
 				/>
 			)}
 
+			{/* Cancelling is refused once a document has started printing; failing the
+			    job (customer refunded) is the way out. */}
 			{declineBlocked && (
-				<div className="modal-overlay" onClick={() => setDeclineBlocked(null)}>
-					<div className="modal-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-						<h3 className="modal-title">Can’t cancel — already printing</h3>
-						<p className="modal-message">
-							“{declineBlocked.fileName}” has already started printing, so it can no longer be
-							marked as cancelled.
-						</p>
-						<div className="modal-actions">
-							<button className="btn-gradient" onClick={() => setDeclineBlocked(null)}>Got it</button>
-						</div>
-						<button type="button" className="modal-subtle" onClick={handleFailInstead}>
-							If you want to mark the job failed (customer refunded), click here…
-						</button>
-					</div>
-				</div>
+				<ConfirmDialog
+					title={`${capitalize(jobLabel(declineBlocked))} is already printing`}
+					message="It can't be cancelled now. Mark it as failed instead to refund the customer."
+					confirmLabel="Mark as failed"
+					tone="danger"
+					onConfirm={handleFailInstead}
+					onCancel={() => setDeclineBlocked(null)}
+				/>
 			)}
 
 			{pendingComplete && (
 				PRE_PRINT_STATUSES.has(pendingComplete.rawStatus) ? (
-					<div className="modal-overlay" onClick={() => setPendingComplete(null)}>
-						<div className="modal-card" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-							<h3 className="modal-title">Print before completing</h3>
-							<p className="modal-message">
-								“{pendingComplete.fileName}” hasn’t been printed yet, so it can’t be marked complete.
-								Print it first, then mark it complete.
-							</p>
-							<div className="modal-actions">
-								<button className="btn-gradient" onClick={() => setPendingComplete(null)}>Got it</button>
-							</div>
-							<button type="button" className="modal-subtle" onClick={handleForceComplete}>
-								Mark complete without printing
-							</button>
-						</div>
-					</div>
+					<ConfirmDialog
+						title={`${capitalize(jobLabel(pendingComplete))} hasn't been printed`}
+						message="Print it first, or complete it anyway. The customer will be notified that it's ready."
+						confirmLabel="Complete anyway"
+						tone="warning"
+						onConfirm={handleForceComplete}
+						onCancel={() => setPendingComplete(null)}
+					/>
 				) : (
 					<ConfirmDialog
-						title="Mark this job as complete?"
-						message={`Are you sure "${pendingComplete.fileName}" is done? This action can't be undone, and the customer will be notified that their print is ready.`}
-						confirmLabel="Yes, mark complete"
-						cancelLabel="Not yet"
+						title={`Complete ${jobLabel(pendingComplete)}?`}
+						message="The customer will be notified that it's ready. This can't be undone."
+						confirmLabel="Mark complete"
 						onConfirm={handleConfirmComplete}
 						onCancel={() => setPendingComplete(null)}
 					/>

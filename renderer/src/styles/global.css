@@ -6,6 +6,10 @@
 
 	/* Accent / CTA */
 	--color-accent: #ff4f00;
+	--color-queued: #c28a00;           /* Queued job status — yellow, darkened to read on light surfaces */
+	--color-danger: #dc2626;           /* Destructive actions (decline, fail) */
+	--color-on-primary: #063b2e;       /* Text/icons on green buttons — deep teal-green, ~8:1 on primary */
+	--color-warning: #f5b800;          /* Proceed-with-caution actions (e.g. complete without printing) */
 	--color-accent-light: #ff7f66;
 	--color-accent-hover: #e64500;
 
@@ -63,6 +67,10 @@
 
 	/* Accent / CTA (Sadapay-style peach/orange accent) */
 	--color-accent: #ff570a;
+	--color-queued: #f5c518;           /* Queued job status — yellow */
+	--color-danger: #ef4444;           /* Destructive actions (decline, fail) */
+	--color-on-primary: #063b2e;       /* Text/icons on green buttons — deep teal-green, ~8:1 on primary */
+	--color-warning: #f5b800;          /* Proceed-with-caution actions (e.g. complete without printing) */
 	--color-accent-light: #ff856f;
 	--color-accent-hover: #e64b00;
 
@@ -164,6 +172,10 @@ body {
 }
 
 .title-bar__logo {
+	/* Centred over the dashboard sidebar's icons: the sidebar is 64px wide with a
+	   1px right border, so its icons centre 31.5px from the window edge. The
+	   title bar's 12px left padding is subtracted here. */
+	margin-left: 9.5px;
 	width: 20px;
 	height: 20px;
 	object-fit: contain;
@@ -237,6 +249,19 @@ body {
 	background: var(--border-light);
 	flex-shrink: 0;
 	margin: 0 6px;
+}
+
+/* The theme icon's visible edge sits as far left of the separator as the
+   minimise dash sits right of it: 6px margin + 15px of the 40px button around
+   its 10px icon + 0.75px of the dash's round cap = 21.75px. The toggle already
+   has 6px margin + 5px padding, and its icon's own inset from the right edge
+   differs (moon ≈ 1.17px, sun 0), so each gets the remainder. */
+.title-bar__theme-toggle--moon {
+	margin-right: 9.58px;
+}
+
+.title-bar__theme-toggle--sun {
+	margin-right: 10.75px;
 }
 
 .title-bar__btn {
@@ -1426,6 +1451,51 @@ body,
 	gap: 3px;
 }
 
+/* A job's 4-digit code — the short id customers and the shop identify it by. */
+.job-code {
+	flex-shrink: 0;
+	display: inline-block;
+	padding: 1px 6px;
+	border-radius: 6px;
+	background: rgba(0, 217, 163, 0.14);
+	color: var(--color-text-primary);
+	font-size: 12px;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	font-variant-numeric: tabular-nums;
+	line-height: 1.5;
+	white-space: nowrap;
+}
+
+.job-code--lg {
+	padding: 2px 9px;
+	font-size: 15px;
+}
+
+/* A list row's name led by the job code: the code keeps its width and the text
+   beside it truncates. */
+.db-entry__name--coded {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
+
+.db-entry__name-text {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* "Job Details" + code badge; wraps on a narrow pane. */
+.job-detail__title {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+}
+
 .db-entry__line {
 	display: flex;
 	align-items: center;
@@ -1449,6 +1519,87 @@ body,
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+
+/* Queue position with the job's status badge beneath it. */
+.db-entry__qcol {
+	flex-shrink: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 5px;
+}
+
+/* A compact version of the status pill for the job list. */
+.db-entry__status.db-status {
+	padding: 2px 6px;
+	font-size: 9.5px;
+	letter-spacing: 0.2px;
+	white-space: nowrap;
+}
+
+/* Job row: the code on top — the most important thing — with "name · number"
+   under it in a smaller font. */
+.db-entry__main {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 4px;
+}
+
+.db-entry__main .job-code {
+	font-size: 14px;
+	padding: 1px 7px;
+}
+
+.db-entry__who {
+	max-width: 100%;
+	font-size: 11.5px;
+	font-weight: 600;
+	color: var(--color-text-primary);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.db-entry__who-sep,
+.db-entry__who-number {
+	font-weight: 500;
+	color: var(--color-text-secondary);
+}
+
+/* The job code, then the channel icon, on the row's top line. */
+.db-entry__code-row {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+/* Channel a job came in from (ClickPrint app / WhatsApp / walk-in). */
+.channel-icon {
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	color: var(--color-text-secondary);
+}
+
+.channel-icon img,
+.channel-icon svg {
+	width: 16px;
+	height: 16px;
+	object-fit: contain;
+}
+
+.channel-icon--whatsapp {
+	color: #25d366;
+}
+
+.channel-icon__text {
+	font-size: 10.5px;
+	white-space: nowrap;
 }
 
 .db-entry__right {
@@ -1505,6 +1656,7 @@ body,
 }
 
 .db-entry__dot--pending   { background: var(--color-accent); }
+.db-entry__dot--queued    { background: var(--color-queued); }
 .db-entry__dot--processing { background: var(--color-primary); }
 .db-entry__dot--completed  { background: var(--color-text-muted); }
 
@@ -1750,12 +1902,49 @@ body,
 }
 
 /* Requester line in the receipt header */
-.receipt-requester {
+/* Job overview header: customer (name over number) left, channel right. */
+.receipt-customer-row {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	margin-top: 8px;
-	font-size: 12px;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+/* The customer's icon in its own column, left of their name and number. */
+.receipt-customer-avatar {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	color: var(--color-text-primary);
+}
+
+.receipt-customer-who {
+	flex: 1;
+	min-width: 0;
+}
+
+.receipt-customer-who .receipt-title {
+	margin-bottom: 2px;
+}
+
+/* The ClickPrint logo standing in for "App" in the channel pill. */
+.receipt-channel__logo {
+	width: 14px;
+	height: 14px;
+	object-fit: contain;
+}
+
+/* Where the job came in from (WhatsApp, the app, walk-in). */
+.receipt-channel {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	flex-shrink: 0;
+	white-space: nowrap;
+	padding: 2px 8px;
+	border-radius: var(--radius-pill);
+	background: rgba(134, 150, 160, 0.14);
+	font-size: 11px;
 	font-weight: 600;
 	color: var(--color-text-secondary);
 }
@@ -1785,6 +1974,20 @@ body,
 	margin-bottom: 16px;
 }
 
+/* "Job Details" + code, with the received time underneath. */
+.job-detail__heading {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+}
+
+/* Status pill above the title — sized to its text, not the column. */
+.job-detail__status {
+	align-self: flex-start;
+	margin-bottom: 4px;
+}
+
 .job-detail__header-actions {
 	display: flex;
 	align-items: flex-start;
@@ -1801,11 +2004,61 @@ body,
 	flex: 0 0 auto;
 }
 
-/* Per-file preview / print actions under each file preview. */
+/* Decline | Complete: two outline buttons joined into one control. The halves
+   share a single divider (the second overlaps the first's border), and the
+   hovered half is raised so its full border shows. Colour is on the text only.
+   Scoped under .btn-segmented so they outrank .btn-outline, defined later. */
+.btn-segmented {
+	display: inline-flex;
+	flex: 0 0 auto;
+}
+
+.btn-segmented .btn-segmented__item {
+	position: relative;
+	border-radius: 0;
+}
+
+.btn-segmented .btn-segmented__item:first-child {
+	border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+
+.btn-segmented .btn-segmented__item:last-child {
+	margin-left: -1.5px;
+	border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+
+.btn-segmented .btn-segmented__item:hover:not(:disabled) {
+	z-index: 1;
+}
+
+.btn-segmented .btn-segmented__item--decline {
+	color: var(--color-danger);
+}
+
+.btn-segmented .btn-segmented__item--decline:hover:not(:disabled) {
+	background: rgba(220, 38, 38, 0.06);
+	border-color: var(--color-danger);
+}
+
+/* The primary green, a touch darker so the text reads clearly on the card. */
+.btn-segmented .btn-segmented__item--complete {
+	--complete-green: color-mix(in srgb, var(--color-primary) 82%, black);
+	color: var(--complete-green);
+}
+
+.btn-segmented .btn-segmented__item--complete:hover:not(:disabled) {
+	background: rgba(0, 217, 163, 0.06);
+	border-color: var(--complete-green);
+}
+
+/* Per-file Open / Print actions, on the right of the card's heading, each at
+   its natural width. */
 .file-preview__actions {
+	flex-shrink: 0;
 	display: flex;
-	gap: 10px;
-	padding: 0 18px 16px;
+	align-items: center;
+	gap: 8px;
+	margin-left: 4px;
 }
 
 /* Shown below the print buttons once a file has failed to print (any printer,
@@ -1815,7 +2068,7 @@ body,
 	display: flex;
 	flex-direction: column;
 	gap: 4px;
-	margin: 0 18px 16px;
+	margin: 0 16px 14px;
 	padding: 10px 12px;
 	border: 1px solid var(--color-accent-light);
 	border-radius: var(--radius-md);
@@ -1895,6 +2148,62 @@ body,
 	color: var(--color-accent-hover);
 }
 
+/* Job counts sit at the right edge: the section counts (Needs attention,
+   Manual intervention) and the job lists' (Jobs, History) header totals. */
+.db-list__section .db-list__section-count,
+.db-list--jobs .db-list__count {
+	margin-left: auto;
+}
+
+/* In the job lists the refresh button follows the right-aligned count. */
+.db-list--jobs .db-list__action {
+	margin-left: 6px;
+}
+
+/* Icon-only refresh button in a list header; the icon spins while it works. */
+.list-refresh-btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: none;
+	border-radius: var(--radius-sm);
+	background: transparent;
+	color: var(--color-text-secondary);
+	cursor: pointer;
+	transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.list-refresh-btn:hover {
+	background: rgba(134, 150, 160, 0.14);
+	color: var(--color-text-primary);
+}
+
+.list-refresh-btn svg {
+	width: 15px;
+	height: 15px;
+}
+
+.list-refresh-btn--busy {
+	cursor: progress;
+}
+
+.list-refresh-btn--busy svg {
+	animation: list-refresh-spin 0.8s linear infinite;
+}
+
+@keyframes list-refresh-spin {
+	to { transform: rotate(360deg); }
+}
+
+/* The job lists' header totals are neutral grey, not the brand green. */
+.db-list--jobs .db-list__count {
+	color: var(--color-text-secondary);
+	background: rgba(134, 150, 160, 0.16);
+}
+
 .db-list__section-count {
 	display: inline-flex;
 	align-items: center;
@@ -1950,7 +2259,51 @@ body,
 }
 
 .jobs-pane--manual {
+	/* Half the whole column, so the dividing rule sits at its vertical middle.
+	   Its container starts below the column header (57px: 16 + 28 + 12 padding
+	   and min-height, plus the 1px border), so half of that is added back; the
+	   top pane takes what's left, search bar included. */
+	flex: 0 0 calc(50% + 28.5px);
 	border-top: 1px solid var(--border-light);
+}
+
+/* Folded down to its header, docked at the bottom; the queue takes the rest. */
+.jobs-pane--manual.jobs-pane--collapsed {
+	flex: 0 0 auto;
+}
+
+/* The Manual intervention header doubles as its fold toggle, VS Code style:
+   chevron down when open, pointing right when folded. */
+.db-list__section--toggle {
+	width: 100%;
+	border: none;
+	background: none;
+	font-family: var(--font-family);
+	text-align: left;
+	cursor: pointer;
+}
+
+.db-list__section--toggle:hover {
+	background: rgba(134, 150, 160, 0.08);
+}
+
+.db-list__section-chevron {
+	display: inline-flex;
+	flex-shrink: 0;
+	transition: transform var(--transition-fast);
+}
+
+.db-list__section-chevron svg {
+	width: 12px;
+	height: 12px;
+}
+
+.jobs-pane--collapsed .db-list__section-chevron {
+	transform: rotate(-90deg);
+}
+
+.jobs-pane--collapsed > .db-list__section {
+	padding-bottom: 12px;
 }
 
 /* Sits outside the scroll area's 8px inset — add it back so this heading lines
@@ -1968,10 +2321,53 @@ body,
 	padding: 0 8px 8px;
 }
 
-.jobs-pane__empty {
-	padding: 20px 12px;
+/* A pane's scroll area is a column so an empty state can centre in it. */
+.db-list__entries--column,
+.jobs-pane__scroll {
+	display: flex;
+	flex-direction: column;
+}
+
+/* "Nothing here" filler: illustration on a tinted rounded square, title —
+   centred in whatever space the section has. */
+.empty-state {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	padding: 20px 16px;
 	text-align: center;
-	font-size: 12.5px;
+}
+
+.empty-state__art {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 64px;
+	height: 64px;
+	margin-bottom: 6px;
+	border-radius: var(--radius-md);
+	background: rgba(134, 150, 160, 0.12);
+	color: var(--color-text-muted);
+}
+
+.empty-state__art svg {
+	width: 36px;
+	height: 36px;
+}
+
+.empty-state__title {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--color-text-secondary);
+}
+
+.empty-state__hint {
+	max-width: 220px;
+	font-size: 11.5px;
+	line-height: 1.45;
 	color: var(--color-text-muted);
 }
 
@@ -2094,7 +2490,7 @@ body,
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	padding: 12px 16px;
+	padding: 8px 12px 8px 16px;
 	border-bottom: 1px dashed var(--border-light);
 }
 
@@ -2108,11 +2504,42 @@ body,
 	border-radius: 50%;
 	font-size: 11px;
 	font-weight: 700;
-	color: #111b21;
-	background: var(--color-primary);
+	color: var(--color-text-secondary);
+	background: rgba(134, 150, 160, 0.16);
+}
+
+/* "name · 12 pages" + outcome mark: takes the heading's free space; only the
+   name truncates. */
+.file-preview__title {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 13.5px;
+	font-weight: 700;
+	color: var(--color-text-primary);
+}
+
+.file-preview__title-sep {
+	flex-shrink: 0;
+	color: var(--color-text-muted);
+}
+
+.file-preview__page-count {
+	flex-shrink: 0;
+	white-space: nowrap;
+	color: var(--color-text-secondary);
+	font-variant-numeric: tabular-nums;
+}
+
+.file-preview__title .file-preview__mark svg {
+	width: 17px;
+	height: 17px;
 }
 
 .file-preview__name {
+	min-width: 0;
 	font-size: 13.5px;
 	font-weight: 700;
 	color: var(--color-text-primary);
@@ -2147,14 +2574,15 @@ body,
 
 .file-preview__content {
 	display: flex;
-	gap: 18px;
-	padding: 18px;
+	align-items: stretch;
+	gap: 16px;
+	padding: 14px 16px;
 }
 
 .file-preview__thumb {
 	flex-shrink: 0;
 	width: 150px;
-	height: 200px;
+	height: 212px; /* A4 proportions (1 : 1.414) */
 	display: flex;
 	flex-direction: column;
 	align-items: center;
@@ -2220,69 +2648,166 @@ body,
 	min-width: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 11px;
+	gap: 8px;
 }
 
-.file-preview__settings .receipt-label,
-.file-preview__settings .receipt-value {
-	font-size: 12.5px;
-}
-
-/* Prominent per-file page count, filling the space freed by moving the minor
-   settings into the pill below. */
-/* Page count on the left, the document's outcome mark on the right. */
-.file-preview__pages {
-	display: flex;
-	flex-direction: row;
-	align-items: center;
-	justify-content: space-between;
-	gap: 10px;
-	margin-bottom: 6px;
-	padding-bottom: 10px;
-	border-bottom: 1px dashed var(--border-light);
-}
-
-.file-preview__pages-text {
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	min-width: 0;
-}
-
-.file-preview__pages-label {
+/* Restores the customer's settings once the operator has changed any; sits
+   under the settings, on the right. */
+.file-preview__reset {
+	align-self: flex-end;
+	padding: 2px 8px;
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-pill);
+	background: transparent;
+	font-family: var(--font-family);
 	font-size: 11px;
 	font-weight: 600;
-	text-transform: uppercase;
-	letter-spacing: 0.4px;
-	color: var(--color-text-muted);
-}
-
-.file-preview__pages-value {
-	font-size: 26px;
-	font-weight: 800;
-	line-height: 1.1;
-	color: var(--color-text-primary);
-	font-variant-numeric: tabular-nums;
-}
-
-/* Less-important settings, inline in a rounded container, sitting beside the
-   thumbnail below the primary setting rows. Slightly muted but still legible. */
-.file-preview__minor {
-	margin-top: 4px;
-	padding: 8px 12px;
-	border-radius: var(--radius-md);
-	background: rgba(134, 150, 160, 0.14);
-	font-size: 11.5px;
 	color: var(--color-text-secondary);
+	cursor: pointer;
+}
+
+.file-preview__reset:hover {
+	color: var(--color-text-primary);
+	border-color: var(--color-text-secondary);
+}
+
+/* Print settings in two columns — Size, Color, Pages, Sides on the left;
+   Orientation, Copies, Pages/Sheet on the right — each a "label  field" row.
+   If the card is too narrow for both at full width, the right column wraps
+   below rather than squeezing (and clipping) any field. */
+.file-preview__specs {
 	display: flex;
 	flex-wrap: wrap;
-	align-items: center;
-	gap: 6px;
+	gap: 8px 16px;
 }
 
-.file-preview__minor-sep {
-	margin-right: 6px;
+.file-preview__specs > .file-preview__specs-col {
+	flex: 1 1 auto;
+}
+
+/* Each column is its own label | field grid. The field track is at least as
+   wide as its widest control (a dropdown's longest option, a text field's
+   content), so no value is ever clipped; fields in a column share that width. */
+.file-preview__specs-col {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	align-items: center;
+	gap: 8px;
+}
+
+/* A row's label and field are placed straight into the column's grid. */
+.file-preview__spec {
+	display: contents;
+}
+
+.file-preview__spec-label {
+	flex-shrink: 0;
+	font-size: 12px;
+	color: var(--color-text-secondary);
+}
+
+/* A setting's control: a real, bordered form field so it's obvious every value
+   can be changed. It fills its column's field track (see .file-preview__specs-col);
+   dropdowns carry a chevron. */
+.file-preview__spec-input {
+	box-sizing: border-box;
+	width: 100%;
+	height: 26px;
+	padding: 0 8px;
+	border: 1px solid rgba(134, 150, 160, 0.4);
+	border-radius: 6px;
+	background: var(--color-bg-card);
+	font-family: var(--font-family);
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--color-text-primary);
+	text-overflow: ellipsis;
+	appearance: none;
+	-moz-appearance: textfield;
+	transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+select.file-preview__spec-input {
+	padding-right: 22px;
+	cursor: pointer;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%238696a0' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: right 8px center;
+}
+
+input.file-preview__spec-input {
+	cursor: text;
+}
+
+.file-preview__spec-input::-webkit-inner-spin-button,
+.file-preview__spec-input::-webkit-outer-spin-button {
+	-webkit-appearance: none;
+	margin: 0;
+}
+
+.file-preview__spec-input::placeholder {
 	color: var(--color-text-muted);
+	font-weight: 500;
+}
+
+.file-preview__spec-input:hover:not(:disabled) {
+	border-color: var(--color-text-secondary);
+}
+
+/* Duplex while the document is single-sided: shown, but can't be chosen. */
+.file-preview__spec-input:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.file-preview__spec-input:focus {
+	outline: none;
+	border-color: var(--color-primary);
+	box-shadow: 0 0 0 3px rgba(0, 217, 163, 0.15);
+}
+
+.file-preview__spec-input option {
+	background: var(--color-bg-card);
+	color: var(--color-text-primary);
+}
+
+/* A setting the operator changed from the customer's choice: light orange field
+   and value, with a dot beside the label (tooltip names the original). */
+.file-preview__spec--changed .file-preview__spec-label::after {
+	content: "";
+	display: inline-block;
+	width: 5px;
+	height: 5px;
+	margin-left: 4px;
+	vertical-align: middle;
+	border-radius: 50%;
+	background: #ffa045;
+}
+
+.file-preview__spec--changed .file-preview__spec-value,
+.file-preview__spec--changed .file-preview__spec-input {
+	color: #f08a1c;
+}
+
+.file-preview__spec--changed .file-preview__spec-input {
+	border-color: #ffa045;
+}
+
+.file-preview__specs-error {
+	font-size: 11.5px;
+	font-weight: 600;
+	color: var(--color-danger);
+}
+
+.file-preview__spec-value {
+	min-width: 0;
+	font-size: 12.5px;
+	font-weight: 600;
+	text-align: right;
+	color: var(--color-text-primary);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 /* ── Split print button (main action + printer dropdown) ── */
@@ -2302,11 +2827,13 @@ body,
 .print-split__main,
 .print-split__toggle {
 	background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
-	color: #111b21;
-	border: none;
+	color: var(--color-on-primary);
+	/* A transparent border and 11px padding give it the same box as the
+	   .btn-outline buttons it sits beside in the job header. */
+	border: 1.5px solid transparent;
 	cursor: pointer;
 	font-family: var(--font-family);
-	font-weight: 700;
+	font-weight: 600;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -2321,11 +2848,11 @@ body,
 
 .print-split__toggle {
 	border-radius: 0 var(--radius-md) var(--radius-md) 0;
-	border-left: 1px solid rgba(17, 27, 33, 0.2);
+	border-left: 1px solid rgba(6, 59, 46, 0.25);
 }
 
-.print-split--md .print-split__main { padding: 12px 20px; font-size: 14px; }
-.print-split--md .print-split__toggle { padding: 12px 9px; }
+.print-split--md .print-split__main { padding: 11px 20px; font-size: 14px; }
+.print-split--md .print-split__toggle { padding: 11px 9px; }
 .print-split--sm .print-split__main { padding: 8px 14px; font-size: 13px; }
 .print-split--sm .print-split__toggle { padding: 8px 7px; }
 
@@ -2388,29 +2915,18 @@ body,
         so icon choice alone changed a button's height.
    Both are pinned below; the row is driven by min-height, not by content. */
 
-/* Preview stays sized to its content (the earlier rule pins the action-row
-   buttons to flex 0 0 auto); the ACTION slot beside it always fills the rest of
-   the row. Without this the plain disabled states (Printed / Printing… /
-   Queued) inherit that 0 0 auto and visibly shrink out of the split button's
-   footprint the moment a document finishes. Same specificity as that rule,
-   declared later, so this wins. */
-.file-preview__actions > .btn-gradient,
+/* The action buttons keep their natural width (the earlier rule pins them to
+   flex 0 0 auto); the auto-print tip wrapper just hugs its button. */
 .file-preview__actions > .autoprint-tip {
-	flex: 1 1 0;
-	min-width: 0;
+	flex: 0 0 auto;
 }
-
-.file-preview__actions .print-split { flex: 1 1 0; }
-.file-preview__actions .print-split__row { width: 100%; }
-.file-preview__actions .print-split__main { flex: 1 1 auto; min-width: 0; }
-.file-preview__actions .autoprint-tip > .btn-gradient { width: 100%; }
 
 /* One height for every button in the row, regardless of class or content. */
 .file-preview__actions .btn-sm,
 .file-preview__actions .print-split__main,
 .file-preview__actions .print-split__toggle {
 	box-sizing: border-box;
-	min-height: 38px;
+	min-height: 32px;
 	padding-top: 0;
 	padding-bottom: 0;
 	font-size: 13px;
@@ -2418,8 +2934,8 @@ body,
 }
 
 .file-preview__actions .btn-sm {
-	padding-left: 16px;
-	padding-right: 16px;
+	padding-left: 12px;
+	padding-right: 12px;
 }
 
 /* Pin icon size so it can never drive the button height. */
@@ -2496,6 +3012,29 @@ body,
 	white-space: nowrap;
 }
 
+/* Open ▾ — an outline split button (PDF / original) in a file card's actions. */
+.open-split {
+	display: inline-flex;
+	flex: 0 0 auto;
+}
+
+.file-preview__actions .open-split .open-split__main {
+	border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+
+.file-preview__actions .open-split .open-split__toggle {
+	margin-left: -1.5px;
+	padding-left: 7px;
+	padding-right: 7px;
+	border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+
+.open-split__item-hint {
+	flex-shrink: 0;
+	font-size: 11.5px;
+	color: var(--color-text-muted);
+}
+
 /* ── Confirmation modal ── */
 .modal-overlay {
 	position: fixed;
@@ -2566,10 +3105,34 @@ body,
 	flex: 1;
 }
 
-.btn-gradient--danger {
-	background: linear-gradient(135deg, var(--color-accent) 0%, var(--color-accent-light) 100%);
+/* Confirmation buttons side by side (Cancel left, action right) — overrides the
+   stacked .modal-actions defined earlier for the login screens. */
+.modal-actions--row {
+	flex-direction: row;
+}
+
+/* Destructive action (decline, mark failed). Doubled class so it outranks
+   .btn-gradient and its hover, which are defined later in this file. */
+.btn-gradient.btn-gradient--danger {
+	background: var(--color-danger);
 	color: #ffffff !important;
-	box-shadow: var(--shadow-accent);
+	box-shadow: 0 4px 16px rgba(220, 38, 38, 0.25);
+}
+
+.btn-gradient.btn-gradient--warning {
+	background: var(--color-warning);
+	color: #3a2a00 !important; /* dark brown — white is unreadable on yellow */
+	box-shadow: 0 4px 16px rgba(245, 184, 0, 0.25);
+}
+
+.btn-gradient.btn-gradient--warning:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--color-warning) 90%, black);
+	box-shadow: 0 8px 24px rgba(245, 184, 0, 0.3);
+}
+
+.btn-gradient.btn-gradient--danger:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--color-danger) 88%, black);
+	box-shadow: 0 8px 24px rgba(220, 38, 38, 0.3);
 }
 
 @keyframes fadeIn {
@@ -2627,29 +3190,54 @@ body,
 	overflow-y: auto;
 }
 
-/* ── Job free-text row (additional comments) ──
-   It can run long, so the value wraps in its own column while the label stays on
-   one line. */
-.job-detail__note {
-	align-items: flex-start;
-	gap: 16px;
-	margin-top: 4px;
+/* ── Additional comments ──
+   Whatever the customer wrote usually changes how the job must be printed, so
+   the text sits in a read-only, textarea-like box outlined in a light orange
+   — the one thing in the tile with a coloured border — under a plain label. */
+.job-note {
+	/* A softer orange than --color-accent, which reads as red here. */
+	--job-note-border: #ffa045;
+	margin-top: 2px;
 }
 
-.job-detail__note .receipt-label {
-	flex-shrink: 0;
-	white-space: nowrap;
-}
-
-.job-detail__note-text {
-	max-width: 200px;
-	font-size: 12px;
-	font-weight: 600;
-	font-style: italic;
-	line-height: 1.45;
-	text-align: right;
+.job-note__head {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-bottom: 6px;
 	color: var(--color-text-secondary);
+}
+
+.job-note__head svg {
+	flex-shrink: 0;
+	width: 14px;
+	height: 14px;
+}
+
+.job-note__title {
+	font-size: 12px;
+	font-weight: 700;
+}
+
+.job-note__text {
+	max-height: 140px;
+	overflow-y: auto;
+	padding: 8px 10px;
+	border: 2px solid var(--job-note-border);
+	border-radius: 6px;
+	font-size: 13.5px;
+	font-weight: 600;
+	line-height: 1.5;
+	color: var(--color-text-primary);
+	white-space: pre-wrap;
 	overflow-wrap: anywhere;
+	user-select: text;
+	cursor: text;
+}
+
+.job-note__text:focus-visible {
+	outline: 2px solid var(--job-note-border);
+	outline-offset: 2px;
 }
 
 /* ── Payment proof (its own tile) ──
@@ -3331,10 +3919,11 @@ body,
 .btn-gradient {
 	flex: 1;
 	background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
-	color: #111b21 !important; /* Dark text for contrast on teal button */
+	color: var(--color-on-primary) !important;
 	border: none;
 	padding: 12px 24px;
 	border-radius: var(--radius-md);
+	font-family: var(--font-family); /* buttons don't inherit the app font */
 	font-size: 14px;
 	font-weight: 700;
 	cursor: pointer;
@@ -3370,6 +3959,7 @@ body,
 	border: 1.5px solid var(--border-light);
 	padding: 11px 24px;
 	border-radius: var(--radius-md);
+	font-family: var(--font-family); /* buttons don't inherit the app font */
 	font-size: 14px;
 	font-weight: 600;
 	cursor: pointer;
@@ -3482,6 +4072,7 @@ body,
 }
 
 .db-status--pending    { background: rgba(255, 87, 10, 0.12); color: var(--color-accent); }
+.db-status--queued     { background: rgba(245, 197, 24, 0.16); color: var(--color-queued); }
 .db-status--processing { background: rgba(0, 230, 173, 0.12); color: var(--color-primary); }
 .db-status--completed  { background: rgba(134, 150, 160, 0.15); color: var(--color-text-secondary); }
 
@@ -4040,6 +4631,7 @@ body,
 }
 
 .jobtbl-status--pending   { background: rgba(255, 87, 10, 0.12); color: var(--color-accent); }
+.jobtbl-status--queued    { background: rgba(245, 197, 24, 0.16); color: var(--color-queued); }
 .jobtbl-status--active    { background: rgba(0, 217, 163, 0.14); color: var(--color-primary); }
 .jobtbl-status--completed { background: rgba(0, 217, 163, 0.14); color: var(--color-primary); }
 .jobtbl-status--danger    { background: rgba(255, 79, 0, 0.12); color: var(--color-accent); }
@@ -5712,8 +6304,8 @@ body,
 .onb-footer__spinner {
 	width: 16px;
 	height: 16px;
-	border-color: rgba(17, 27, 33, 0.25);
-	border-top-color: #111b21;
+	border-color: rgba(6, 59, 46, 0.25);
+	border-top-color: var(--color-on-primary);
 }
 
 /* ── Finish celebration ── */

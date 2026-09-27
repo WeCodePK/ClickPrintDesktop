@@ -65,6 +65,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	},
 	printJob: (jobId, deviceName) => ipcRenderer.invoke("engine:print-job", jobId, deviceName),
 	printJobFile: (jobId, fileId, deviceName) => ipcRenderer.invoke("engine:print-file", jobId, fileId, deviceName),
+	// Override a document's print settings (partial), or pass null to restore the
+	// customer's. Resolves { success, message? }.
+	setFileSettings: (jobId, fileId, patch) => ipcRenderer.invoke("engine:set-file-settings", jobId, fileId, patch),
 	// Stop a running print-all batch (queued docs withdrawn; in-flight doc finishes).
 	stopPrintJob: (jobId) => ipcRenderer.invoke("engine:stop-job", jobId),
 	setQueuePaused: (paused) => ipcRenderer.invoke("engine:set-paused", paused),
@@ -87,10 +90,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	},
 	// URL the renderer can embed to view a cached file.
 	fileUrl: (fileId) => `clickfile://file/${fileId}`,
-	// Open a cached file in the OS default viewer / native print dialog.
-	openFile: (fileId) => ipcRenderer.invoke("files:open", fileId),
+	// Open a cached document in the OS default app: its PDF, or with
+	// { raw: true } the customer's original upload.
+	openFile: (fileId, opts) => ipcRenderer.invoke("files:open", fileId, opts),
+	// { name, ext } of a document's original upload, or null when there is none
+	// (the upload was already a PDF).
+	getRawFileInfo: (fileId) => ipcRenderer.invoke("files:raw-info", fileId),
 	// Replace a cached file with a fresh download (preview Reload).
 	redownloadFile: (fileId) => ipcRenderer.invoke("files:redownload", fileId),
+	// Open a job's folder of downloaded files in Windows Explorer.
+	openJobFolder: (jobId) => ipcRenderer.invoke("files:open-job-folder", jobId),
 
 	// A job's optional payment proof (the customer's transfer screenshot). It is
 	// downloaded with the job's printing files, so its progress arrives on the same

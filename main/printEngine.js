@@ -11,6 +11,7 @@ const registry = require("./printerRegistry");
 const store = require("./store");
 const { getJobs } = require("./state");
 const { manualPrintReasons, requiresManualPrinting } = require("./jobRules");
+const { sanitizeSettingsPatch, applySettingsPatch, effectiveSettings } = require("./fileSettings");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The print engine: owns ALL print orchestration and state in the main process.
@@ -33,6 +34,9 @@ const { manualPrintReasons, requiresManualPrinting } = require("./jobRules");
 //    moment, not all up front.
 //  - "Printed" means verified against the Windows spooler (files.printAndVerify),
 //    not merely spooled.
+//  - The operator may override any of a document's print settings before it
+//    prints (settingsOverrides, see setFileSettings). Every task, route and print
+//    uses the overridden settings; the customer's originals are left untouched.
 //  - A job with additional comments or a payment proof is NEVER automated
 //    (jobRules): addTasks refuses to queue it in "auto" mode and schedule()
 //    withdraws any automated task of such a job before it can reach a printer.
@@ -50,6 +54,7 @@ const { manualPrintReasons, requiresManualPrinting } = require("./jobRules");
 const ACTIVE_STATUSES = new Set(["draft", "submitted", "queued", "processing", "printing"]);
 const ROUTING_POLL_MS = 20000;
 const PRINTED_STORE_KEY = "printedFiles";
+const SETTINGS_OVERRIDES_STORE_KEY = "fileSettingsOverrides";
 // Remembers ACROSS sessions that automated printing was armed when the app last
 // closed. It never re-arms anything by itself — it only decides whether the next
 // launch offers to resume (see resumePrompt). Distinct from the old "autoPrint"
@@ -58,24 +63,32 @@ const AUTO_PRINT_ARMED_KEY = "autoPrintArmed";
 
 const isPdfDevice = registry.isPdfDevice;
 
-// Normalises a raw backend job's files: [{fileId, name, settings}].
+// Normalises a raw backend job's files: [{fileId, name, settings, originalSettings}].
+// `settings` are what the document prints with — the customer's, with any
+// operator override applied on top.
 function jobFileList(job) {
 	const out = [];
 	(job?.files || []).forEach((entry, i) => {
 		const fileId = entry.file?._id || entry.fileId;
 		if (!fileId) return;
+		const originalSettings = entry.settings || {};
 		out.push({
 			fileId,
 			name: entry.file?.name || entry.name || `Document ${i + 1}`,
-			settings: entry.settings || {},
+			settings: effectiveSettings(originalSettings, engine.settingsOverrides[job._id]?.[fileId]),
+			originalSettings,
 		});
 	});
 	return out;
 }
 
-// Human label for toast copy.
+// Human label for toast copy, led by the job's 4-digit code — what the operator
+// and the customer both identify a job by.
 function jobWho(job) {
-	return job?.createdBy?.name || job?.createdBy?.number || `#${String(job?._id || "").slice(-6)}`;
+	const name = job?.createdBy?.name || job?.createdBy?.number;
+	const code = job?.code != null && job.code !== "" ? `#${job.code}` : null;
+	if (code) return name ? `${code} · ${name}` : code;
+	return name || `#${String(job?._id || "").slice(-6)}`;
 }
 
 // A promise plus its resolver — used to hold a printer's spool lock until the
@@ -110,6 +123,10 @@ const engine = {
 
 	// Persisted per-file progress: { [jobId]: { [fileId]: true } }.
 	printedFiles: {},
+
+	// Persisted operator changes to documents' print settings:
+	// { [jobId]: { [fileId]: { ...only the keys that differ } } }.
+	settingsOverrides: {},
 
 	// Backend-transition guards / local status overrides.
 	jobsMarkedPrinting: new Set(),
@@ -183,6 +200,7 @@ function getSnapshot() {
 		manualOnly: manualOnlyJobs(),
 		queuedJobIds,
 		printedFiles: engine.printedFiles,
+		settingsOverrides: engine.settingsOverrides,
 		files: fileMap,
 	};
 }
@@ -216,6 +234,12 @@ function applyOverrides(jobs) {
 	});
 }
 
+// A job's status as the engine knows it: a local transition (completed,
+// cancelled, failed) wins until the backend's list catches up.
+function effectiveStatus(job) {
+	return engine.overrides.get(job._id) || job.status;
+}
+
 // ── persisted progress ───────────────────────────────────────────────────────
 
 function loadPrintedFiles() {
@@ -242,6 +266,19 @@ function pruneJobProgress(jobId) {
 		delete engine.printedFiles[jobId];
 		persistPrintedFiles();
 	}
+	if (engine.settingsOverrides[jobId]) {
+		delete engine.settingsOverrides[jobId];
+		persistSettingsOverrides();
+	}
+}
+
+function loadSettingsOverrides() {
+	const saved = store.get(SETTINGS_OVERRIDES_STORE_KEY);
+	engine.settingsOverrides = saved && typeof saved === "object" ? saved : {};
+}
+
+function persistSettingsOverrides() {
+	store.set(SETTINGS_OVERRIDES_STORE_KEY, engine.settingsOverrides);
 }
 
 // One-time import of the legacy renderer-localStorage progress (pre-engine
@@ -335,6 +372,7 @@ function addTasks(job, mode, overrideDevice = null, { onlyFileId = null, explici
 			existing.status = "waiting";
 			existing.waitReason = null;
 			existing.failureReason = null;
+			existing.settings = file.settings; // pick up any change made since
 			existing.mode = mode;
 			existing.overrideDevice = overrideDevice;
 			existing.sequential = sequential;
@@ -659,7 +697,7 @@ async function handleDispatchFailure(task, device, err) {
 		console.log(`[Engine] ${task.id} failed — automated printing paused for job ${task.jobId} (needs attention)`);
 		toast(
 			pdfCancelled
-				? { kind: "pdf-cancel", jobId: task.jobId, fileName: task.fileName }
+				? { kind: "pdf-cancel", jobId: task.jobId, fileName: task.fileName, who: jobWho(getJobs().find((j) => j._id === task.jobId)) }
 				: { kind: "auto-paused-failure", jobId: task.jobId, fileName: task.fileName, who: jobWho(getJobs().find((j) => j._id === task.jobId)) }
 		);
 	} else {
@@ -669,8 +707,8 @@ async function handleDispatchFailure(task, device, err) {
 		haltSequentialBatch(task);
 		toast(
 			pdfCancelled
-				? { kind: "pdf-cancel", jobId: task.jobId, fileName: task.fileName }
-				: { kind: "doc-failed-print", jobId: task.jobId, fileName: task.fileName }
+				? { kind: "pdf-cancel", jobId: task.jobId, fileName: task.fileName, who: jobWho(getJobs().find((j) => j._id === task.jobId)) }
+				: { kind: "doc-failed-print", jobId: task.jobId, fileName: task.fileName, who: jobWho(getJobs().find((j) => j._id === task.jobId)) }
 		);
 	}
 	jobsChanged();
@@ -783,9 +821,7 @@ async function autoFailJob(jobId) {
 function finalizeJob(jobId, fileIds) {
 	dropJobTasks(jobId);
 	pruneJobProgress(jobId);
-	if (fileIds?.length) {
-		files.deleteJobFiles(fileIds).catch((err) => console.error("[Engine] file cleanup failed:", err));
-	}
+	files.deleteJobFiles(jobId, fileIds).catch((err) => console.error("[Engine] file cleanup failed:", err));
 	files.deleteJobProof(jobId).catch((err) => console.error("[Engine] proof cleanup failed:", err));
 	emit();
 }
@@ -808,7 +844,6 @@ function onJobsReconciled(jobs) {
 	// Drop tasks + guards for jobs that are gone or terminal. "Active" is
 	// override-aware: a job we locally completed/failed/cancelled (backend not
 	// yet confirmed over SSE) is already terminal for scheduling purposes.
-	const effectiveStatus = (j) => engine.overrides.get(j._id) || j.status;
 	const activeIds = new Set(jobs.filter((j) => ACTIVE_STATUSES.has(effectiveStatus(j))).map((j) => j._id));
 	const trackedJobIds = new Set(engine.tasks.map((t) => t.jobId));
 	engine.tasks = engine.tasks.filter((t) => activeIds.has(t.jobId));
@@ -835,6 +870,14 @@ function onJobsReconciled(jobs) {
 		}
 	}
 	if (progressChanged) persistPrintedFiles();
+	let overridesChanged = false;
+	for (const jobId of Object.keys(engine.settingsOverrides)) {
+		if (!byId.has(jobId)) {
+			delete engine.settingsOverrides[jobId];
+			overridesChanged = true;
+		}
+	}
+	if (overridesChanged) persistSettingsOverrides();
 
 	const activeJobs = jobs.filter((j) => ACTIVE_STATUSES.has(effectiveStatus(j)));
 
@@ -931,6 +974,46 @@ async function printFile(jobId, fileId, deviceName = null) {
 
 	addTasks(job, "manual", deviceName, { onlyFileId: fileId, explicit: true });
 	schedule();
+	return { success: true };
+}
+
+// The operator changes a document's print settings (`patch`: any of pageType,
+// color, pageSelection, sidedness, sides, orientation, numberOfCopies,
+// pagesPerSheet — see fileSettings.applySettingsPatch for how sides and the flip
+// edge interact), or with `patch === null` restores the customer's. Refused once the document
+// is at a printer or has printed — the change could no longer take effect. A
+// queued document picks the change up before it dispatches, re-routed if the
+// new settings match a different service.
+function setFileSettings(jobId, fileId, patch) {
+	const job = getJobs().find((j) => j._id === jobId);
+	if (!job) return { success: false, message: "job not found" };
+	if (!ACTIVE_STATUSES.has(effectiveStatus(job))) return { success: false, message: "this job is already closed" };
+	const file = jobFileList(job).find((f) => f.fileId === fileId);
+	if (!file) return { success: false, message: "document not found" };
+	if (isFilePrinted(jobId, fileId)) return { success: false, message: "this document has already printed" };
+	const task = findTask(jobId, fileId);
+	if (task && (task.status === "printing" || task.status === "verifying")) {
+		return { success: false, message: "this document is printing" };
+	}
+
+	let override = null;
+	if (patch !== null) {
+		const { patch: clean, error } = sanitizeSettingsPatch(patch);
+		if (error) return { success: false, message: error };
+		override = applySettingsPatch(file.originalSettings, engine.settingsOverrides[jobId]?.[fileId], clean);
+	}
+
+	const forJob = { ...(engine.settingsOverrides[jobId] || {}) };
+	if (override) forJob[fileId] = override;
+	else delete forJob[fileId];
+	if (Object.keys(forJob).length) engine.settingsOverrides[jobId] = forJob;
+	else delete engine.settingsOverrides[jobId];
+	persistSettingsOverrides();
+	console.log(`[Engine] settings for ${jobId}:${fileId} →`, override || "customer's");
+
+	if (task) task.settings = effectiveSettings(file.originalSettings, override);
+	schedule();
+	emit();
 	return { success: true };
 }
 
@@ -1121,6 +1204,7 @@ function start() {
 	engine.paused = false;
 	engine.initialized = false;
 	loadPrintedFiles();
+	loadSettingsOverrides();
 	// Populate the registry, then take a first reading of every printer's real
 	// spool queue so load balancing starts from the machine's actual state
 	// (including work queued by other apps) rather than from zero.
@@ -1180,4 +1264,6 @@ module.exports = {
 	completeJob,
 	forceFailJob,
 	dropJob,
+	setFileSettings,
+	jobWho,
 };

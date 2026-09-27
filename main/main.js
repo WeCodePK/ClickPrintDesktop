@@ -1,6 +1,6 @@
 const path = require('path');
 const { registerIpcHandlers } = require('./ipc');
-const { registerFileSchemePrivileges, registerFileProtocol, clearProofCache } = require('./files');
+const { registerFileSchemePrivileges, registerFileProtocol, clearProofCache, clearLegacyFileCache } = require('./files');
 const { loadPersistedAuth } = require('./state');
 const { startOfflineWatcher } = require('./printers');
 const { initLoginItem, startedHidden } = require('./startup');
@@ -190,6 +190,8 @@ if (hasInstanceLock) app.whenReady().then(() => {
 	// session's cache is never needed — and clearing it is what keeps the
 	// directory from growing (see clearProofCache).
 	clearProofCache();
+	// Job files now live in per-job folders; drop the old flat cache.
+	clearLegacyFileCache();
 	createWindow(startedHidden());
 	createTray();
 	// Warm the printer offline-state cache and keep it fresh in the background so

@@ -17,7 +17,7 @@ function TitleBar({ theme, onToggleTheme }) {
 			<div className="title-bar__slot" id="title-bar-slot" />
 			<div className="title-bar__controls">
 				<button
-					className="title-bar__theme-toggle"
+					className={`title-bar__theme-toggle title-bar__theme-toggle--${theme === "dark" ? "sun" : "moon"}`}
 					onClick={onToggleTheme}
 					aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
 				>

@@ -1,5 +1,11 @@
 export const ACTIVE_STATUSES = new Set(["draft", "submitted", "queued", "processing", "printing"]);
 
+// Colour key for a job's status pill / dot: the grouped status, except "queued",
+// which has its own colour (yellow) everywhere it's shown.
+export function statusTone(entry) {
+	return entry?.rawStatus === "queued" ? "queued" : entry?.status;
+}
+
 export function mapStatus(serverStatus) {
 	if (serverStatus === "draft" || serverStatus === "submitted" || serverStatus === "queued") return "pending";
 	if (serverStatus === "processing" || serverStatus === "printing") return "processing";
@@ -27,6 +33,50 @@ function transformFile(entry, index) {
 	};
 }
 
+// A customer's number as shown in the job lists: the backend's international
+// form (e.g. "923001234567") as a local one ("03001234567"). null when there is
+// no number.
+export function formatPhone(number) {
+	if (!number) return null;
+	const n = String(number);
+	const sn = n.startsWith("0") ? n.slice(1) : n;
+	return "0".concat(sn.slice(2));
+}
+
+// A job's 4-digit code as displayed everywhere ("#0427") — the short id the
+// customer and the shop both use to identify a job. Kept as a string so leading
+// zeros survive. null when the backend didn't send one.
+export function formatJobCode(code) {
+	if (code == null || code === "") return null;
+	return `#${code}`;
+}
+
+// How confirmation copy refers to a job: "job #0427", or "this job" without a code.
+export function jobLabel(entry) {
+	const code = formatJobCode(entry?.code);
+	return code ? `job ${code}` : "this job";
+}
+
+// Where a job came in from. The backend doesn't send `channel` yet — until it
+// does, every job shows PLACEHOLDER_CHANNEL. Unknown values are shown as-is.
+// The app channel reads "From ClickPrint" — the logo that follows it in the UI
+// stands in for "App".
+const CHANNEL_LABELS = {
+	whatsapp: "From WhatsApp",
+	app: "From ClickPrint",
+	walkin: "Walk-in",
+};
+const PLACEHOLDER_CHANNEL = "app";
+
+// Normalised channel key ("whatsapp" | "app" | "walkin" | anything else).
+export function channelKey(channel) {
+	return String(channel || PLACEHOLDER_CHANNEL).toLowerCase().replace(/[\s_-]/g, "");
+}
+
+export function channelLabel(channel) {
+	return CHANNEL_LABELS[channelKey(channel)] || String(channel);
+}
+
 export function transformJob(job) {
 	const files = (job.files || []).map(transformFile);
 	const totalCopies = files.reduce((sum, f) => sum + (f.settings.numberOfCopies || 1), 0);
@@ -34,6 +84,9 @@ export function transformJob(job) {
 
 	return {
 		_id: job._id,
+		code: job.code != null && job.code !== "" ? String(job.code) : null,
+		// Not sent by the backend yet — see channelLabel.
+		channel: job.channel || null,
 		// Summary fields consumed by the list rows.
 		fileName: files.length > 1 ? `${files.length} documents` : files[0]?.name || "Document",
 		copies: totalCopies || 1,
@@ -57,6 +110,34 @@ export function transformJob(job) {
 		// endpoint returns just an id string, which we can't display.
 		createdBy: job.createdBy && typeof job.createdBy === "object" ? job.createdBy : null,
 		statusHistory: job.statusHistory || [],
+	};
+}
+
+// Layers the operator's setting overrides (engine snapshot, { [fileId]: {…} })
+// onto a transformed job. Each file keeps the customer's choice in
+// `originalSettings` and lists what the operator changed in `overriddenKeys`;
+// the job's summary fields (copies, colour) are recomputed from the result.
+export function applySettingsOverrides(entry, jobOverrides) {
+	if (!jobOverrides || Object.keys(jobOverrides).length === 0) return entry;
+	const files = (entry.files || []).map((file) => {
+		const override = jobOverrides[file.fileId];
+		if (!override) return file;
+		// `duplexExplicit` marks a flip edge the operator chose; it's bookkeeping,
+		// not a print setting, so it's listed as changed but not merged in.
+		const { duplexExplicit: _explicit, ...changed } = override;
+		return {
+			...file,
+			originalSettings: file.settings,
+			settings: { ...file.settings, ...changed },
+			overriddenKeys: Object.keys(override),
+		};
+	});
+	const totalCopies = files.reduce((sum, f) => sum + (f.settings.numberOfCopies || 1), 0);
+	return {
+		...entry,
+		files,
+		copies: totalCopies || 1,
+		color: files.some((f) => f.settings.color),
 	};
 }
 

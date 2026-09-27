@@ -5,11 +5,14 @@ const { app, protocol, shell, BrowserWindow, dialog } = require("electron");
 const { fetchFileBuffer } = require("./api");
 const spooler = require("./spooler");
 
-// Job files are downloaded once and cached on disk under userData. Printing
-// files are all treated as PDFs (per product spec); a job's optional payment
-// proof is an operator-facing image, so it keeps its own type (see below). Both
-// are served to the renderer through a dedicated `clickfile://` protocol so
-// previews can embed them directly.
+// Job files are downloaded once and cached on disk under userData, one folder
+// per job named after the job's id (job-files/<jobId>/), so the operator can open
+// a job's folder in Explorer and find everything in it. Each document is stored
+// twice: the customer's raw upload, and the backend's PDF rendition of it — the
+// PDF is what gets previewed and printed. A job's optional payment proof is an
+// operator-facing image, so it keeps its own type (see below). Files are served to
+// the renderer through a dedicated `clickfile://` protocol so previews can embed
+// them directly.
 
 const FILE_SCHEME = "clickfile";
 
@@ -36,16 +39,98 @@ function getProofsDir() {
 	return _proofsDir;
 }
 
+// Strips characters Windows forbids in file and folder names.
+function _safeName(name) {
+	return String(name || "")
+		.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+		.replace(/[. ]+$/, "") // Windows also refuses trailing dots and spaces
+		.trim();
+}
+
+function jobDir(jobId) {
+	return path.join(getFilesDir(), _safeName(jobId) || "unknown-job");
+}
+
+// fileId -> { jobId, pdfName, rawName }, learned from the jobs list (see
+// _registerJobFiles). The on-disk location of a document depends on its job and
+// its name, neither of which is derivable from the file id alone.
+const _fileMeta = new Map();
+
+// Extension for a raw upload whose name doesn't carry one, from the type the
+// backend reports for it.
+const RAW_EXTENSIONS = {
+	"application/pdf": "pdf",
+	"application/msword": "doc",
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+	"application/vnd.ms-powerpoint": "ppt",
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+	"application/vnd.ms-excel": "xls",
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+	"text/plain": "txt",
+	"image/png": "png",
+	"image/jpeg": "jpg",
+};
+
+// On-disk names for the Nth document of a job: "1 - report.docx" beside
+// "1 - report.pdf". The number matches "Document (1)" in the UI and keeps two
+// uploads with the same name apart. A raw upload that is already a PDF has no
+// separate raw copy (rawName null) — the PDF rendition stands for both.
+function _documentNames(index, name) {
+	const safe = _safeName(name) || `Document ${index + 1}`;
+	const ext = path.extname(safe);
+	const base = ext ? safe.slice(0, -ext.length) : safe;
+	const prefix = `${index + 1} - `;
+	return {
+		pdfName: `${prefix}${base}.pdf`,
+		rawName: ext.toLowerCase() === ".pdf" ? null : `${prefix}${safe}`,
+		rawHasExt: !!ext,
+	};
+}
+
+function _registerJobFiles(job) {
+	(job.files || []).forEach((entry, index) => {
+		const fileId = entry.file?._id || entry.fileId;
+		if (!fileId) return;
+		const name = entry.file?.name || entry.name || entry.fileName;
+		_fileMeta.set(fileId, { jobId: job._id, ..._documentNames(index, name) });
+	});
+}
+
+// Path of a document's PDF rendition, or null for a file whose job hasn't been
+// seen yet.
 function localPath(fileId) {
-	return path.join(getFilesDir(), `${fileId}.pdf`);
+	const meta = _fileMeta.get(fileId);
+	return meta ? path.join(jobDir(meta.jobId), meta.pdfName) : null;
 }
 
 function isReady(fileId) {
+	const target = localPath(fileId);
+	if (!target) return false;
 	try {
-		return fs.statSync(localPath(fileId)).size > 0;
+		return fs.statSync(target).size > 0;
 	} catch {
 		return false;
 	}
+}
+
+// Writes bytes via a temp file renamed into place, so a half-written file is
+// never served and a failed write leaves the previous copy intact.
+async function _writeAtomic(dest, buffer) {
+	await fsp.mkdir(path.dirname(dest), { recursive: true });
+	const tmp = `${dest}.part`;
+	await fsp.writeFile(tmp, Buffer.from(buffer));
+	await fsp.rename(tmp, dest);
+}
+
+// Fetches a file, retrying once.
+async function _fetchWithRetry(fileId, opts, what) {
+	let attempt = await fetchFileBuffer(fileId, opts);
+	if (!attempt.ok || !attempt.buffer) {
+		console.warn(`[Files] ${what} download failed for ${fileId}, retrying once…`);
+		attempt = await fetchFileBuffer(fileId, opts);
+	}
+	if (!attempt.ok || !attempt.buffer) throw new Error(`${what} download failed`);
+	return attempt;
 }
 
 // fileId -> "downloading" | "ready" | "error"
@@ -81,22 +166,32 @@ function _setStatus(fileId, status) {
 	}
 }
 
-// Downloads a file into the cache (retrying once), replacing any copy already
-// there. The bytes go to a temp file that is renamed into place, so a half-written
-// file is never served and a failed download leaves the previous copy intact.
-// Callers own the _inflight guard and status reporting.
+// Downloads a document into its job's folder (each fetch retrying once),
+// replacing any copy already there. Callers own the _inflight guard and status
+// reporting.
+//   - The PDF rendition (requested with Accept: application/pdf) is what gets
+//     previewed and printed, so failing to fetch it fails the download.
+//   - The raw upload is only there for the operator to open from Explorer, so
+//     losing it is logged and never fails the document.
 async function _downloadToCache(fileId) {
-	let attempt = await fetchFileBuffer(fileId);
-	if (!attempt.ok || !attempt.buffer) {
-		console.warn(`[Files] download failed for ${fileId}, retrying once…`);
-		attempt = await fetchFileBuffer(fileId);
-	}
-	if (!attempt.ok || !attempt.buffer) throw new Error("download failed");
+	const meta = _fileMeta.get(fileId);
+	if (!meta) throw new Error("file does not belong to a known job");
 
-	const dest = localPath(fileId);
-	const tmp = `${dest}.part`;
-	await fsp.writeFile(tmp, Buffer.from(attempt.buffer));
-	await fsp.rename(tmp, dest);
+	const pdf = await _fetchWithRetry(fileId, { accept: "application/pdf" }, "PDF");
+	await _writeAtomic(path.join(jobDir(meta.jobId), meta.pdfName), pdf.buffer);
+
+	if (!meta.rawName) return;
+	try {
+		const raw = await _fetchWithRetry(fileId, {}, "raw file");
+		const mime = String(raw.contentType || "").split(";")[0].trim().toLowerCase();
+		// A name without an extension takes one from the reported type. A raw upload
+		// that turns out to be a PDF is already covered by the rendition.
+		const ext = meta.rawHasExt ? "" : RAW_EXTENSIONS[mime];
+		if (ext === "pdf") return;
+		await _writeAtomic(path.join(jobDir(meta.jobId), ext ? `${meta.rawName}.${ext}` : meta.rawName), raw.buffer);
+	} catch (error) {
+		console.warn(`[Files] could not save the raw upload of ${fileId}:`, error.message);
+	}
 }
 
 // Ensures a single file is present on disk, downloading it if needed. Retries
@@ -200,7 +295,7 @@ async function _syncOneJob(job, onJobFailed) {
 	}
 	if (handled) {
 		_failedJobs.add(jobId);
-		await deleteJobFiles(fileIds); // nothing will be printed; drop partial downloads
+		await deleteJobFiles(jobId, fileIds); // nothing will be printed; drop partial downloads
 	}
 }
 
@@ -210,6 +305,9 @@ async function _syncOneJob(job, onJobFailed) {
 // Payment proofs ride along on the same call (see _syncJobProofs) so a new job
 // arrives with everything the operator needs already local.
 function syncJobFiles(jobs, onJobFailed) {
+	// Synchronously, before anything async: the print engine is fed the same jobs
+	// right after this call and resolves file paths through _fileMeta.
+	for (const job of jobs || []) _registerJobFiles(job);
 	_syncJobProofs(jobs);
 
 	const pending = (jobs || []).filter((j) => !_failedJobs.has(j._id) && _jobFileIds(j).length > 0);
@@ -219,25 +317,53 @@ function syncJobFiles(jobs, onJobFailed) {
 	);
 }
 
-// Removes a cached file from disk and clears its status entry. Best-effort: a
-// missing file (already gone / never downloaded) is not an error.
-async function deleteFile(fileId) {
-	if (!fileId) return;
-	try {
-		await fsp.unlink(localPath(fileId));
-		console.log(`[Files] deleted ${fileId}`);
-	} catch (error) {
-		if (error.code !== "ENOENT") console.error(`[Files] failed to delete ${fileId}:`, error.message);
-	} finally {
+// Deletes a job's folder — its documents (raw and PDF) and its payment proof —
+// once it reaches a terminal state (completed/cancelled/failed). Files aren't
+// previewed or reused anywhere past that point (History shows metadata only), so
+// there's no reason to keep them. Best-effort: a folder that is already gone is
+// not an error.
+async function deleteJobFiles(jobId, fileIds) {
+	for (const fileId of fileIds || []) {
 		delete _status[fileId];
+		_fileMeta.delete(fileId);
+	}
+	if (!jobId) return;
+	try {
+		await fsp.rm(jobDir(jobId), { recursive: true, force: true });
+		console.log(`[Files] deleted files of job ${jobId}`);
+	} catch (error) {
+		console.error(`[Files] failed to delete files of job ${jobId}:`, error.message);
 	}
 }
 
-// Deletes every cached file for a job once it reaches a terminal state
-// (completed/cancelled). Files aren't previewed or reused anywhere past that
-// point (History shows metadata only), so there's no reason to keep them.
-async function deleteJobFiles(fileIds) {
-	await Promise.all((fileIds || []).map(deleteFile));
+// Opens a job's folder in Windows Explorer.
+async function openJobFolder(jobId) {
+	const dir = jobDir(jobId);
+	if (!fs.existsSync(dir)) throw new Error("no files have been downloaded for this job yet");
+	const error = await shell.openPath(dir);
+	if (error) throw new Error(error);
+}
+
+// Removes the flat `job-files/<fileId>.pdf` cache used before files were kept in
+// per-job folders. Called once at startup; anything still needed is downloaded
+// again into its job's folder on the first reconcile.
+async function clearLegacyFileCache() {
+	let entries = [];
+	try {
+		entries = await fsp.readdir(getFilesDir(), { withFileTypes: true });
+	} catch (error) {
+		console.error("[Files] could not read the file cache:", error.message);
+		return;
+	}
+	const loose = entries.filter((entry) => entry.isFile());
+	await Promise.all(
+		loose.map((entry) =>
+			fsp.unlink(path.join(getFilesDir(), entry.name)).catch((error) => {
+				if (error.code !== "ENOENT") console.error(`[Files] could not clear ${entry.name}:`, error.message);
+			})
+		)
+	);
+	if (loose.length) console.log(`[Files] cleared ${loose.length} file(s) from the old flat cache`);
 }
 
 // ── Payment proofs ────────────────────────────────────────────────────────────
@@ -281,25 +407,39 @@ function _sniffProofExt(buffer, contentType) {
 	return Object.keys(PROOF_CONTENT_TYPES).find((ext) => PROOF_CONTENT_TYPES[ext] === mime) || null;
 }
 
+// proof fileId -> jobId for the proofs of active jobs (see _syncJobProofs). Those
+// are stored in the job's folder beside its documents, as payment-proof.<ext>. A
+// proof with no active job — one fetched on demand from History — goes to the
+// shared payment-proofs cache as <fileId>.<ext> instead, which clearProofCache
+// wipes at startup.
+const _proofJobs = new Map();
+
+// Folder and file-name stem a proof is stored under.
+function _proofLocation(fileId) {
+	const jobId = _proofJobs.get(fileId);
+	return jobId ? { dir: jobDir(jobId), stem: "payment-proof" } : { dir: getProofsDir(), stem: fileId };
+}
+
 // fileId -> path on disk. The extension isn't derivable from the id, so a cache
 // miss falls back to scanning the directory. In practice every proof downloaded
-// this session is in the map; the scan is what makes a leftover file from a
-// previous session usable if the startup wipe (clearProofCache) couldn't run.
+// this session is in the map; the scan is what makes a proof left in a job
+// folder by a previous session usable.
 const _proofPaths = new Map();
 
 function proofPath(fileId) {
 	if (!fileId) return null;
 	if (_proofPaths.has(fileId)) return _proofPaths.get(fileId);
+	const { dir, stem } = _proofLocation(fileId);
 	let found = null;
 	try {
-		for (const name of fs.readdirSync(getProofsDir())) {
-			if (name.startsWith(`${fileId}.`) && !name.endsWith(".part")) {
-				found = path.join(getProofsDir(), name);
+		for (const name of fs.readdirSync(dir)) {
+			if (name.startsWith(`${stem}.`) && !name.endsWith(".part")) {
+				found = path.join(dir, name);
 				break;
 			}
 		}
 	} catch (error) {
-		console.error("[Files] could not scan payment proofs:", error.message);
+		if (error.code !== "ENOENT") console.error("[Files] could not scan payment proofs:", error.message);
 	}
 	if (found) _proofPaths.set(fileId, found);
 	return found;
@@ -331,22 +471,15 @@ async function ensureProof(fileId) {
 	_inflight.add(fileId);
 	_setStatus(fileId, "downloading");
 	try {
-		let attempt = await fetchFileBuffer(fileId);
-		if (!attempt.ok || !attempt.buffer) {
-			console.warn(`[Files] payment proof ${fileId} failed to download, retrying once…`);
-			attempt = await fetchFileBuffer(fileId);
-		}
-		if (!attempt.ok || !attempt.buffer) throw new Error("download failed");
+		// No Accept header: a proof is served as the customer uploaded it.
+		const attempt = await _fetchWithRetry(fileId, {}, "payment proof");
 
 		const ext = _sniffProofExt(attempt.buffer, attempt.contentType);
 		if (!ext) console.warn(`[Files] payment proof ${fileId}: unrecognised type "${attempt.contentType}"`);
 
-		// Same temp-then-rename dance as the printing files so a half-written
-		// proof is never served.
-		const dest = path.join(getProofsDir(), `${fileId}.${ext || "bin"}`);
-		const tmp = `${dest}.part`;
-		await fsp.writeFile(tmp, Buffer.from(attempt.buffer));
-		await fsp.rename(tmp, dest);
+		const { dir, stem } = _proofLocation(fileId);
+		const dest = path.join(dir, `${stem}.${ext || "bin"}`);
+		await _writeAtomic(dest, attempt.buffer);
 		_proofPaths.set(fileId, dest);
 		_setStatus(fileId, "ready");
 		console.log(`[Files] downloaded payment proof ${fileId} (${ext || "unknown type"})`);
@@ -382,6 +515,7 @@ function _syncJobProofs(jobs) {
 		const proofId = _jobProofId(job);
 		if (!proofId) continue;
 		_jobProofs.set(job._id, proofId);
+		_proofJobs.set(proofId, job._id);
 		if (isProofReady(proofId) || _inflight.has(proofId) || _status[proofId] === "error") continue;
 		pending.push(proofId);
 	}
@@ -399,6 +533,7 @@ async function deleteJobProof(jobId) {
 	_jobProofs.delete(jobId);
 	const target = proofPath(proofId);
 	_proofPaths.delete(proofId);
+	_proofJobs.delete(proofId); // a later History fetch goes to the shared cache
 	delete _status[proofId];
 	if (!target) return;
 	try {
@@ -455,11 +590,43 @@ async function openProof(fileId) {
 	if (error) throw new Error(error);
 }
 
-// Opens a cached file in the OS default application (e.g. the system PDF viewer).
-async function openFile(fileId) {
+// Path of a document's raw upload in its job folder, or null when there is none
+// (the upload was already a PDF, or saving it failed). A name without an
+// extension got one from the backend's reported type (see _downloadToCache), so
+// that case is found by scanning for "<rawName>.<ext>" — skipping the PDF
+// rendition, which shares the stem.
+function rawPath(fileId) {
+	const meta = _fileMeta.get(fileId);
+	if (!meta?.rawName) return null;
+	const dir = jobDir(meta.jobId);
+	const exact = path.join(dir, meta.rawName);
+	if (fs.existsSync(exact)) return exact;
+	if (meta.rawHasExt) return null;
+	try {
+		const name = fs
+			.readdirSync(dir)
+			.find((n) => n.startsWith(`${meta.rawName}.`) && n !== meta.pdfName && !n.endsWith(".part"));
+		return name ? path.join(dir, name) : null;
+	} catch {
+		return null;
+	}
+}
+
+// What the renderer needs to offer "open the original": its file name, or null.
+function getRawFileInfo(fileId) {
+	const target = rawPath(fileId);
+	return target ? { name: path.basename(target), ext: path.extname(target).slice(1).toLowerCase() } : null;
+}
+
+// Opens a cached document in the OS default application — the PDF rendition
+// (e.g. in the system PDF viewer), or with `raw` the customer's original upload
+// (e.g. a .docx in Word).
+async function openFile(fileId, { raw = false } = {}) {
 	await ensureFile(fileId);
 	if (!isReady(fileId)) throw new Error("file not ready");
-	const error = await shell.openPath(localPath(fileId));
+	const target = raw ? rawPath(fileId) : localPath(fileId);
+	if (!target) throw new Error("the original file isn't available");
+	const error = await shell.openPath(target);
 	if (error) throw new Error(error);
 }
 
@@ -493,8 +660,11 @@ function buildPrintOptions(settings = {}) {
 	if (settings.orientation) options.landscape = settings.orientation === "landscape";
 	if (settings.pageType && VALID_PAGE_SIZES.has(settings.pageType)) options.pageSize = settings.pageType;
 
-	const duplex = { single: "simplex", long: "longEdge", short: "shortEdge", double: "longEdge" }[settings.sidedness];
+	// File settings say "none" for single-sided; without mapping it the printer's
+	// own default applied, which on a duplex-by-default printer prints both sides.
+	const duplex = { none: "simplex", single: "simplex", long: "longEdge", short: "shortEdge", double: "longEdge" }[settings.sidedness];
 	if (duplex) options.duplexMode = duplex;
+	if (settings.pagesPerSheet > 1) options.pagesPerSheet = settings.pagesPerSheet;
 
 	const ranges = parsePageRanges(settings.pageSelection);
 	if (ranges) options.pageRanges = ranges;
@@ -681,9 +851,13 @@ module.exports = {
 	isReady,
 	redownloadFile,
 	openFile,
+	getRawFileInfo,
+	buildPrintOptions,
 	savePdfCopy,
 	printAndVerify,
 	deleteJobFiles,
+	openJobFolder,
+	clearLegacyFileCache,
 	ensureProof,
 	openProof,
 	deleteJobProof,

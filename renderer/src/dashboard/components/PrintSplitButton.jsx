@@ -17,8 +17,8 @@ function PrintSplitButton({
 	label,
 	size = "md",
 	showInfo = false,
-	// Replaces the default "Routed by service" helper line; `infoActive` gives it
-	// the live (primary-coloured) treatment while something is printing.
+	// Status line under the button (e.g. "Printing…"), shown only while set;
+	// `infoActive` gives it the live (primary-coloured) treatment.
 	info = null,
 	infoActive = false,
 	stopMode = false,
@@ -103,12 +103,12 @@ function PrintSplitButton({
 				)}
 			</div>
 
-			{showInfo && (
+			{showInfo && info && (
 				<span
 					className={`print-split__info ${infoActive ? "print-split__info--active" : ""}`}
-					title={info || "Each document prints to the automated printer of its matching service"}
+					title={info}
 				>
-					{info || "Routed by service"}
+					{info}
 				</span>
 			)}
 

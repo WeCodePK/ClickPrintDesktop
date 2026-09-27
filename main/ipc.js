@@ -29,7 +29,7 @@ const {
 	getSseStatus,
 	getShopId,
 } = require("./api");
-const { syncJobFiles, getStatusMap, setNotifier, openFile, redownloadFile, ensureProof, openProof } = require("./files");
+const { syncJobFiles, getStatusMap, setNotifier, openFile, getRawFileInfo, redownloadFile, ensureProof, openProof, openJobFolder } = require("./files");
 const { listPrinters, listAllPrinters, printTestPage } = require("./printers");
 const { getJobs } = require("./state");
 const historyCache = require("./historyCache");
@@ -70,7 +70,7 @@ function registerIpcHandlers(getMainWindow) {
 		send("engine:toast", {
 			kind: "job-failed-download",
 			jobId,
-			who: job?.createdBy?.name || job?.createdBy?.number || `#${String(jobId).slice(-6)}`,
+			who: engine.jobWho(job || { _id: jobId }),
 		});
 		return true;
 	};
@@ -251,13 +251,30 @@ function registerIpcHandlers(getMainWindow) {
 		return getStatusMap();
 	});
 
-	ipcMain.handle("files:open", async (_event, fileId) => {
-		console.log(`[IPC] files:open → ${fileId}`);
+	// Opens a document's PDF, or with { raw: true } the customer's original upload.
+	ipcMain.handle("files:open", async (_event, fileId, opts) => {
+		console.log(`[IPC] files:open → ${fileId}${opts?.raw ? " (original)" : ""}`);
 		try {
-			await openFile(fileId);
+			await openFile(fileId, { raw: !!opts?.raw });
 			return { success: true };
 		} catch (error) {
 			console.error(`[IPC] files:open ${fileId} error:`, error.message);
+			return { success: false, message: error.message };
+		}
+	});
+
+	// Whether a document's original upload is on disk (non-PDF uploads only), and
+	// its name — drives the Open button's "original" option.
+	ipcMain.handle("files:raw-info", async (_event, fileId) => getRawFileInfo(fileId));
+
+	// "View files": the job's folder (documents + payment proof) in Explorer.
+	ipcMain.handle("files:open-job-folder", async (_event, jobId) => {
+		console.log(`[IPC] files:open-job-folder → ${jobId}`);
+		try {
+			await openJobFolder(jobId);
+			return { success: true };
+		} catch (error) {
+			console.error(`[IPC] files:open-job-folder ${jobId} error:`, error.message);
 			return { success: false, message: error.message };
 		}
 	});
@@ -366,6 +383,13 @@ function registerIpcHandlers(getMainWindow) {
 	ipcMain.handle("engine:print-job", async (_event, jobId, deviceName) => {
 		console.log(`[IPC] engine:print-job → ${jobId}${deviceName ? ` (@${deviceName})` : ""}`);
 		return engine.printJob(jobId, deviceName || null);
+	});
+
+	// The operator's change to a document's print settings; `patch === null`
+	// restores the customer's.
+	ipcMain.handle("engine:set-file-settings", async (_event, jobId, fileId, patch) => {
+		console.log(`[IPC] engine:set-file-settings → ${jobId}:${fileId}`, patch);
+		return engine.setFileSettings(jobId, fileId, patch ?? null);
 	});
 
 	ipcMain.handle("engine:print-file", async (_event, jobId, fileId, deviceName) => {

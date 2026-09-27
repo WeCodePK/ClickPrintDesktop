@@ -88,6 +88,11 @@ test("only the fields the screens use are saved", async () => {
 	assert.deepEqual(saved.files[0].file, { _id: "f1", name: "notes.pdf", numberOfPages: 4 });
 });
 
+test("the job code is saved, so History shows it offline", async () => {
+	await cache.save("shopA", [fullJob("h1", { code: "0427" })]);
+	assert.equal(cache.load("shopA").data[0].code, "0427");
+});
+
 test("optional fields keep their meaning: absent stays absent, null stays null", async () => {
 	const noProof = fullJob("h2");
 	delete noProof.paymentProofFile;

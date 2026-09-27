@@ -213,13 +213,15 @@ function acknowledgeNewJobs(jobs) {
 }
 
 // Downloads the raw bytes of a single file. Returns the ArrayBuffer so the
-// caller (files.js) can persist it to disk.
-async function fetchFileBuffer(fileId) {
+// caller (files.js) can persist it to disk. `accept` asks the backend for a
+// specific format — job files pass "application/pdf" so they come back converted
+// rather than as the raw upload; payment proofs omit it and get the original.
+async function fetchFileBuffer(fileId, { accept } = {}) {
 	try {
-		console.log(`[API] fetchFileBuffer ${fileId}`);
-		const response = await fetch(`${API_BASE_URL}/api/files/${fileId}`, {
-			headers: { Authorization: `Bearer ${getAuth().token}` },
-		});
+		console.log(`[API] fetchFileBuffer ${fileId}${accept ? ` (${accept})` : ""}`);
+		const headers = { Authorization: `Bearer ${getAuth().token}` };
+		if (accept) headers.Accept = accept;
+		const response = await fetch(`${API_BASE_URL}/api/files/${fileId}`, { headers });
 		if (!response.ok) {
 			console.error(`[API] fetchFileBuffer ${fileId} → HTTP ${response.status}`);
 			return { ok: false };

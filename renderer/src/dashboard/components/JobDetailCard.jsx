@@ -10,41 +10,15 @@ import {
 	CheckFilledIcon,
 	AlertFilledIcon,
 	WalletIcon,
+	CommentIcon,
 } from "../icons";
 import { useFiles } from "../FilesContext";
-import { getJobTotalPages, getBlockedReason } from "../jobUtils";
+import { getJobTotalPages, getBlockedReason, channelLabel, channelKey, statusTone } from "../jobUtils";
 import { getPdfThumb, forgetPdfThumb } from "../pdfThumbs";
 import PrintSplitButton from "./PrintSplitButton";
-
-function sidednessLabel(value) {
-	switch (value) {
-		case "none":
-			return "Single-sided";
-		case "long":
-			return "Double-sided (long edge)";
-		case "short":
-			return "Double-sided (short edge)";
-		default:
-			return value || "—";
-	}
-}
-
-function fileSettingRows(settings = {}) {
-	return [
-		{ label: "Print Mode", value: settings.color ? "Color" : "Black & White" },
-		{ label: "Paper Size", value: settings.pageType || "—" },
-		{ label: "Orientation", value: settings.orientation, capitalize: true },
-		{ label: "Sides", value: sidednessLabel(settings.sidedness) },
-	].filter((row) => row.value != null && row.value !== "");
-}
-
-function fileMinorFields(settings = {}) {
-	return [
-		{ label: "Copies", value: `${settings.numberOfCopies || 1}×` },
-		{ label: "Pages/Sheet", value: settings.pagesPerSheet || 1 },
-		{ label: "Range", value: settings.pageSelection || "All pages" },
-	];
-}
+import OpenFileButton from "./OpenFileButton";
+import FileSettingsGrid from "./FileSettingsGrid";
+import JobCode from "./JobCode";
 
 function blockedTitle(reason) {
 	switch (reason) {
@@ -166,8 +140,9 @@ function waitHint(waitReason) {
 	}
 }
 
-function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, onMarkJobFailed, printers, onPrinterMenuOpen, autoPrintOn, state }) {
+function FilePreview({ file, index, onOpen, onPrint, onChangeSettings, showPreview, printed, onMarkJobFailed, printers, onPrinterMenuOpen, autoPrintOn, state }) {
 	const settings = file.settings || {};
+	const changedKeys = file.overriddenKeys || [];
 	// Per-file engine state: "waiting" | "printing" | "verifying" | "printed" | "failed".
 	const printingNow = state?.status === "printing" || state?.status === "verifying";
 	const queued = state?.status === "waiting";
@@ -180,6 +155,9 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, on
 	// same helper.
 	const blockedReason = getBlockedReason(state, printed);
 	const blocked = !!blockedReason;
+	// Settings can be changed until the document reaches a printer; after that the
+	// change could no longer take effect.
+	const settingsEditable = !!onChangeSettings && !printed && !printingNow;
 	return (
 		<div
 			className={`file-preview ${printed ? "file-preview--printed" : ""} ${printingNow ? "file-preview--printing" : ""} ${
@@ -188,7 +166,24 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, on
 		>
 			<div className="file-preview__heading">
 				<span className="file-preview__index">{index + 1}</span>
-				<span className="file-preview__name" title={file.name}>{file.name}</span>
+				{/* "report.pdf · 12 pages" — the name truncates, the page count never does. */}
+				<span className="file-preview__title">
+					<span className="file-preview__name" title={file.name}>{file.name}</span>
+					<span className="file-preview__title-sep">·</span>
+					<span className="file-preview__page-count">
+						{file.numberOfPages ?? "—"} {file.numberOfPages === 1 ? "page" : "pages"}
+					</span>
+					{/* Outcome mark for the document — the one place it's shown. */}
+					{printed ? (
+						<span className="file-preview__mark file-preview__mark--printed" title="This document printed successfully">
+							<CheckFilledIcon />
+						</span>
+					) : blocked ? (
+						<span className="file-preview__mark file-preview__mark--failed" title={blockedTitle(blockedReason)}>
+							<AlertFilledIcon />
+						</span>
+					) : null}
+				</span>
 				{printingNow ? (
 					<span className="file-preview__badge file-preview__badge--printing">
 						<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)", width: "11px", height: "11px" }} />
@@ -199,116 +194,98 @@ function FilePreview({ file, index, onPreview, onPrint, showPreview, printed, on
 						{waitHint(state?.waitReason)}
 					</span>
 				) : null}
-			</div>
-			<div className="file-preview__content">
-				{showPreview && <FileThumb file={file} />}
-				<div className="file-preview__settings">
-					<div className="file-preview__pages">
-						<div className="file-preview__pages-text">
-							<span className="file-preview__pages-label">No. of Pages</span>
-							<span className="file-preview__pages-value">{file.numberOfPages ?? "—"}</span>
-						</div>
-						{/* Outcome mark for the document — the one place it's shown. */}
-						{printed ? (
-							<span className="file-preview__mark file-preview__mark--printed" title="This document printed successfully">
-								<CheckFilledIcon />
-							</span>
-						) : blocked ? (
-							<span className="file-preview__mark file-preview__mark--failed" title={blockedTitle(blockedReason)}>
-								<AlertFilledIcon />
-							</span>
-						) : null}
-					</div>
-					{fileSettingRows(settings).map((row) => (
-						<div key={row.label} className="receipt-row">
-							<span className="receipt-label">{row.label}</span>
-							<span className="receipt-value" style={row.capitalize ? { textTransform: "capitalize" } : undefined}>
-								{row.value}
-							</span>
-						</div>
-					))}
-					<div className="file-preview__minor">
-						{fileMinorFields(settings).map((f, i) => (
-							<span key={f.label} className="file-preview__minor-item">
-								{i > 0 && <span className="file-preview__minor-sep">|</span>}
-								{f.label}: {f.value}
-							</span>
-						))}
-					</div>
-				</div>
-			</div>
-			{(onPreview || onPrint) && (
-				<div className="file-preview__actions">
-					{onPreview && (
-						<button className="btn-outline btn-sm" onClick={() => onPreview(file)}>
-							<EyeIcon />
-							Preview
-						</button>
-					)}
-					{onPrint && (
-						printed ? (
-							<button className="btn-gradient btn-sm" disabled>
-								<CheckIcon />
-								Printed
-							</button>
-						) : printingNow ? (
-							<button className="btn-gradient btn-sm" disabled>
-								<div className="spinner spinner--dark" style={{ borderTopColor: "#111b21", width: "14px", height: "14px" }} />
-								Printing…
-							</button>
-						) : blocked ? (
-							// Blocked for ANY reason — failed print, cancelled PDF save, or no
-							// matching service printer. Accent orange, never the go-green, and
-							// always with the dropdown so the operator can force a printer
-							// (the only way out of a routing gap without editing Services).
-							<PrintSplitButton
-								size="sm"
-								tone="retry"
-								onPrint={(deviceName) => onPrint(file, deviceName)}
-								onOpen={onPrinterMenuOpen}
-								printers={printers}
-								label={
-									blockedReason === "route" ? (
+				{(onOpen || onPrint) && (
+					<div className="file-preview__actions">
+						{onOpen && <OpenFileButton file={file} onOpen={onOpen} />}
+						{onPrint && (
+							printed ? (
+								<button className="btn-gradient btn-sm" disabled>
+									<CheckIcon />
+									Printed
+								</button>
+							) : printingNow ? (
+								<button className="btn-gradient btn-sm" disabled>
+									<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-on-primary)", width: "14px", height: "14px" }} />
+									Printing…
+								</button>
+							) : blocked ? (
+								// Blocked for ANY reason — failed print, cancelled PDF save, or no
+								// matching service printer. Accent orange, never the go-green, and
+								// always with the dropdown so the operator can force a printer
+								// (the only way out of a routing gap without editing Services).
+								<PrintSplitButton
+									size="sm"
+									tone="retry"
+									onPrint={(deviceName) => onPrint(file, deviceName)}
+									onOpen={onPrinterMenuOpen}
+									printers={printers}
+									label={
+										blockedReason === "route" ? (
+											<>
+												<PrinterIcon />
+												Print
+											</>
+										) : (
+											<>
+												<RetryIcon />
+												Retry
+											</>
+										)
+									}
+								/>
+							) : queued ? (
+								<button className="btn-gradient btn-sm" disabled>
+									Queued
+								</button>
+							) : autoPrintOn ? (
+								<span className="autoprint-tip" title="Automated printing is on — printing is handled automatically">
+									<button className="btn-gradient btn-sm" disabled style={{ pointerEvents: "none", width: "100%" }}>
+										<PrinterIcon />
+										Print
+									</button>
+								</span>
+							) : (
+								<PrintSplitButton
+									size="sm"
+									onPrint={(deviceName) => onPrint(file, deviceName)}
+									onOpen={onPrinterMenuOpen}
+									printers={printers}
+									label={
 										<>
 											<PrinterIcon />
 											Print
 										</>
-									) : (
-										<>
-											<RetryIcon />
-											Retry
-										</>
-									)
-								}
-							/>
-						) : queued ? (
-							<button className="btn-gradient btn-sm" disabled>
-								Queued
-							</button>
-						) : autoPrintOn ? (
-							<span className="autoprint-tip" title="Automated printing is on — printing is handled automatically">
-								<button className="btn-gradient btn-sm" disabled style={{ pointerEvents: "none", width: "100%" }}>
-									<PrinterIcon />
-									Print
-								</button>
-							</span>
-						) : (
-							<PrintSplitButton
-								size="sm"
-								onPrint={(deviceName) => onPrint(file, deviceName)}
-								onOpen={onPrinterMenuOpen}
-								printers={printers}
-								label={
-									<>
-										<PrinterIcon />
-										Print
-									</>
-								}
-							/>
-						)
+									}
+								/>
+							)
+						)}
+					</div>
+				)}
+			</div>
+			{/* The settings sit beside the preview; name, page count, outcome and
+			    actions live in the heading above. */}
+			<div className="file-preview__content">
+				{showPreview && <FileThumb file={file} />}
+				<div className="file-preview__settings">
+					<FileSettingsGrid
+						settings={settings}
+						originalSettings={file.originalSettings}
+						overriddenKeys={changedKeys}
+						editable={settingsEditable}
+						onChange={(patch) => onChangeSettings(file, patch)}
+					/>
+					{settingsEditable && changedKeys.length > 0 && (
+						<button
+							type="button"
+							className="file-preview__reset"
+							onClick={() => onChangeSettings(file, null)}
+							title="Restore the settings the customer chose"
+						>
+							Reset Overrides
+						</button>
 					)}
 				</div>
-			)}
+			</div>
 			{/* One box for every blocked cause. A blocked document never fails the
 			    job on its own — this is the only place the whole job can be failed,
 			    and only via its button. */}
@@ -505,12 +482,20 @@ function PaymentProofTile({ fileId }) {
 	);
 }
 
-// Free text the customer attached to the job (`additionalComments`).
-function JobNoteRow({ label, text }) {
+// Free text the customer attached to the job (`additionalComments`). It usually
+// changes how the job must be printed, so the text stands out in a read-only,
+// textarea-like box with an accent border (line breaks kept, scrolls when long,
+// selectable for copying).
+function JobNote({ text }) {
 	return (
-		<div className="receipt-row job-detail__note">
-			<span className="receipt-label">{label}</span>
-			<span className="receipt-value job-detail__note-text">"{text}"</span>
+		<div className="job-note" role="note" aria-label="Additional comments">
+			<div className="job-note__head">
+				<CommentIcon />
+				<span className="job-note__title">Additional Comments</span>
+			</div>
+			<div className="job-note__text" tabIndex={0}>
+				{text}
+			</div>
 		</div>
 	);
 }
@@ -523,7 +508,7 @@ function JobNoteRow({ label, text }) {
 //   │ Payment proof │                  │
 //   └───────────────┴──────────────────┘
 
-function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showPreview = true, printedFileIds, fileStates, onMarkJobFailed, printers, onPrinterMenuOpen, autoPrintOn }) {
+function JobDetailCard({ entry, headerActions, onOpenFile, onChangeFileSettings, onPrintFile, showPreview = true, printedFileIds, fileStates, onMarkJobFailed, printers, onPrinterMenuOpen, autoPrintOn }) {
 	const files = entry.files || [];
 	const cost = entry.cost;
 	const totalPages = getJobTotalPages(entry);
@@ -540,34 +525,45 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showP
 	return (
 		<div className="job-detail">
 			<div className="job-detail__titlebar">
-				<h3 className="db-detail__title">Document Details</h3>
+				<div className="job-detail__heading">
+					<span className={`db-status db-status--${statusTone(entry)} job-detail__status`} title="Job status">
+						{entry.rawStatus || entry.status}
+					</span>
+					<h3 className="db-detail__title job-detail__title">
+						{/* "Job #0427"; a job without a code keeps the generic title. */}
+						{entry.code ? "Job" : "Job Details"}
+						<JobCode code={entry.code} large />
+					</h3>
+					<span className="receipt-subtitle">Received at {entry.time}</span>
+				</div>
 				{headerActions && <div className="job-detail__header-actions">{headerActions}</div>}
 			</div>
 
 			<div className="detail-quad">
-				{/* Top-left — job overview */}
+				{/* Top-left — customer + job overview */}
 				<div className="detail-tile detail-tile--info">
-					<div className="detail-tile__header">
-						<h4 className="receipt-title">{entry.fileName}</h4>
-						<span className="receipt-subtitle">Received {entry.time}</span>
-						{entry.createdBy && (
-							<span className="receipt-requester">
-								<UserGlyph />
-								{entry.createdBy.name}
-								{entry.formattedNumber ? ` · ${entry.formattedNumber}` : ""}
-							</span>
-						)}
+					{/* One row: avatar, then name over number, channel on the right. */}
+					<div className="detail-tile__header receipt-customer-row">
+						<span className="receipt-customer-avatar">
+							<UserGlyph />
+						</span>
+						<div className="receipt-customer-who">
+							<h4 className="receipt-title">{entry.createdBy?.name || "Customer"}</h4>
+							{(entry.formattedNumber || entry.createdBy?.number) && (
+								<div className="receipt-subtitle">{entry.formattedNumber || entry.createdBy.number}</div>
+							)}
+						</div>
+						<span className="receipt-channel">
+							{channelLabel(entry.channel)}
+							{channelKey(entry.channel) === "app" && (
+								<img className="receipt-channel__logo" src="icon.png" alt="ClickPrint app" />
+							)}
+						</span>
 					</div>
 					<div className="detail-tile__body">
 						<div className="receipt-row">
-							<span className="receipt-label">Job Status</span>
-							<span className={`db-status db-status--${entry.status}`}>
-								{entry.rawStatus || entry.status}
-							</span>
-						</div>
-						<div className="receipt-row">
 							<span className="receipt-label">Total Files</span>
-							<span className="receipt-value">{entry.filesCount} {entry.filesCount === 1 ? "document" : "documents"}</span>
+							<span className="receipt-value">{entry.filesCount} {entry.filesCount === 1 ? "file" : "files"}</span>
 						</div>
 						{/* this is not a utmost information, already printing mode is displayed in each job */}
 						{/* <div className="receipt-row">
@@ -581,7 +577,10 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showP
 							</span>
 						</div>
 						{entry.additionalComments && (
-							<JobNoteRow label="Additional Comments" text={entry.additionalComments} />
+							<>
+								<div className="receipt-divider" />
+								<JobNote text={entry.additionalComments} />
+							</>
 						)}
 
 						{costRows.length > 0 && (
@@ -628,7 +627,8 @@ function JobDetailCard({ entry, headerActions, onPreviewFile, onPrintFile, showP
 								key={file.fileId || index}
 								file={file}
 								index={index}
-								onPreview={onPreviewFile}
+								onOpen={onOpenFile}
+								onChangeSettings={onChangeFileSettings}
 								onPrint={onPrintFile}
 								showPreview={showPreview}
 								printed={!!printedFileIds?.[file.fileId]}

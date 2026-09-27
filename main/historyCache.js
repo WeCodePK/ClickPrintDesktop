@@ -26,6 +26,8 @@ function slimJob(job) {
 	const proof = job.paymentProofFile;
 	return {
 		_id: job._id,
+		code: job.code,
+		channel: job.channel,
 		status: job.status,
 		createdAt: job.createdAt,
 		cost: job.cost
