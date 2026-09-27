@@ -81,6 +81,24 @@ function _setStatus(fileId, status) {
 	}
 }
 
+// Downloads a file into the cache (retrying once), replacing any copy already
+// there. The bytes go to a temp file that is renamed into place, so a half-written
+// file is never served and a failed download leaves the previous copy intact.
+// Callers own the _inflight guard and status reporting.
+async function _downloadToCache(fileId) {
+	let attempt = await fetchFileBuffer(fileId);
+	if (!attempt.ok || !attempt.buffer) {
+		console.warn(`[Files] download failed for ${fileId}, retrying once…`);
+		attempt = await fetchFileBuffer(fileId);
+	}
+	if (!attempt.ok || !attempt.buffer) throw new Error("download failed");
+
+	const dest = localPath(fileId);
+	const tmp = `${dest}.part`;
+	await fsp.writeFile(tmp, Buffer.from(attempt.buffer));
+	await fsp.rename(tmp, dest);
+}
+
 // Ensures a single file is present on disk, downloading it if needed. Retries
 // the download once before giving up. Returns true on success, false on failure.
 async function ensureFile(fileId) {
@@ -97,24 +115,35 @@ async function ensureFile(fileId) {
 	_inflight.add(fileId);
 	_setStatus(fileId, "downloading");
 	try {
-		let attempt = await fetchFileBuffer(fileId);
-		if (!attempt.ok || !attempt.buffer) {
-			console.warn(`[Files] download failed for ${fileId}, retrying once…`);
-			attempt = await fetchFileBuffer(fileId);
-		}
-		if (!attempt.ok || !attempt.buffer) throw new Error("download failed");
-
-		// Write to a temp file then rename so a half-written file is never served.
-		const dest = localPath(fileId);
-		const tmp = `${dest}.part`;
-		await fsp.writeFile(tmp, Buffer.from(attempt.buffer));
-		await fsp.rename(tmp, dest);
+		await _downloadToCache(fileId);
 		_setStatus(fileId, "ready");
 		console.log(`[Files] downloaded ${fileId}`);
 		return true;
 	} catch (error) {
 		console.error(`[Files] failed to download ${fileId} (after retry):`, error.message);
 		_setStatus(fileId, "error");
+		return false;
+	} finally {
+		_inflight.delete(fileId);
+	}
+}
+
+// Fetches a fresh copy of a file even though one is cached — the operator's way
+// out of a copy that won't preview (a corrupt or truncated download). If the new
+// download fails, whatever was cached stays put.
+async function redownloadFile(fileId) {
+	if (!fileId || _inflight.has(fileId)) return false;
+
+	_inflight.add(fileId);
+	_setStatus(fileId, "downloading");
+	try {
+		await _downloadToCache(fileId);
+		_setStatus(fileId, "ready");
+		console.log(`[Files] re-downloaded ${fileId}`);
+		return true;
+	} catch (error) {
+		console.error(`[Files] failed to re-download ${fileId}:`, error.message);
+		_setStatus(fileId, isReady(fileId) ? "ready" : "error");
 		return false;
 	} finally {
 		_inflight.delete(fileId);
@@ -650,6 +679,7 @@ module.exports = {
 	setNotifier,
 	addStatusListener,
 	isReady,
+	redownloadFile,
 	openFile,
 	savePdfCopy,
 	printAndVerify,

@@ -20,6 +20,7 @@ const EMPTY_SNAPSHOT = {
 	autoRouteReady: false,
 	resumePrompt: null,
 	autoPaused: {},
+	manualOnly: {},
 	queuedJobIds: [],
 	printedFiles: {},
 	files: {},
@@ -194,12 +195,17 @@ export function AutoPrintProvider({ children }) {
 	// Parked by the engine after a failed document — needs a human.
 	const jobNeedsAttention = useCallback((jobId) => autoPaused[jobId] === "failure", [autoPaused]);
 
+	// Jobs the engine never automates (additional comments / payment proof):
+	// jobId -> reasons, e.g. ["additional-comments", "payment-proof"].
+	const manualOnly = snapshot.manualOnly || {};
+	const jobManualOnly = useCallback((jobId) => manualOnly[jobId] || null, [manualOnly]);
+
 	// Whether the engine is currently driving THIS job. When it isn't (auto off,
-	// or paused for this job) the manual print controls come back — that is how
-	// the operator intervenes on a parked job.
+	// paused for this job, or a job it never automates) the manual print controls
+	// come back — that is how the operator handles it.
 	const jobAutoActive = useCallback(
-		(jobId) => autoPrint && !autoPaused[jobId],
-		[autoPrint, autoPaused]
+		(jobId) => autoPrint && !autoPaused[jobId] && !manualOnly[jobId],
+		[autoPrint, autoPaused, manualOnly]
 	);
 
 	const setJobAutoPaused = useCallback(
@@ -273,6 +279,7 @@ export function AutoPrintProvider({ children }) {
 		jobAutoPaused,
 		jobNeedsAttention,
 		jobAutoActive,
+		jobManualOnly,
 		setJobAutoPaused,
 		queueInfoFor,
 		enableAutoPrint,

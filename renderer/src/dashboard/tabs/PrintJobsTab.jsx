@@ -21,9 +21,6 @@ function PrintJobsTab() {
 	const { printJobs, jobsLoading } = useJobs();
 	const {
 		autoPrintEnabled,
-		paused,
-		setPaused,
-		queueCount,
 		queueInfoFor,
 		printedFiles,
 		fileStates,
@@ -39,6 +36,7 @@ function PrintJobsTab() {
 		jobAutoPaused,
 		jobNeedsAttention,
 		jobAutoActive,
+		jobManualOnly,
 		setJobAutoPaused,
 		refreshPrinterState,
 	} = useAutoPrint();
@@ -157,10 +155,24 @@ function PrintJobsTab() {
 	const handlePrintFile = (file, deviceName) => printFileManual(selectedEntry, file, deviceName);
 	const handlePrintAll = (deviceName) => printAllManual(selectedEntry, deviceName);
 
-	// Human label for a job's queue position.
+	// Human label for a job's queue position — or, for a job automated printing
+	// never takes, what the operator has to do before printing it by hand.
 	const queueLine = (jobId) => {
-		const info = queueInfoFor(jobId);
-		if (!info) return null;
+		const info = autoPrintEnabled ? queueInfoFor(jobId) : null;
+		if (!info) {
+			const reasons = jobManualOnly(jobId);
+			if (!reasons) return null;
+			// A payment proof (alone or with comments) is the thing to act on first.
+			const why = reasons.includes("payment-proof") ? "Verify payment" : "Check comments";
+			return (
+				<span
+					className="db-entry__queue db-entry__queue--manual"
+					title="Automated printing skips jobs with additional comments or a payment proof. Review it, then print it manually."
+				>
+					{why}
+				</span>
+			);
+		}
 		if (info.state === "printing") {
 			return (
 				<span className="db-entry__queue db-entry__queue--printing">
@@ -208,88 +220,81 @@ function PrintJobsTab() {
 							<span className={`db-entry__dot db-entry__dot--${entry.status}`} />
 						</span>
 					</div>
-					{autoPrintEnabled && queueLine(entry._id)}
+					{queueLine(entry._id)}
 				</div>
 			</button>
 		);
 	};
 
-	// Jobs the engine parked after a failed document — automated printing is held
-	// on them and they need a human. Listed first, in their own section.
+	// Top half: the print queue, led by jobs the engine parked after a failed
+	// document (they need a human). Bottom half: jobs automated printing never
+	// takes (comments / payment proof) — split out whether or not it's on, so the
+	// list doesn't reshuffle when it's toggled.
 	const attentionJobs = visible.filter((e) => jobNeedsAttention(e._id));
-	const queueJobs = visible.filter((e) => !jobNeedsAttention(e._id));
+	const manualJobs = visible.filter((e) => !jobNeedsAttention(e._id) && jobManualOnly(e._id));
+	const queueJobs = visible.filter((e) => !jobNeedsAttention(e._id) && !jobManualOnly(e._id));
+
+	const sectionHeader = (title, count, variant) => (
+		<div className={`db-list__section db-list__section--${variant}`}>
+			<span className="db-list__section-title">{title}</span>
+			<span className="db-list__section-count">{count}</span>
+		</div>
+	);
 
 	return (
 		<>
-			<ListColumn title="Jobs" count={visible.length}>
-				<div className="db-search">
-					<SearchIcon />
-					<input
-						className="db-search__input"
-						type="text"
-						placeholder="Search jobs"
-						value={query}
-						onChange={(e) => setQuery(e.target.value)}
-					/>
-					{query && (
-						<button className="db-search__clear" onClick={() => setQuery("")} title="Clear">
-							×
-						</button>
-					)}
-				</div>
-
-				{autoPrintEnabled && (
-					<div className="queue-bar">
-						<span className="queue-bar__status">
-							{paused
-								? "Queue paused"
-								: queueCount > 0
-									? `Auto-printing · ${queueCount} in queue`
-									: "Auto-print on · idle"}
-						</span>
-						<button className="queue-bar__btn" onClick={() => setPaused((p) => !p)}>
-							{paused ? (
-								<>
-									<PlayIcon />
-									Resume
-								</>
-							) : (
-								<>
-									<PauseIcon />
-									Pause
-								</>
-							)}
-						</button>
+			<ListColumn title="Jobs" count={visible.length} bodyClassName="db-list__entries--split">
+				<div className="jobs-list__controls">
+					<div className="db-search">
+						<SearchIcon />
+						<input
+							className="db-search__input"
+							type="text"
+							placeholder="Search jobs"
+							value={query}
+							onChange={(e) => setQuery(e.target.value)}
+						/>
+						{query && (
+							<button className="db-search__clear" onClick={() => setQuery("")} title="Clear">
+								×
+							</button>
+						)}
 					</div>
-				)}
+				</div>
 
 				{jobsLoading ? (
 					<div className="db-coming-soon">
 						<div className="spinner spinner--dark" />
 						<p>Loading jobs…</p>
 					</div>
-				) : visible.length === 0 ? (
-					<div className="db-coming-soon">
-						<p>{q ? "No jobs match that number" : "No active print jobs"}</p>
-					</div>
 				) : (
 					<>
-						{attentionJobs.length > 0 && (
-							<>
-								<div className="db-list__section db-list__section--attention">
-									<span className="db-list__section-title">Needs attention</span>
-									<span className="db-list__section-count">{attentionJobs.length}</span>
-								</div>
-								{attentionJobs.map(renderEntry)}
-								{queueJobs.length > 0 && (
-									<div className="db-list__section">
-										<span className="db-list__section-title">Queue</span>
-										<span className="db-list__section-count">{queueJobs.length}</span>
-									</div>
+						<div className="jobs-pane">
+							<div className="jobs-pane__scroll">
+								{attentionJobs.length + queueJobs.length === 0 ? (
+									<p className="jobs-pane__empty">{q ? "No matching jobs" : "No jobs in the queue"}</p>
+								) : (
+									<>
+										{attentionJobs.length > 0 && sectionHeader("Needs attention", attentionJobs.length, "attention")}
+										{attentionJobs.map(renderEntry)}
+										{queueJobs.map(renderEntry)}
+									</>
 								)}
-							</>
-						)}
-						{queueJobs.map(renderEntry)}
+							</div>
+						</div>
+
+						<div className="jobs-pane jobs-pane--manual">
+							{sectionHeader("Manual intervention", manualJobs.length, "manual")}
+							<div className="jobs-pane__scroll">
+								{manualJobs.length === 0 ? (
+									<p className="jobs-pane__empty">
+										{q ? "No matching jobs" : "No jobs need manual intervention"}
+									</p>
+								) : (
+									manualJobs.map(renderEntry)
+								)}
+							</div>
+						</div>
 					</>
 				)}
 			</ListColumn>

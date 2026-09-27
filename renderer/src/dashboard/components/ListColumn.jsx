@@ -1,4 +1,4 @@
-function ListColumn({ title, count, action, className, children }) {
+function ListColumn({ title, count, action, className, bodyClassName = "", children }) {
 	return (
 		<div className={`db-list ${className || ""}`}>
 			<div className="db-list__header">
@@ -8,7 +8,7 @@ function ListColumn({ title, count, action, className, children }) {
 					{action && <div className="db-list__action">{action}</div>}
 				</div>
 			</div>
-			<div className="db-list__entries">{children}</div>
+			<div className={`db-list__entries ${bodyClassName}`}>{children}</div>
 		</div>
 	);
 }

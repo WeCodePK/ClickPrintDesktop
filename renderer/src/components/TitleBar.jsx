@@ -12,6 +12,9 @@ function TitleBar({ theme, onToggleTheme }) {
 					<span className="title-bar__title-print">Print</span>
 				</span>
 			</div>
+			{/* Filled by the dashboard (AutoPrintTitleStatus) via a portal, since the
+			    automated-printing state lives below this bar in the tree. */}
+			<div className="title-bar__slot" id="title-bar-slot" />
 			<div className="title-bar__controls">
 				<button
 					className="title-bar__theme-toggle"
