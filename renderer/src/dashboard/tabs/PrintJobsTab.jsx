@@ -283,18 +283,14 @@ function PrintJobsTab() {
 							</div>
 						</div>
 
-						<div className="jobs-pane jobs-pane--manual">
-							{sectionHeader("Manual intervention", manualJobs.length, "manual")}
-							<div className="jobs-pane__scroll">
-								{manualJobs.length === 0 ? (
-									<p className="jobs-pane__empty">
-										{q ? "No matching jobs" : "No jobs need manual intervention"}
-									</p>
-								) : (
-									manualJobs.map(renderEntry)
-								)}
+						{/* Only when there's something to show — otherwise the queue gets
+						    the full height. */}
+						{manualJobs.length > 0 && (
+							<div className="jobs-pane jobs-pane--manual">
+								{sectionHeader("Manual intervention", manualJobs.length, "manual")}
+								<div className="jobs-pane__scroll">{manualJobs.map(renderEntry)}</div>
 							</div>
-						</div>
+						)}
 					</>
 				)}
 			</ListColumn>
