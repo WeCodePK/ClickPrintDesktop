@@ -137,6 +137,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
 	// Window controls
 	minimizeWindow: () => ipcRenderer.send("window:minimize"),
+	// "auth" (compact, centred) while on the login screens; "app" (maximized) past them.
+	setWindowMode: (mode) => ipcRenderer.send("window:set-mode", mode),
 	maximizeWindow: () => ipcRenderer.send("window:maximize"),
 	closeWindow: () => ipcRenderer.send("window:close"),
 

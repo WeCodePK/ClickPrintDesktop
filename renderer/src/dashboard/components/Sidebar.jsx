@@ -7,7 +7,6 @@ import {
 	SettingsIcon,
 	LogoutIcon,
 } from "../icons";
-import ConnectionSwitcher from "./ConnectionSwitcher";
 import WhatsAppStatusButton from "./WhatsAppStatusButton";
 import AutoPrintSwitcher from "./AutoPrintSwitcher";
 import ConfirmDialog from "./ConfirmDialog";
@@ -155,9 +154,6 @@ function Sidebar({ onLogout }) {
 
 				{/* ── WhatsApp link status (shortcut to Settings → WhatsApp) ── */}
 				<WhatsAppStatusButton />
-
-				{/* ── SSE connection status + shop switcher ── */}
-				<ConnectionSwitcher />
 
 				{/* ── Settings tab (placed right above Logout) ── */}
 				<div className="tooltip-wrapper">

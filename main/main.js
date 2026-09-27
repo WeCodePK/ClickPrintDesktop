@@ -1,7 +1,7 @@
 const path = require('path');
 const { registerIpcHandlers } = require('./ipc');
 const { registerFileSchemePrivileges, registerFileProtocol, clearProofCache, clearLegacyFileCache } = require('./files');
-const { loadPersistedAuth } = require('./state');
+const { loadPersistedAuth, getAuth } = require('./state');
 const { startOfflineWatcher } = require('./printers');
 const { initLoginItem, startedHidden } = require('./startup');
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
@@ -67,9 +67,39 @@ registerFileSchemePrivileges();
 let window = null;
 let tray = null;
 // Set when the window was created hidden (login launch) and hasn't been shown
-// yet, so its first appearance still gets the maximized layout ready-to-show
-// would have given it.
-let needsInitialMaximize = false;
+// yet, so its first appearance still gets the layout ready-to-show would have
+// given it.
+let needsInitialLayout = false;
+
+// ── Window layout ────────────────────────────────────────────────────────────
+// The auth screens (phone number, OTP, shop picker) use a compact window — the
+// window's minimum size — centred on the monitor; everything past login uses it
+// maximized. The layout is applied only when the mode CHANGES (entering the auth
+// screens, or leaving them), so an operator who maximizes the login window keeps
+// that until the next time they reach it (logout, next launch).
+const MIN_WIDTH = 900;
+const MIN_HEIGHT = 600;
+let windowMode = null; // "auth" | "app"
+
+// A saved session with a chosen shop skips the auth screens (see App.jsx).
+const initialWindowMode = () => {
+	const auth = getAuth();
+	return auth?.token && auth?.shopId ? "app" : "auth";
+};
+
+function applyWindowMode(mode, { force = false } = {}) {
+	if (!window || window.isDestroyed()) return;
+	if (mode === windowMode && !force) return;
+	windowMode = mode;
+	if (mode === "auth") {
+		if (window.isFullScreen()) return; // the operator's own choice
+		if (window.isMaximized()) window.unmaximize();
+		window.setSize(MIN_WIDTH, MIN_HEIGHT);
+		window.center();
+	} else {
+		window.maximize();
+	}
+}
 
 // Set on the way out (tray "Exit", an update relaunch, an OS shutdown) so the
 // window's close handler stops intercepting and lets the app actually die.
@@ -83,9 +113,9 @@ function showWindow() {
 		createWindow(false);
 		return;
 	}
-	if (needsInitialMaximize) {
-		window.maximize();
-		needsInitialMaximize = false;
+	if (needsInitialLayout) {
+		applyWindowMode(windowMode || initialWindowMode(), { force: true });
+		needsInitialLayout = false;
 	}
 	if (window.isMinimized()) window.restore();
 	window.show();
@@ -123,8 +153,8 @@ function createTray() {
 function createWindow(startHidden) {
 	window = new BrowserWindow({
 		show: false,
-		minWidth: 900,
-		minHeight: 600,
+		minWidth: MIN_WIDTH,
+		minHeight: MIN_HEIGHT,
 		frame: false,
 		backgroundColor: "#F7F8FA",
 		icon: path.join(__dirname, "..", "assets", "icon.ico"),
@@ -151,10 +181,10 @@ function createWindow(startHidden) {
 		// are warm) but never flashes a window — the operator opens it from the tray.
 		if (startHidden) {
 			console.log("[Main] started at login — staying in the tray");
-			needsInitialMaximize = true;
+			needsInitialLayout = true;
 			return;
 		}
-		window.maximize();
+		applyWindowMode(windowMode || initialWindowMode(), { force: true });
 		window.show();
 	});
 
@@ -171,6 +201,17 @@ ipcMain.on("window:close", () => {
 	window?.close();
 });
 ipcMain.on("window:minimize", () => window?.minimize());
+// The renderer reports which part of the app is showing: "auth" or "app".
+ipcMain.on("window:set-mode", (_event, mode) => {
+	if (mode !== "auth" && mode !== "app") return;
+	// Before the window's first show just record it; ready-to-show / showWindow
+	// lay the window out.
+	if (!window?.isVisible() && needsInitialLayout) {
+		windowMode = mode;
+		return;
+	}
+	applyWindowMode(mode);
+});
 ipcMain.on("window:maximize", () => window.isMaximized() ? window.unmaximize() : window?.maximize());
 
 // A second launch (desktop shortcut while the app sits in the tray) surfaces the

@@ -591,8 +591,6 @@ body {
 	border-radius: var(--radius-sm);
 	font-family: var(--font-family);
 	transition: all var(--transition-fast);
-	text-decoration: underline;
-	text-underline-offset: 3px;
 }
 
 .resend-btn:hover {
@@ -5184,6 +5182,46 @@ input.file-preview__spec-input {
 }
 
 /* ── Toast notifications ── */
+/* Live-connection notice, bottom right. Not dismissible — it goes when the
+   connection is back. While it shows, the other toasts stack above it. */
+.conn-toast {
+	position: fixed;
+	right: 20px;
+	bottom: 20px;
+	z-index: 2000;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	max-width: 360px;
+	padding: 12px 16px;
+	border-radius: var(--radius-md);
+	border: 1px solid var(--border-light);
+	border-left: 4px solid var(--color-danger);
+	background: var(--color-bg-card);
+	box-shadow: var(--shadow-lg);
+	animation: toastIn var(--transition-slow) both;
+}
+
+.conn-toast__spinner {
+	flex-shrink: 0;
+	width: 18px;
+	height: 18px;
+	border-radius: 50%;
+	border: 2.5px solid rgba(134, 150, 160, 0.25);
+	border-top-color: var(--color-danger);
+	animation: list-refresh-spin 0.8s linear infinite;
+}
+
+.conn-toast__msg {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--color-text-primary);
+}
+
+body:has(.conn-toast) .toast-stack {
+	bottom: 84px;
+}
+
 .toast-stack {
 	position: fixed;
 	right: 20px;

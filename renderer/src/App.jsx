@@ -26,6 +26,14 @@ function App() {
 			: "light";
 	});
 
+	// The login screens use a compact, centred window; the rest of the app a
+	// maximized one. Main applies it only when this changes (see main.js).
+	const authScreen = screen === "login" || screen === "otp" || screen === "selectShop";
+	useEffect(() => {
+		if (restoring) return; // don't report "login" before a saved session is checked
+		window.electronAPI?.setWindowMode?.(authScreen ? "auth" : "app");
+	}, [authScreen, restoring]);
+
 	useEffect(() => {
 		document.documentElement.setAttribute("data-theme", theme);
 		localStorage.setItem("theme", theme);
