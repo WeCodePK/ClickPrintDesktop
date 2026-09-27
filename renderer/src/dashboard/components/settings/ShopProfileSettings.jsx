@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { WalletIcon } from "../../icons";
+import ConfirmDialog from "../ConfirmDialog";
 
 const DAYS = [
 	"Monday",
@@ -127,6 +129,22 @@ function validateGoogleMapsLink(link) {
 	return null;
 }
 
+const COD_LIMIT_MAX = 100000;
+// Limits above this ask the shop to confirm before saving.
+const COD_LIMIT_CONFIRM_ABOVE = 999;
+
+// Validates the Cash on Pickup limit (only when Cash on Pickup is on)
+function validateCodLimit(cod) {
+	if (!cod.enabled) return null;
+	const raw = String(cod.limit).trim();
+	if (!raw) return "Enter a Cash on Pickup limit.";
+	const value = Number(raw);
+	if (!Number.isFinite(value)) return "Cash on Pickup limit must be a number.";
+	if (value <= 0) return "Cash on Pickup limit must be greater than 0.";
+	if (value > COD_LIMIT_MAX) return `Cash on Pickup limit cannot exceed Rs ${COD_LIMIT_MAX.toLocaleString()}.`;
+	return null;
+}
+
 // Validates 7-day operating hours
 function validateTimings(timings) {
 	for (let i = 0; i < timings.length; i++) {
@@ -162,6 +180,8 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 		googleMapsLink: "",
 	});
 	const [timings, setTimings] = useState(defaultTimings);
+	const [cod, setCod] = useState({ enabled: false, limit: "" });
+	const [confirmHighCod, setConfirmHighCod] = useState(false);
 
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
@@ -212,6 +232,8 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 					googleMapsLink: shop.googleMapsLink || "",
 				});
 				setTimings(parseTimings(shop.timings));
+				const codLimit = Number(shop.codLimit) || 0;
+				setCod({ enabled: codLimit > 0, limit: codLimit > 0 ? String(codLimit) : "" });
 			} else {
 				setError(result.message || "Failed to load shop profile.");
 			}
@@ -262,11 +284,14 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 		const mapErr = validateGoogleMapsLink(form.googleMapsLink);
 		if (mapErr) return mapErr;
 
+		const codErr = validateCodLimit(cod);
+		if (codErr) return codErr;
+
 		const timingsErr = validateTimings(timings);
 		if (timingsErr) return timingsErr;
 
 		return null;
-	}, [shopId, loading, wallet, form, timings]);
+	}, [shopId, loading, wallet, form, cod, timings]);
 
 	const canSubmit = !saving && !loading && !validationError;
 
@@ -274,7 +299,9 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 		onStatusChange?.({ canSubmit, saving, validationError });
 	}, [canSubmit, saving, validationError, onStatusChange]);
 
-	const handleSubmit = async (e) => {
+	const codLimit = cod.enabled ? Number(String(cod.limit).trim()) : 0;
+
+	const handleSubmit = (e) => {
 		e.preventDefault();
 		if (!shopId) {
 			setError("Shop ID not identified.");
@@ -286,6 +313,15 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 			return;
 		}
 
+		if (codLimit > COD_LIMIT_CONFIRM_ABOVE) {
+			setConfirmHighCod(true);
+			return;
+		}
+
+		save();
+	};
+
+	const save = async () => {
 		setSaving(true);
 		setError(null);
 		setSuccessMessage(null);
@@ -305,6 +341,7 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 			},
 			contactNumber: form.contactNumber.trim(),
 			timings: timingStrings,
+			codLimit,
 			...(form.googleMapsLink.trim() ? { googleMapsLink: form.googleMapsLink.trim() } : {}),
 		};
 
@@ -511,7 +548,63 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 					</div>
 				</div>
 
-				{/* 3. Timings */}
+				{/* 3. Cash on Pickup */}
+				<div
+					style={{
+						border: "1px solid var(--border-light)",
+						borderRadius: "var(--radius-md)",
+						padding: "14px 18px",
+						background: "var(--color-bg)",
+						display: "flex",
+						flexDirection: "column",
+						gap: "12px",
+					}}
+				>
+					<div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+						<div style={{ flex: 1 }}>
+							<div style={{ fontSize: "13px", fontWeight: 600, color: "var(--color-text-primary)" }}>
+								Cash on Pickup
+							</div>
+							<div style={{ fontSize: "12px", color: "var(--color-text-secondary)", marginTop: "2px" }}>
+								Let customers pay in cash when they collect their prints.
+							</div>
+						</div>
+						<button
+							type="button"
+							className={`toggle ${cod.enabled ? "toggle--on" : ""}`}
+							onClick={() => setCod((prev) => ({ ...prev, enabled: !prev.enabled }))}
+							role="switch"
+							aria-checked={cod.enabled}
+							aria-label="Cash on Pickup"
+						>
+							<span className="toggle__knob" />
+						</button>
+					</div>
+
+					{cod.enabled && (
+						<div className="form-field" style={{ marginBottom: 0 }}>
+							<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
+								Maximum order amount for Cash on Pickup (Rs)
+							</label>
+							<input
+								className="form-input"
+								type="number"
+								min="1"
+								max={COD_LIMIT_MAX}
+								step="1"
+								value={cod.limit}
+								onChange={(e) => setCod((prev) => ({ ...prev, limit: e.target.value }))}
+								placeholder="e.g. 500"
+								style={{ maxWidth: "240px" }}
+							/>
+							<span style={{ fontSize: "11.5px", color: "var(--color-text-muted)", marginTop: "4px", display: "block" }}>
+								Orders above this amount must be paid online. Up to Rs {COD_LIMIT_MAX.toLocaleString()}.
+							</span>
+						</div>
+					)}
+				</div>
+
+				{/* 4. Timings */}
 				<div>
 					<div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "8px" }}>
 						<label className="form-label" style={{ fontWeight: 600, fontSize: "13px", margin: 0 }}>
@@ -637,7 +730,7 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 					</div>
 				</div>
 
-				{/* 4. Action Bar & Submit */}
+				{/* 5. Action Bar & Submit */}
 				<div style={{ marginTop: "10px", display: "flex", flexDirection: "column", gap: "8px" }}>
 					{!embedded && (
 					<button
@@ -680,6 +773,21 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 					)}
 				</div>
 			</form>
+
+			{confirmHighCod && createPortal(
+				<ConfirmDialog
+					title="High Cash on Pickup limit"
+					message={`You've set the Cash on Pickup limit to Rs ${codLimit.toLocaleString()}. Customers will be able to place orders up to this amount without paying in advance. Are you sure?`}
+					confirmLabel="Yes, save"
+					cancelLabel="Go back"
+					onConfirm={() => {
+						setConfirmHighCod(false);
+						save();
+					}}
+					onCancel={() => setConfirmHighCod(false)}
+				/>,
+				document.body
+			)}
 
 			{/* Success Popup with Animated Green Checkmark / Tick */}
 			{showSuccessPopup && (
