@@ -1,4 +1,6 @@
+const fs = require("fs");
 const EventSource = require("eventsource");
+const tus = require("tus-js-client");
 const { BrowserWindow } = require("electron");
 const { getAuth, setAuth, setJobs, clearAuth } = require("./state");
 const { listPrinters } = require("./printers");
@@ -234,6 +236,48 @@ async function fetchFileBuffer(fileId, { accept } = {}) {
 	}
 }
 
+// Uploads a file on disk to /api/files over tus. The request carrying the last
+// byte only returns once the backend has converted the file to PDF, so there is
+// no timeout. Resolves { success: true, data: file } with the backend's File
+// object, or { success: false, status, message } — status is the HTTP status of
+// the failing tus request, undefined when the server was never reached.
+function uploadFile(filePath, { filename, filetype }) {
+	return new Promise((resolve) => {
+		const upload = new tus.Upload(fs.createReadStream(filePath), {
+			endpoint: `${API_BASE_URL}/api/files`,
+			headers: { Authorization: `Bearer ${getAuth().token}` },
+			metadata: { filename, filetype: filetype || "application/octet-stream" },
+			chunkSize: 5 * 1024 * 1024,
+			// tus only retries network errors and 5xx; 4xx (413, 422, …) fail at once.
+			retryDelays: [0, 1000, 3000, 5000],
+			onSuccess: ({ lastResponse }) => {
+				let body = null;
+				try {
+					body = JSON.parse(lastResponse.getBody());
+				} catch {}
+				const file = body?.data?.file;
+				if (file) {
+					console.log(`[API] uploadFile ${filename} → ${file._id}`);
+					resolve({ success: true, data: file });
+				} else {
+					console.error(`[API] uploadFile ${filename}: unexpected response`, lastResponse.getBody());
+					resolve({ success: false, status: lastResponse.getStatus(), message: "Unexpected response from server." });
+				}
+			},
+			onError: (error) => {
+				const response = error.originalResponse;
+				const status = response ? response.getStatus() : undefined;
+				let message = "Upload failed";
+				try {
+					message = JSON.parse(response.getBody()).message || message;
+				} catch {}
+				console.error(`[API] uploadFile ${filename} failed (HTTP ${status ?? "—"}):`, message, error.message);
+				resolve({ success: false, status, message });
+			},
+		});
+		upload.start();
+	});
+}
 
 // Resolves the shop id, preferring the value saved at verify time and falling
 // back to decoding it out of the JWT payload.
@@ -697,6 +741,7 @@ module.exports = {
 	fetchJobs,
 	fetchHistory,
 	fetchFileBuffer,
+	uploadFile,
 	updateJobStatus,
 	markJobFailed,
 	isJobFailing,

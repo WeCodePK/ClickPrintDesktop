@@ -3,12 +3,15 @@ const path = require("path");
 const { app } = require("electron");
 const QRCode = require("qrcode");
 const pino = require("pino");
-const { postWhatsAppWebhook } = require("./api");
+const { pipeline } = require("stream/promises");
+const { postWhatsAppWebhook, uploadFile } = require("./api");
+const { MAX_UPLOAD_BYTES, documentOf, documentSize, uploadName, uploadErrorReply } = require("./whatsappDocuments");
 
 // The shop's linked WhatsApp account, driven by Baileys. One socket per app
 // (the single-instance lock in main.js guarantees that), scoped to the selected
-// shop. Incoming messages are forwarded raw to the backend webhook; the backend
-// sends text back out through the "whatsappSend" SSE event (see api.js).
+// shop. Incoming messages are forwarded raw to the backend webhook (documents
+// are uploaded to /api/files first); the backend sends text back out through the
+// "whatsappSend" SSE event (see api.js).
 //
 // Credentials live under userData/whatsapp/<shopId>, so a linked device
 // survives restarts and app logout — only "Unlink" (or the phone removing the
@@ -135,7 +138,7 @@ async function _connect() {
 	}
 
 	sock.ev.on("connection.update", (update) => _onConnectionUpdate(sock, shopId, update));
-	sock.ev.on("messages.upsert", (event) => _onMessagesUpsert(shopId, event));
+	sock.ev.on("messages.upsert", (event) => _onMessagesUpsert(sock, shopId, event));
 }
 
 async function _onConnectionUpdate(sock, shopId, { connection, lastDisconnect, qr }) {
@@ -197,17 +200,89 @@ async function _onConnectionUpdate(sock, shopId, { connection, lastDisconnect, q
 }
 
 // Forwards genuinely incoming messages (not our own sends, not status updates)
-// to the backend as the raw Baileys event.
-async function _onMessagesUpsert(shopId, { type, messages }) {
+// to the backend as the raw Baileys event. Documents are first uploaded to
+// /api/files and forwarded with the resulting File object as `uploadedFile`; a
+// document that fails to upload isn't forwarded — the customer gets a reply
+// explaining why instead.
+async function _onMessagesUpsert(sock, shopId, { type, messages }) {
 	if (type !== "notify") return;
 	const incoming = (messages || []).filter(
 		(m) => !m.key?.fromMe && m.key?.remoteJid !== "status@broadcast"
 	);
 	if (incoming.length === 0) return;
 
+	// Plain messages go straight through; each document waits for its own upload.
+	const plain = incoming.filter((m) => !documentOf(m));
+	if (plain.length > 0) _forward(shopId, type, plain);
+
+	for (const msg of incoming.filter((m) => documentOf(m))) {
+		_handleDocument(sock, shopId, msg).then((file) => {
+			if (file) _forward(shopId, type, [{ ...msg, uploadedFile: file }]);
+		});
+	}
+}
+
+function documentsDir(shopId) {
+	return path.join(app.getPath("userData"), "whatsapp-files", String(shopId));
+}
+
+// Downloads a customer's document into whatsapp-files/<shopId>/ and uploads it
+// to the backend. Returns the backend's File object, or null after replying to
+// the customer with what went wrong. The local copy is kept either way.
+async function _handleDocument(sock, shopId, msg) {
+	const doc = documentOf(msg);
+	const name = uploadName(doc.fileName, doc.mimetype);
+	const from = msg.key?.remoteJid;
+	console.log(`[WA] document "${name}" from ${from} (${msg.key?.id})`);
+
+	const size = documentSize(doc);
+	if (size != null && size > MAX_UPLOAD_BYTES) {
+		console.error(`[WA] "${name}" is ${size} bytes — over the upload limit`);
+		await _reply(shopId, msg, uploadErrorReply(name, { status: 413 }));
+		return null;
+	}
+
+	const dir = documentsDir(shopId);
+	const filePath = path.join(dir, `${msg.key?.id || Date.now()} - ${name}`);
+	try {
+		const { downloadMediaMessage } = await baileys();
+		fs.mkdirSync(dir, { recursive: true });
+		const stream = await downloadMediaMessage(msg, "stream", {}, { logger, reuploadRequest: sock.updateMediaMessage });
+		await pipeline(stream, fs.createWriteStream(filePath));
+	} catch (error) {
+		console.error(`[WA] download of "${name}" failed:`, error.message);
+		fs.rmSync(filePath, { force: true });
+		await _reply(shopId, msg, uploadErrorReply(name));
+		return null;
+	}
+
+	const result = await uploadFile(filePath, { filename: name, filetype: doc.mimetype });
+	if (result.success) return result.data;
+	await _reply(shopId, msg, uploadErrorReply(name, result));
+	return null;
+}
+
+// Replies to a customer's message, quoting it, on whichever socket is current —
+// an upload can outlive a reconnect. Dropped (and logged) when the shop changed
+// or WhatsApp isn't connected.
+async function _reply(shopId, msg, text) {
+	const jid = msg.key?.remoteJid;
+	if (_shopId !== shopId || !_sock || _snapshot.state !== "open") {
+		console.error(`[WA] dropped reply to ${jid}: not connected`);
+		return;
+	}
+	try {
+		await _sock.sendMessage(jid, { text }, { quoted: msg });
+		console.log(`[WA] replied to ${jid}: ${text}`);
+	} catch (error) {
+		console.error(`[WA] reply to ${jid} failed:`, error.message);
+	}
+}
+
+async function _forward(shopId, type, messages) {
 	const { BufferJSON } = await baileys();
 	// Buffers → base64 via Baileys' replacer; protobuf Longs → plain numbers.
-	const body = JSON.stringify({ shopId, type, messages: incoming }, (key, value) => {
+	const body = JSON.stringify({ shopId, type, messages }, (key, value) => {
 		if (value && typeof value === "object" && typeof value.toNumber === "function" && "low" in value) {
 			return value.toNumber();
 		}
@@ -217,7 +292,7 @@ async function _onMessagesUpsert(shopId, { type, messages }) {
 	for (let attempt = 1; attempt <= 2; attempt++) {
 		const result = await postWhatsAppWebhook(body);
 		if (result?.success) {
-			console.log(`[WA] forwarded ${incoming.length} message(s) to webhook`);
+			console.log(`[WA] forwarded ${messages.length} message(s) to webhook`);
 			return;
 		}
 		console.error(`[WA] webhook POST failed (attempt ${attempt}):`, result?.message);
