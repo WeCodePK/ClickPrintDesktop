@@ -4,14 +4,18 @@ const { app } = require("electron");
 const QRCode = require("qrcode");
 const pino = require("pino");
 const { pipeline } = require("stream/promises");
-const { postWhatsAppWebhook, uploadFile } = require("./api");
+const api = require("./api");
+const store = require("./store");
 const { MAX_UPLOAD_BYTES, documentOf, documentSize, uploadName, uploadErrorReply } = require("./whatsappDocuments");
+const { textOf, createDraftManager } = require("./whatsappDrafts");
 
 // The shop's linked WhatsApp account, driven by Baileys. One socket per app
 // (the single-instance lock in main.js guarantees that), scoped to the selected
-// shop. Incoming messages are forwarded raw to the backend webhook (documents
-// are uploaded to /api/files first); the backend sends text back out through the
-// "whatsappSend" SSE event (see api.js).
+// shop. Documents customers send are uploaded to /api/files and collected into a
+// draft per customer, whose print settings they change from a numbered menu and
+// which "confirm" submits as a job (see whatsappDrafts.js);
+// the backend sends text back out through the "whatsappSend" SSE event (see
+// api.js).
 //
 // Credentials live under userData/whatsapp/<shopId>, so a linked device
 // survives restarts and app logout — only "Unlink" (or the phone removing the
@@ -25,6 +29,17 @@ async function baileys() {
 }
 
 const logger = pino({ level: "silent" });
+
+const drafts = createDraftManager({
+	api,
+	load: () => store.get("whatsappDrafts") || {},
+	save: (map) => store.set("whatsappDrafts", map),
+});
+
+// One promise chain per chat: a customer's documents and commands are handled
+// strictly in order, so a burst of documents lands in one draft and a "confirm"
+// sent right after them waits for their uploads.
+const _chatQueues = new Map();
 
 // state: "idle" | "connecting" | "qr" | "open" | "reconnecting" | "logged_out"
 let _snapshot = { state: "idle", qr: null, me: null, error: null };
@@ -199,27 +214,63 @@ async function _onConnectionUpdate(sock, shopId, { connection, lastDisconnect, q
 	_retryDelay = Math.min(_retryDelay * 2, MAX_RETRY_DELAY);
 }
 
-// Forwards genuinely incoming messages (not our own sends, not status updates)
-// to the backend as the raw Baileys event. Documents are first uploaded to
-// /api/files and forwarded with the resulting File object as `uploadedFile`; a
-// document that fails to upload isn't forwarded — the customer gets a reply
-// explaining why instead.
+// Handles genuinely incoming one-to-one messages (not our own sends, groups or
+// status updates): documents go into the customer's draft, and text messages
+// drive its settings menu and "confirm" / "cancel". Text that isn't meant for
+// the order flow gets no reply.
 async function _onMessagesUpsert(sock, shopId, { type, messages }) {
 	if (type !== "notify") return;
-	const incoming = (messages || []).filter(
-		(m) => !m.key?.fromMe && m.key?.remoteJid !== "status@broadcast"
-	);
-	if (incoming.length === 0) return;
+	const { isPnUser, isLidUser } = await baileys();
+	for (const msg of messages || []) {
+		const jid = msg.key?.remoteJid;
+		if (msg.key?.fromMe || !(isPnUser(jid) || isLidUser(jid))) continue;
 
-	// Plain messages go straight through; each document waits for its own upload.
-	const plain = incoming.filter((m) => !documentOf(m));
-	if (plain.length > 0) _forward(shopId, type, plain);
-
-	for (const msg of incoming.filter((m) => documentOf(m))) {
-		_handleDocument(sock, shopId, msg).then((file) => {
-			if (file) _forward(shopId, type, [{ ...msg, uploadedFile: file }]);
-		});
+		if (documentOf(msg)) {
+			_enqueue(jid, () => _onDocument(sock, shopId, msg));
+			continue;
+		}
+		const text = textOf(msg);
+		if (text) _enqueue(jid, () => _onText(sock, shopId, msg, text));
 	}
+}
+
+function _enqueue(jid, task) {
+	const next = (_chatQueues.get(jid) || Promise.resolve())
+		.then(task)
+		.catch((error) => console.error(`[WA] handling a message from ${jid} failed:`, error));
+	_chatQueues.set(jid, next);
+	next.then(() => {
+		if (_chatQueues.get(jid) === next) _chatQueues.delete(jid);
+	});
+}
+
+async function _onDocument(sock, shopId, msg) {
+	const uploaded = await _handleDocument(sock, shopId, msg);
+	if (!uploaded) return;
+	const customer = await _customerOf(sock, msg);
+	await _reply(shopId, msg, await drafts.addFile(shopId, customer, uploaded.file, uploaded.name));
+}
+
+async function _onText(sock, shopId, msg, text) {
+	const customer = await _customerOf(sock, msg);
+	const reply = await drafts.handleText(shopId, customer, text);
+	if (reply) await _reply(shopId, msg, reply);
+}
+
+// { name, number } for the draft: the sender's WhatsApp display name and phone
+// number. Chats addressed by LID (WhatsApp's private id) carry the phone number
+// in remoteJidAlt, or Baileys may know the mapping; the LID's digits are the
+// last resort.
+async function _customerOf(sock, msg) {
+	const { isPnUser, isLidUser } = await baileys();
+	const jid = msg.key.remoteJid;
+	let pn = [jid, msg.key.remoteJidAlt].find((j) => isPnUser(j));
+	if (!pn && isLidUser(jid)) {
+		pn = await sock.signalRepository?.lidMapping?.getPNForLID(jid).catch(() => null);
+		if (!pn) console.warn(`[WA] no phone number known for ${jid} — using its LID`);
+	}
+	const number = (pn || jid).split("@")[0].split(":")[0].replace(/\D/g, "");
+	return { name: msg.pushName || number, number };
 }
 
 function documentsDir(shopId) {
@@ -227,8 +278,9 @@ function documentsDir(shopId) {
 }
 
 // Downloads a customer's document into whatsapp-files/<shopId>/ and uploads it
-// to the backend. Returns the backend's File object, or null after replying to
-// the customer with what went wrong. The local copy is kept either way.
+// to the backend. Returns { file, name } — the backend's File object and the name
+// it was uploaded under — or null after replying to the customer with what went
+// wrong. The local copy is kept either way.
 async function _handleDocument(sock, shopId, msg) {
 	const doc = documentOf(msg);
 	const name = uploadName(doc.fileName, doc.mimetype);
@@ -256,8 +308,8 @@ async function _handleDocument(sock, shopId, msg) {
 		return null;
 	}
 
-	const result = await uploadFile(filePath, { filename: name, filetype: doc.mimetype });
-	if (result.success) return result.data;
+	const result = await api.uploadFile(filePath, { filename: name, filetype: doc.mimetype });
+	if (result.success) return { file: result.data, name };
 	await _reply(shopId, msg, uploadErrorReply(name, result));
 	return null;
 }
@@ -276,26 +328,6 @@ async function _reply(shopId, msg, text) {
 		console.log(`[WA] replied to ${jid}: ${text}`);
 	} catch (error) {
 		console.error(`[WA] reply to ${jid} failed:`, error.message);
-	}
-}
-
-async function _forward(shopId, type, messages) {
-	const { BufferJSON } = await baileys();
-	// Buffers → base64 via Baileys' replacer; protobuf Longs → plain numbers.
-	const body = JSON.stringify({ shopId, type, messages }, (key, value) => {
-		if (value && typeof value === "object" && typeof value.toNumber === "function" && "low" in value) {
-			return value.toNumber();
-		}
-		return BufferJSON.replacer(key, value);
-	});
-
-	for (let attempt = 1; attempt <= 2; attempt++) {
-		const result = await postWhatsAppWebhook(body);
-		if (result?.success) {
-			console.log(`[WA] forwarded ${messages.length} message(s) to webhook`);
-			return;
-		}
-		console.error(`[WA] webhook POST failed (attempt ${attempt}):`, result?.message);
 	}
 }
 

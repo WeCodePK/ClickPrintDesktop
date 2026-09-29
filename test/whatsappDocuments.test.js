@@ -47,8 +47,8 @@ test("long names are cut to 255 characters, keeping the extension", () => {
 });
 
 test("each upload failure gets a reply the customer can act on", () => {
-	assert.match(uploadErrorReply("a.docx", { status: 413 }), /"a\.docx" is too large.*100 MB/);
-	assert.match(uploadErrorReply("a.heic", { status: 422 }), /couldn't open "a\.heic"/);
+	assert.match(uploadErrorReply("a.docx", { status: 413 }), /`a\.docx` is too large.*100 MB/);
+	assert.match(uploadErrorReply("a.heic", { status: 422 }), /couldn't open `a\.heic`/);
 	assert.match(uploadErrorReply("a.pdf", { status: 400 }), /file name/);
 	assert.match(uploadErrorReply("a.pdf", { status: 404 }), /interrupted/);
 	for (const status of [401, 412, undefined]) {

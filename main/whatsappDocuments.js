@@ -1,4 +1,5 @@
 const path = require("path");
+const { code } = require("./whatsappSettings");
 
 // Pure helpers for documents customers send over WhatsApp: finding the document
 // in a Baileys message, naming it the way the backend's tus upload accepts, and
@@ -74,7 +75,7 @@ function uploadName(fileName, mimetype) {
 // `status` is the backend's HTTP status (absent for network failures);
 // `message` is the backend's own message, used for statuses we don't know.
 function uploadErrorReply(fileName, { status, message } = {}) {
-	const name = fileName ? `"${fileName}"` : "your file";
+	const name = fileName ? code(fileName) : "your file";
 	switch (status) {
 		case 400:
 			return `Sorry, we couldn't accept ${name} because of its file name. Please rename it (without / \\ < > : " | ? *) and send it again.`;

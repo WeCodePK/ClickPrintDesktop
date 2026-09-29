@@ -539,23 +539,45 @@ async function pingShopStatus(shopId){
 	}
 }
 
-// ── WhatsApp ──────────────────────────────────────────────────────────────────
+// ── Drafts (WhatsApp orders) ──────────────────────────────────────────────────
+// Each resolves the usual { success, message, data } plus the HTTP `status`, so
+// callers can tell a draft that no longer exists (404) from other failures.
+// `data` is the draft, or the job it became for submit.
 
-// Forwards incoming WhatsApp messages (the raw Baileys messages.upsert event) to
-// the backend. `body` arrives pre-serialized — whatsapp.js encodes Buffers and
-// protobuf Longs itself.
-async function postWhatsAppWebhook(body) {
+async function draftRequest(method, route, body, key) {
 	try {
-		const response = await fetch(`${API_BASE_URL}/api/webhooks/whatsapp`, {
-			method: "POST",
+		const response = await fetch(`${API_BASE_URL}/api/drafts${route}`, {
+			method,
 			headers: authHeaders(),
-			body,
+			body: body ? JSON.stringify(body) : undefined,
 		});
-		return await readJson(response);
+		return { ...unwrap(await readJson(response), key), status: response.status };
 	} catch (error) {
-		console.error("[API] postWhatsAppWebhook error:", error);
+		console.error(`[API] ${method} /api/drafts${route} error:`, error);
 		return apiError(error);
 	}
+}
+
+function createDraft(draft) {
+	return draftRequest("POST", "", draft, "draft");
+}
+
+function updateDraft(draftId, draft) {
+	return draftRequest("PUT", `/${draftId}`, draft, "draft");
+}
+
+// Prices the draft without submitting it.
+function checkDraft(draftId) {
+	return draftRequest("PATCH", `/${draftId}/check`, null, "draft");
+}
+
+// Turns the draft into a job; the backend deletes the draft.
+function submitDraft(draftId) {
+	return draftRequest("PATCH", `/${draftId}/submit`, null, "job");
+}
+
+function deleteDraft(draftId) {
+	return draftRequest("DELETE", `/${draftId}`, null, "draft");
 }
 
 let _sse = null;
@@ -579,7 +601,7 @@ let _onPing = null;
 
 // Fired on every "whatsappSend" SSE event with its parsed payload
 // ({ id, to, text }). Set by ipc.js; api.js must not import whatsapp.js (it
-// imports api for the webhook).
+// imports api for uploads and drafts).
 let _onWhatsAppSend = null;
 
 function setSseStatusNotifier(cb) {
@@ -753,5 +775,9 @@ module.exports = {
 	setWhatsAppSendHandler,
 	getSseStatus,
 	getShopId,
-	postWhatsAppWebhook,
+	createDraft,
+	updateDraft,
+	checkDraft,
+	submitDraft,
+	deleteDraft,
 };
