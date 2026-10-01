@@ -1195,42 +1195,6 @@ body,
 	min-height: 28px;
 }
 
-/* Settings column while a nested section (Printers / Services) is open beside
-   it: labels only, and the nested list slims down, so three columns fit. */
-.db-list--compact {
-	width: 220px;
-}
-
-.db-list--compact .db-entry__meta {
-	display: none;
-}
-
-.db-list--compact .db-entry__avatar {
-	width: 34px;
-	height: 34px;
-}
-
-.db-list--compact ~ .db-list {
-	width: 290px;
-}
-
-/* Narrow windows: the compact settings column becomes an icon rail. */
-@media (max-width: 1200px) {
-	.db-list--compact {
-		width: 72px;
-	}
-
-	.db-list--compact .db-list__title,
-	.db-list--compact .db-entry__info {
-		display: none;
-	}
-
-	.db-list--compact .db-entry {
-		justify-content: center;
-		padding: 10px 0;
-	}
-}
-
 .db-list__title {
 	font-size: 16px;
 	font-weight: 700;
@@ -1564,6 +1528,13 @@ body,
 	color: #111b21;
 }
 
+/* Settings-section icons keep their resting look when selected; the row's
+   active background marks the selection. */
+.db-entry--active .db-entry__avatar--secondary {
+	background: rgba(0, 230, 173, 0.08);
+	color: var(--color-text-secondary);
+}
+
 .db-entry__dot {
 	width: 8px;
 	height: 8px;
@@ -1765,6 +1736,17 @@ body,
 .db-detail__titlebar .db-detail__title {
 	margin-bottom: 0;
 	min-width: 0;
+}
+
+/* Title with a secondary line under it, inside the titlebar. */
+.db-detail__heading {
+	min-width: 0;
+}
+
+.db-detail__subtitle {
+	margin: 2px 0 0;
+	font-size: 13px;
+	color: var(--color-text-secondary);
 }
 
 /* Compact controls beside the title. Scoped selectors on purpose: `.btn-sm`
@@ -3583,16 +3565,16 @@ input.file-preview__spec-input {
 	font-weight: 500;
 }
 
+/* In flow under the trigger (not an overlay), so content below shifts down. */
 .printer-select__menu {
-	z-index: 1100;
-	max-width: 420px;
+	margin-top: 6px;
 	max-height: 260px;
 	overflow-y: auto;
 	padding: 6px;
 	background: var(--color-bg-card);
 	border: 1px solid var(--border-light);
 	border-radius: var(--radius-md);
-	box-shadow: var(--shadow-lg);
+	box-shadow: var(--shadow-sm);
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
@@ -3750,28 +3732,144 @@ input.file-preview__spec-input {
 	text-overflow: ellipsis;
 }
 
-.auto-row__choices {
+.auto-row__toggle {
 	display: inline-flex;
+	align-items: center;
 	gap: 8px;
 	flex-shrink: 0;
 }
 
-/* Compact the shared .form-check (width: 100%) down to a Yes/No pair. */
-.auto-row__choices .form-check {
-	width: auto;
-	gap: 7px;
-	padding: 6px 10px;
+.auto-row__toggle-label {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--color-text-secondary);
 }
 
-.auto-row__choices .form-check__box {
-	width: 16px;
-	height: 16px;
-	border-radius: 4px;
+/* Per-printer auto rows sit right under the printer picker. */
+.form-field .auto-list {
+	margin-top: 14px;
+	padding-top: 14px;
+	border-top: 1px solid var(--border-light);
 }
 
-.auto-row__choices .form-check__box svg {
-	width: 10px;
-	height: 10px;
+/* Service definition: three code dropdowns joined by dashes, reading like the
+   service's short name (A4-BW-SS). */
+.service-form__defs {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.service-form__dash {
+	flex-shrink: 0;
+	font-size: 16px;
+	font-weight: 700;
+	color: var(--color-text-muted);
+}
+
+.code-select {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+}
+
+.code-select__trigger {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	cursor: pointer;
+	text-align: left;
+}
+
+.code-select__trigger > svg {
+	flex-shrink: 0;
+	margin-left: auto;
+	color: var(--color-text-secondary);
+}
+
+.code-select__icon {
+	flex-shrink: 0;
+	display: inline-flex;
+	color: var(--color-text-secondary);
+}
+
+.code-select__code {
+	font-size: 14px;
+	font-weight: 700;
+	letter-spacing: 0.02em;
+	color: var(--color-text-primary);
+}
+
+.code-select__menu {
+	position: absolute;
+	top: calc(100% + 6px);
+	left: 0;
+	z-index: 20;
+	min-width: 100%;
+	padding: 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	background: var(--color-bg-card);
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-md);
+	box-shadow: var(--shadow-lg);
+	animation: fadeSlideIn var(--transition-base) both;
+}
+
+.code-select__item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 10px;
+	border: none;
+	border-radius: var(--radius-sm);
+	background: none;
+	font-family: var(--font-family);
+	text-align: left;
+	white-space: nowrap;
+	cursor: pointer;
+	color: var(--color-text-primary);
+}
+
+.code-select__item:hover {
+	background: rgba(134, 150, 160, 0.08);
+}
+
+.code-select__item--on {
+	background: rgba(134, 150, 160, 0.15);
+}
+
+.code-select__name {
+	font-size: 12.5px;
+	color: var(--color-text-secondary);
+}
+
+/* Last row of the service form: derived service name beside the rate. */
+.service-form__row {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	column-gap: 12px;
+	margin-bottom: 26px;
+}
+
+.service-form__row .form-field {
+	margin-bottom: 0;
+}
+
+/* Grey helper line between a field's label and its control. */
+.form-sublabel {
+	margin: -2px 0 8px;
+	font-size: 12px;
+	color: var(--color-text-secondary);
+}
+
+.service-form .form-input:disabled {
+	color: var(--color-text-secondary);
+	background: rgba(134, 150, 160, 0.08);
+	cursor: default;
+	opacity: 1;
 }
 
 /* ── Registered printer that's currently unreachable — greyed, never removed ── */
@@ -3784,6 +3882,157 @@ input.file-preview__spec-input {
 	background: rgba(134, 150, 160, 0.08);
 	color: var(--color-text-muted);
 	opacity: 0.7;
+}
+
+/* ── Services list: paper size → color → sidedness tree ──
+   Leaf rows follow .db-entry's sizing so the list reads like the app's others. */
+.svc-tree,
+.svc-tree ul {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.svc-tree ul {
+	margin-left: 14px;
+	padding-left: 10px;
+	border-left: 1px solid var(--border-light);
+}
+
+.svc-tree > li + li {
+	margin-top: 10px;
+}
+
+.svc-tree__icon {
+	flex-shrink: 0;
+	display: inline-flex;
+	color: var(--color-text-secondary);
+}
+
+.svc-tree__leaf--off .svc-tree__icon {
+	color: var(--color-text-muted);
+	opacity: 0.6;
+}
+
+.svc-tree__group {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 12px 6px;
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--color-text-secondary);
+}
+
+/* Paper-size headers fold their branch; they're buttons styled as headers. */
+.svc-tree__group--size {
+	width: 100%;
+	border: none;
+	background: none;
+	border-radius: var(--radius-md);
+	font-family: var(--font-family);
+	font-size: 14px;
+	font-weight: 700;
+	color: var(--color-text-primary);
+	text-align: left;
+	cursor: pointer;
+	transition: background var(--transition-fast);
+}
+
+.svc-tree__group--size:hover {
+	background: rgba(134, 150, 160, 0.08);
+}
+
+.svc-tree__chevron {
+	display: inline-flex;
+	margin-left: auto;
+	color: var(--color-text-secondary);
+	transition: transform var(--transition-fast);
+}
+
+.svc-tree__group--folded .svc-tree__chevron {
+	transform: rotate(-90deg);
+}
+
+.svc-tree__leaf {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 12px;
+	margin-bottom: 2px;
+	border-radius: var(--radius-md);
+	font-family: var(--font-family);
+	font-size: 13.5px;
+	font-weight: 600;
+	color: var(--color-text-primary);
+	cursor: pointer;
+	transition: all var(--transition-fast);
+}
+
+.svc-tree__leaf:hover {
+	background: rgba(134, 150, 160, 0.08);
+}
+
+.svc-tree__leaf--active {
+	background: rgba(134, 150, 160, 0.15);
+}
+
+.svc-tree__label {
+	flex: 1;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.svc-tree__price {
+	flex-shrink: 0;
+	font-size: 12.5px;
+	font-weight: 700;
+	color: var(--color-primary);
+	font-variant-numeric: tabular-nums;
+	margin-right: 6px;
+}
+
+.svc-tree__leaf--off .svc-tree__label,
+.svc-tree__leaf--off .svc-tree__price {
+	color: var(--color-text-muted);
+}
+
+/* A color/sides combination the shop doesn't offer yet: a faint, clickable row
+   that opens the add form prefilled with it. */
+.svc-tree__ghost {
+	width: 100%;
+	border: none;
+	background: none;
+	font-family: var(--font-family);
+	font-weight: 500;
+	text-align: left;
+	cursor: pointer;
+	opacity: 0.45;
+	transition: opacity var(--transition-fast), background var(--transition-fast);
+}
+
+.svc-tree__ghost:hover,
+.svc-tree__ghost:focus-visible {
+	opacity: 0.9;
+	background: rgba(134, 150, 160, 0.08);
+}
+
+.svc-tree__group.svc-tree__ghost {
+	border-radius: var(--radius-md);
+}
+
+.svc-tree__ghost-mark {
+	flex-shrink: 0;
+	display: inline-flex;
+	margin-left: auto;
+	color: var(--color-warning);
+}
+
+.svc-tree__ghost-mark svg {
+	width: 12px;
+	height: 12px;
 }
 
 /* ── "Add a printer" picker rows ── */
@@ -3984,58 +4233,55 @@ input.file-preview__spec-input {
 
 /* Toner indicator & Printer info cards */
 /* Printer detail page: what Windows reports, as labelled groups of rows. */
+/* Printer details in the spirit of Windows System Information: label / value
+   columns, one full-width card per group, stacked. */
 .printer-facts {
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-	gap: 16px;
+	--facts-label-col: minmax(140px, 38%);
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
 }
 
 .printer-facts__group {
 	background: var(--color-bg-card);
 	border: 1px solid var(--border-light);
 	border-radius: var(--radius-lg);
-	padding: 16px 18px;
+	box-shadow: var(--shadow-sm);
+	padding: 14px 0 12px;
 }
 
 .printer-facts__title {
-	font-size: 11px;
+	margin: 0 0 4px;
+	padding: 0 22px;
+	font-size: 11.5px;
 	font-weight: 700;
+	letter-spacing: 0.06em;
 	text-transform: uppercase;
-	letter-spacing: 0.5px;
-	color: var(--color-text-muted);
-	margin: 0 0 10px;
+	color: var(--color-text-secondary);
 }
 
 .printer-facts__list {
 	margin: 0;
-	display: flex;
-	flex-direction: column;
 }
 
 .printer-facts__row {
-	display: flex;
-	justify-content: space-between;
-	align-items: baseline;
+	display: grid;
+	grid-template-columns: var(--facts-label-col) 1fr;
 	gap: 16px;
-	padding: 7px 0;
-	border-top: 1px solid var(--border-light);
+	align-items: baseline;
+	padding: 6px 22px;
 	font-size: 13px;
-}
-
-.printer-facts__row:first-child {
-	border-top: none;
 }
 
 .printer-facts__row dt {
 	color: var(--color-text-secondary);
-	flex-shrink: 0;
+	min-width: 0;
 }
 
 .printer-facts__row dd {
 	margin: 0;
 	font-weight: 600;
 	color: var(--color-text-primary);
-	text-align: right;
 	word-break: break-word;
 	min-width: 0;
 }
@@ -6782,4 +7028,512 @@ input.file-preview__spec-input {
 .wa-contact__remove:hover {
 	background: rgba(255, 79, 0, 0.1);
 	color: var(--color-accent);
+}
+
+/* ── Service detail card: price up top, assigned printers below ── */
+.svc-card {
+	background: var(--color-bg-card);
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-sm);
+	overflow: hidden;
+}
+
+.svc-card__price {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 22px 24px;
+	background: color-mix(in srgb, var(--color-primary) 6%, transparent);
+	border-bottom: 1px solid var(--border-light);
+}
+
+.svc-card__label {
+	font-size: 11.5px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--color-text-secondary);
+}
+
+.svc-card__amount {
+	display: flex;
+	align-items: baseline;
+	gap: 6px;
+	font-variant-numeric: tabular-nums;
+}
+
+.svc-card__currency {
+	font-size: 16px;
+	font-weight: 700;
+	color: var(--color-primary);
+}
+
+.svc-card__value {
+	font-size: 36px;
+	font-weight: 800;
+	line-height: 1;
+	color: var(--color-primary);
+}
+
+.svc-card__unit {
+	font-size: 13.5px;
+	font-weight: 600;
+	color: var(--color-text-secondary);
+}
+
+.svc-card--off .svc-card__price {
+	background: rgba(134, 150, 160, 0.06);
+}
+
+.svc-card--off .svc-card__currency,
+.svc-card--off .svc-card__value {
+	color: var(--color-text-muted);
+}
+
+.svc-card__section {
+	padding: 18px 24px 20px;
+}
+
+.svc-card__section-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 10px;
+}
+
+.svc-card__count {
+	min-width: 20px;
+	padding: 1px 7px;
+	border-radius: 999px;
+	font-size: 11.5px;
+	font-weight: 700;
+	text-align: center;
+	color: var(--color-text-secondary);
+	background: rgba(134, 150, 160, 0.16);
+}
+
+.svc-card__empty {
+	margin: 0;
+	font-size: 13px;
+	color: var(--color-text-muted);
+}
+
+.svc-card__printers {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.svc-card__printer {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 12px;
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-md);
+}
+
+.svc-card__printer-icon {
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 30px;
+	height: 30px;
+	border-radius: var(--radius-md);
+	background: rgba(134, 150, 160, 0.12);
+	color: var(--color-text-secondary);
+}
+
+.svc-card__printer-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+.svc-card__printer-name {
+	flex: 1;
+	min-width: 0;
+	font-size: 13.5px;
+	font-weight: 600;
+	color: var(--color-text-primary);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.svc-card__auto {
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	padding: 2px 8px 2px 6px;
+	border-radius: 999px;
+	font-size: 11.5px;
+	font-weight: 700;
+	color: var(--color-primary);
+	background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+}
+
+.svc-card__auto svg {
+	width: 12px;
+	height: 12px;
+}
+
+.svc-card__status {
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--color-text-muted);
+}
+
+.svc-card__status--on {
+	color: var(--color-text-secondary);
+}
+
+/* Printer status messages stacked above the details cards. */
+.printer-alerts {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin-bottom: 14px;
+}
+
+.printer-alerts:empty {
+	display: none;
+}
+
+.printer-alerts .printer-status-card {
+	margin-top: 0;
+}
+
+/* ── Shop profile: one card per section ── */
+.profile-form {
+	container-type: inline-size;
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+/* Single column by default; two side by side once the form is wide enough
+   for the timings rows (day, two time inputs, Closed) to sit in half of it. */
+.profile-form__grid {
+	display: grid;
+	grid-template-columns: 1fr;
+	gap: 16px;
+	align-items: start;
+}
+
+.profile-form__col {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	min-width: 0;
+}
+
+@container (min-width: 940px) {
+	.profile-form__grid {
+		grid-template-columns: 1fr 1fr;
+	}
+}
+
+/* Shop details beside Contact: equal-height cards. */
+.profile-form__grid--top {
+	align-items: stretch;
+}
+
+.profile-card {
+	background: var(--color-bg-card);
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-sm);
+	padding: 18px 22px;
+}
+
+.profile-card__head {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.profile-card__icon {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 34px;
+	height: 34px;
+	border-radius: var(--radius-sm);
+	background: rgba(0, 217, 163, 0.12);
+	color: var(--color-primary);
+}
+
+.profile-card__heading {
+	flex: 1;
+	min-width: 0;
+}
+
+.profile-card__title {
+	margin: 0;
+	font-size: 14px;
+	font-weight: 700;
+	color: var(--color-text-primary);
+}
+
+.profile-card__desc {
+	margin: 2px 0 0;
+	font-size: 12px;
+	color: var(--color-text-secondary);
+}
+
+.profile-card__action {
+	flex-shrink: 0;
+}
+
+.profile-card__body {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	margin-top: 16px;
+}
+
+.profile-card__link {
+	padding: 0;
+	border: none;
+	background: none;
+	font-family: var(--font-family);
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--color-primary);
+	cursor: pointer;
+}
+
+.profile-card__link:hover {
+	text-decoration: underline;
+}
+
+/* Shop profile page header: title block left, save button far right. */
+.profile-header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 16px;
+	margin-bottom: 24px;
+}
+
+.profile-header__save {
+	flex-shrink: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 6px;
+	max-width: 320px;
+	padding-top: 18px;
+}
+
+.profile-header__save .btn-gradient {
+	flex: none;
+	padding: 10px 20px;
+	white-space: nowrap;
+}
+
+.profile-header__save .btn-gradient:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.profile-header__hint {
+	font-size: 12px;
+	font-weight: 600;
+	text-align: right;
+	color: var(--color-accent);
+}
+
+/* Shop profile: floating "unsaved changes" card pinned to the bottom of the
+   pane while edits are pending. Shakes when it blocks leaving the page. */
+.unsaved-bar {
+	position: sticky;
+	bottom: 16px;
+	z-index: 5;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-top: 20px;
+	padding: 12px 14px 12px 16px;
+	background: var(--color-bg-card);
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-lg);
+	box-shadow: var(--shadow-lg);
+	animation: slideUp var(--transition-base) both;
+}
+
+.unsaved-bar__icon {
+	flex-shrink: 0;
+	display: inline-flex;
+	color: var(--color-warning);
+}
+
+.unsaved-bar__text {
+	flex: 1;
+	min-width: 0;
+	font-size: 13.5px;
+	font-weight: 600;
+	color: var(--color-text-primary);
+}
+
+.unsaved-bar .btn-outline,
+.unsaved-bar .btn-gradient {
+	flex: none;
+	padding: 8px 16px;
+	font-size: 13px;
+	white-space: nowrap;
+}
+
+.unsaved-bar--nudge {
+	border-color: var(--color-accent);
+	animation: unsaved-nudge 420ms ease-in-out both;
+}
+
+@keyframes unsaved-nudge {
+	0%, 100% { transform: translateX(0); }
+	20% { transform: translateX(-6px); }
+	40% { transform: translateX(6px); }
+	60% { transform: translateX(-4px); }
+	80% { transform: translateX(4px); }
+}
+
+/* Shop profile: read-only, admin-managed shop details at the top. */
+/* Stretched to match the Contact card beside it, so the content is centred
+   vertically rather than leaving a gap under it. */
+.shop-details {
+	display: flex;
+	align-items: center;
+	gap: 18px;
+}
+
+.shop-details__photo {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 88px;
+	height: 88px;
+	overflow: hidden;
+	border-radius: var(--radius-md);
+	background: rgba(134, 150, 160, 0.12);
+	color: var(--color-text-muted);
+}
+
+.shop-details__photo img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.shop-details__photo svg {
+	width: 30px;
+	height: 30px;
+}
+
+.shop-details__info {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.shop-details__top {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+}
+
+/* Status badge stacked over the admin-managed tag, at the row's right end. */
+.shop-details__badges {
+	flex-shrink: 0;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	gap: 6px;
+	margin-left: auto;
+}
+
+.shop-details__name {
+	min-width: 0;
+	margin: 0;
+	font-size: 18px;
+	font-weight: 700;
+	color: var(--color-text-primary);
+}
+
+.shop-details__chip {
+	padding: 2px 9px;
+	border-radius: 999px;
+	font-size: 11.5px;
+	font-weight: 700;
+}
+
+.shop-details__chip--on {
+	color: var(--color-primary);
+	background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+}
+
+.shop-details__chip--off {
+	color: var(--color-danger);
+	background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+}
+
+.shop-details__locked {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	font-size: 11.5px;
+	font-weight: 600;
+	color: var(--color-text-muted);
+}
+
+.shop-details__locked svg {
+	width: 12px;
+	height: 12px;
+}
+
+.shop-details__address {
+	margin: 0;
+	font-size: 13px;
+	color: var(--color-text-secondary);
+}
+
+.shop-details__meta {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px 16px;
+	font-size: 12px;
+	color: var(--color-text-secondary);
+}
+
+.shop-details__map {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	color: var(--color-primary);
+	font-weight: 600;
+	text-decoration: none;
+	font-variant-numeric: tabular-nums;
+}
+
+.shop-details__map:hover {
+	text-decoration: underline;
+}
+
+.shop-details__map svg {
+	width: 12px;
+	height: 12px;
 }

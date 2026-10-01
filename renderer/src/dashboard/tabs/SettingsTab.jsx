@@ -35,9 +35,7 @@ const SECTIONS = [
 ];
 
 // Printers and Services bring a list column and a detail pane of their own,
-// which open nested to the right of the settings column. While one is open the
-// settings column goes compact (see .db-list--compact) so the detail pane keeps
-// room at the app's minimum width.
+// which open nested to the right of the settings column at the same width.
 const NESTED_SECTIONS = { printers: PrintersTab, services: ServicesTab };
 
 // Settings tab — a left navigation column of setting sections with the selected
@@ -61,8 +59,10 @@ function SettingsTab({ initialSection = "profile" }) {
 		}
 	}, [sectionParam, initialSection]);
 
+	// Switch sections through the URL only (the effect above follows it), so a
+	// page blocking navigation, like an unsaved shop profile, can stop it.
 	const handleSelectSection = (id) => {
-		setActiveSection(id);
+		if (id === activeSection) return;
 		setSearchParams({ section: id }, { replace: true });
 	};
 
@@ -70,7 +70,7 @@ function SettingsTab({ initialSection = "profile" }) {
 
 	return (
 		<>
-			<ListColumn title="Settings" className={NestedSection ? "db-list--compact" : undefined}>
+			<ListColumn title="Settings">
 				{SECTIONS.map((s) => {
 					const Icon = s.Icon;
 					const isActive = activeSection === s.id;

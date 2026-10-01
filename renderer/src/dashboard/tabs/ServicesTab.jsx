@@ -2,10 +2,39 @@ import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import ListColumn from "../components/ListColumn";
 import WelcomePane from "../components/WelcomePane";
+import EmptyState from "../components/EmptyState";
 import ConfirmDialog from "../components/ConfirmDialog";
-import ServiceForm, { serviceLabel, sameKeys, printerIdOf, loadServicePrinters } from "../components/ServiceForm";
+import ServiceForm, { serviceLabel, sameKeys, printerIdOf, loadServicePrinters, PAGE_TYPES, serviceCode } from "../components/ServiceForm";
 import { useAutoPrint } from "../AutoPrintContext";
-import { TrashIcon, EditIcon, CheckIcon, BoltIcon, WalletIcon, PaperIcon, PagesIcon, StackIcon, EyeIcon } from "../icons";
+import { TrashIcon, EditIcon, BoltIcon, PrinterIcon, SvcPaperGlyph, SvcBwGlyph, SvcColorGlyph, SvcSingleGlyph, SvcDoubleGlyph, ChevronDownIcon, AlertIcon } from "../icons";
+
+// Services grouped paper size → color → sidedness for the list column's tree.
+// Only paper sizes with a service appear; under each, every color/sides slot is
+// listed, with `service: null` marking a combination the shop doesn't offer yet.
+function buildServiceTree(services) {
+	const sizes = [...new Set(services.map((s) => s.keys?.pageType || "—"))].sort((a, b) => {
+		const ia = PAGE_TYPES.indexOf(a);
+		const ib = PAGE_TYPES.indexOf(b);
+		return (ia === -1 ? Infinity : ia) - (ib === -1 ? Infinity : ib) || a.localeCompare(b);
+	});
+	return sizes.map((size) => {
+		const inSize = services.filter((s) => (s.keys?.pageType || "—") === size);
+		const colors = [false, true].map((color) => {
+			const slots = [false, true].map((sidedness) => ({
+				sidedness,
+				service: inSize.find((s) => !!s.keys?.color === color && !!s.keys?.sidedness === sidedness) || null,
+			}));
+			return {
+				color,
+				label: color ? "Color" : "Black & White",
+				Glyph: color ? SvcColorGlyph : SvcBwGlyph,
+				slots,
+				empty: slots.every((slot) => !slot.service),
+			};
+		});
+		return { size, colors };
+	});
+}
 
 // Services settings section: the shop's print services in a left list column
 // (like the Printers section), with the selected service's configuration in the
@@ -25,6 +54,7 @@ function ServicesTab() {
 	const [confirmDelete, setConfirmDelete] = useState(null);
 	const [pendingOverwrite, setPendingOverwrite] = useState(null);
 	const [togglingId, setTogglingId] = useState(null); // service whose enable/disable is in flight
+	const [collapsedSizes, setCollapsedSizes] = useState(() => new Set()); // folded paper-size groups in the tree
 
 	useEffect(() => {
 		setError(null);
@@ -34,8 +64,11 @@ function ServicesTab() {
 	const loadServices = useCallback(async () => {
 		try {
 			const result = await window.electronAPI.fetchServices();
-			if (result.success) setServices(result.data || []);
-			else setError(result.message || "Failed to load services.");
+			if (result.success) {
+				setServices(result.data || []);
+				return result.data || [];
+			}
+			setError(result.message || "Failed to load services.");
 		} catch (err) {
 			console.error("[Renderer] failed to load services:", err);
 			setError("Failed to load services.");
@@ -64,8 +97,22 @@ function ServicesTab() {
 
 	const selectedService = services.find((s) => s._id === selectedId) || null;
 
-	// Cheapest first in the list column.
-	const sortedServices = [...services].sort((a, b) => (Number(a.rate) || 0) - (Number(b.rate) || 0));
+	const serviceTree = buildServiceTree(services);
+
+	// Select a just-saved service, unfolding its paper-size group if needed.
+	// Matched by id when the server returned one, else by its option keys.
+	const focusService = (list, saved, keys) => {
+		const match = (list || []).find((s) => (saved?._id ? s._id === saved._id : sameKeys(s.keys, keys)));
+		if (!match) return;
+		setSelectedId(match._id);
+		const size = match.keys?.pageType || "—";
+		setCollapsedSizes((prev) => {
+			if (!prev.has(size)) return prev;
+			const next = new Set(prev);
+			next.delete(size);
+			return next;
+		});
+	};
 
 	// The selected service's printers resolved against the registered list. Kept
 	// even when the printer can't be resolved (deleted / not populated) so the
@@ -92,7 +139,8 @@ function ServicesTab() {
 				? await window.electronAPI.updateService(editing._id, data)
 				: await window.electronAPI.createService(data);
 			if (result.success) {
-				await loadServices();
+				const list = await loadServices();
+				if (!editing._id) focusService(list, result.data, data.keys);
 				refreshPrinterState();
 				setEditing(null);
 			} else {
@@ -112,7 +160,8 @@ function ServicesTab() {
 		try {
 			const result = await window.electronAPI.updateService(existingService._id, data);
 			if (result.success) {
-				await loadServices();
+				const list = await loadServices();
+				focusService(list, existingService, data.keys);
 				refreshPrinterState();
 				setEditing(null);
 			} else {
@@ -163,7 +212,7 @@ function ServicesTab() {
 		<>
 			<ListColumn
 				title="Services"
-				count={services.length}
+				bodyClassName="db-list__entries--column"
 				action={
 					<button className="db-list__add" onClick={() => setEditing({ keys: {} })} title="Add a service">
 						+ Add
@@ -180,41 +229,99 @@ function ServicesTab() {
 						<p>{error}</p>
 					</div>
 				) : services.length === 0 ? (
-					<div className="db-coming-soon">
-						<p>No services added</p>
-						<p style={{ fontSize: "11.5px", color: "var(--color-text-secondary)" }}>
-							Use “+ Add” to create your first print service.
-						</p>
-					</div>
+					<EmptyState art="service" title="No services added" />
 				) : (
-					sortedServices.map((service) => (
-						<div
-							key={service._id}
-							className={`db-entry ${selectedId === service._id ? "db-entry--active" : ""} ${service.isDisabled ? "db-entry--offline" : ""}`}
-							role="button"
-							tabIndex={0}
-							onClick={() => setSelectedId(service._id)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter" || e.key === " ") {
-									e.preventDefault();
-									setSelectedId(service._id);
-								}
-							}}
-						>
-							<div className={`db-entry__avatar ${service.isDisabled ? "db-entry__avatar--muted" : ""}`}>
-								<WalletIcon />
-							</div>
-							<div className="db-entry__info">
-								<span className="db-entry__name">{service.name || serviceLabel(service.keys)}</span>
-								<span className="db-entry__meta">
-									{service.isDisabled ? "Disabled" : serviceLabel(service.keys)}
-								</span>
-							</div>
-							<div className="db-entry__price-actions">
-								<span className="db-entry__price">Rs. {service.rate}</span>
-							</div>
-						</div>
-					))
+					<ul className="svc-tree" role="tree">
+						{serviceTree.map(({ size, colors }) => (
+							<li key={size} role="treeitem" aria-expanded={!collapsedSizes.has(size)}>
+								<button
+									type="button"
+									className={`svc-tree__group svc-tree__group--size ${collapsedSizes.has(size) ? "svc-tree__group--folded" : ""}`}
+									onClick={() =>
+										setCollapsedSizes((prev) => {
+											const next = new Set(prev);
+											if (next.has(size)) next.delete(size);
+											else next.add(size);
+											return next;
+										})
+									}
+								>
+									<span className="svc-tree__icon"><SvcPaperGlyph /></span>
+									{size}
+									<span className="svc-tree__chevron"><ChevronDownIcon /></span>
+								</button>
+								<ul role="group" hidden={collapsedSizes.has(size)}>
+									{colors.map(({ color, label, Glyph, slots, empty }) =>
+										empty ? (
+											// Whole color group missing: one faint row to add it.
+											<li key={label} role="treeitem">
+												<button
+													type="button"
+													className="svc-tree__group svc-tree__ghost"
+													title={`No ${label} services for ${size} yet. Click to add one.`}
+													onClick={() => setEditing({ keys: { pageType: size, color, sidedness: false } })}
+												>
+													<span className="svc-tree__icon"><Glyph /></span>
+													{label}
+													<span className="svc-tree__ghost-mark"><AlertIcon /></span>
+												</button>
+											</li>
+										) : (
+											<li key={label} role="treeitem" aria-expanded="true">
+												<div className="svc-tree__group">
+													<span className="svc-tree__icon"><Glyph /></span>
+													{label}
+												</div>
+												<ul role="group">
+													{slots.map(({ sidedness, service }) => {
+														const SideGlyph = sidedness ? SvcDoubleGlyph : SvcSingleGlyph;
+														const sideLabel = sidedness ? "Double Sided" : "Single Sided";
+														if (!service) {
+															return (
+																<li key={String(sidedness)} role="treeitem">
+																	<button
+																		type="button"
+																		className="svc-tree__leaf svc-tree__ghost"
+																		title={`No ${size} ${label} ${sideLabel} service yet. Click to add it.`}
+																		onClick={() => setEditing({ keys: { pageType: size, color, sidedness } })}
+																	>
+																		<span className="svc-tree__icon"><SideGlyph /></span>
+																		<span className="svc-tree__label">{sideLabel}</span>
+																		<span className="svc-tree__ghost-mark"><AlertIcon /></span>
+																	</button>
+																</li>
+															);
+														}
+														return (
+															<li
+																key={service._id}
+																role="treeitem"
+																aria-selected={selectedId === service._id}
+																tabIndex={0}
+																title={service.name || serviceLabel(service.keys)}
+																className={`svc-tree__leaf ${selectedId === service._id ? "svc-tree__leaf--active" : ""} ${service.isDisabled ? "svc-tree__leaf--off" : ""}`}
+																onClick={() => setSelectedId(service._id)}
+																onKeyDown={(e) => {
+																	if (e.key === "Enter" || e.key === " ") {
+																		e.preventDefault();
+																		setSelectedId(service._id);
+																	}
+																}}
+															>
+																<span className="svc-tree__icon"><SideGlyph /></span>
+																<span className="svc-tree__label">{sideLabel}</span>
+																<span className="svc-tree__price">Rs. {service.rate}</span>
+															</li>
+														);
+													})}
+												</ul>
+											</li>
+										)
+									)}
+								</ul>
+							</li>
+						))}
+					</ul>
 				)}
 			</ListColumn>
 
@@ -222,8 +329,25 @@ function ServicesTab() {
 				{selectedService ? (
 					<div className="db-detail__view">
 						<div className="db-detail__titlebar">
-							<h3 className="db-detail__title">{selectedService.name || serviceLabel(selectedService.keys)}</h3>
+							<div className="db-detail__heading">
+								<h3 className="db-detail__title">{selectedService.name || serviceLabel(selectedService.keys)}</h3>
+								{selectedService.name && selectedService.name !== serviceLabel(selectedService.keys) && (
+									<p className="db-detail__subtitle">{serviceLabel(selectedService.keys)}</p>
+								)}
+							</div>
 							<div className="db-detail__titlebar-actions">
+								<button type="button" className="btn-outline" onClick={() => setEditing(selectedService)}>
+									<EditIcon />
+									Edit
+								</button>
+								<button
+									type="button"
+									className="btn-outline db-detail__remove"
+									onClick={() => setConfirmDelete(selectedService)}
+								>
+									<TrashIcon />
+									Delete
+								</button>
 								<button
 									type="button"
 									className={`toggle ${selectedService.isDisabled ? "" : "toggle--on"}`}
@@ -238,92 +362,56 @@ function ServicesTab() {
 							</div>
 						</div>
 
-						<div className="printer-status-card">
-							<div className="printer-grid">
-								<div className="printer-grid-item">
-									<div className="printer-grid-item-icon"><PagesIcon /></div>
-									<div className="printer-grid-item-details">
-										<span className="printer-grid-item-label">Service</span>
-										<span className="printer-grid-item-value">{selectedService.name || serviceLabel(selectedService.keys)}</span>
-									</div>
-								</div>
-								<div className="printer-grid-item">
-									<div className="printer-grid-item-icon"><CheckIcon /></div>
-									<div className="printer-grid-item-details">
-										<span className="printer-grid-item-label">Status</span>
-										<span className="printer-grid-item-value" style={selectedService.isDisabled ? { color: "var(--color-accent)" } : undefined}>
-											{selectedService.isDisabled ? "Disabled" : "Active"}
-										</span>
-									</div>
-								</div>
-								<div className="printer-grid-item">
-									<div className="printer-grid-item-icon"><WalletIcon /></div>
-									<div className="printer-grid-item-details">
-										<span className="printer-grid-item-label">Rate</span>
-										<span className="printer-grid-item-value">Rs. {selectedService.rate} / page</span>
-									</div>
-								</div>
-								<div className="printer-grid-item">
-									<div className="printer-grid-item-icon"><PaperIcon /></div>
-									<div className="printer-grid-item-details">
-										<span className="printer-grid-item-label">Paper Size</span>
-										<span className="printer-grid-item-value">{selectedService.keys?.pageType || "—"}</span>
-									</div>
-								</div>
-								<div className="printer-grid-item">
-									<div className="printer-grid-item-icon"><EyeIcon /></div>
-									<div className="printer-grid-item-details">
-										<span className="printer-grid-item-label">Color</span>
-										<span className="printer-grid-item-value">{selectedService.keys?.color ? "Color" : "Black & White"}</span>
-									</div>
-								</div>
-								<div className="printer-grid-item">
-									<div className="printer-grid-item-icon"><StackIcon /></div>
-									<div className="printer-grid-item-details">
-										<span className="printer-grid-item-label">Sidedness</span>
-										<span className="printer-grid-item-value">{selectedService.keys?.sidedness ? "Double Sided" : "Single Sided"}</span>
-									</div>
-								</div>
-							</div>
-						</div>
-
-						{boundPrinters.length > 0 && (
-							<div className="printer-status-card">
-								<span className="printer-grid-item-label">Assigned Printers</span>
-								<div className="db-entry__meta--printers" style={{ gap: "6px", marginTop: "6px" }}>
-									{boundPrinters.map(({ printer, useAuto }, i) => (
-										<span className="printer-row" key={printer?._id || i}>
-											{useAuto && <span className="printer-row__auto" title="Automated"><BoltIcon /></span>}
-											<span className="printer-row__label">{printer?.label || "Unknown printer"}</span>
-											<span className={`printer-dot ${printer?.online ? "printer-dot--on" : "printer-dot--off"}`} />
-										</span>
-									))}
-								</div>
-							</div>
-						)}
-
-						<div className="action-panel">
-							<button className="btn-outline" onClick={() => setEditing(selectedService)}>
-								<EditIcon />
-								Edit Service
-							</button>
-							<button
-								className="btn-outline"
-								style={{ color: "var(--color-accent)", borderColor: "var(--color-accent)" }}
-								onClick={() => setConfirmDelete(selectedService)}
-							>
-								<TrashIcon />
-								Remove Service
-							</button>
-						</div>
-
 						{selectedService.isDisabled && (
-							<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(255, 87, 10, 0.08)", borderColor: "var(--color-accent)" }}>
-								<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-accent)" }}>
-									This service is disabled. Use the toggle above to enable it again.
-								</span>
+							<div className="printer-alerts">
+								<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(134, 150, 160, 0.08)", borderColor: "var(--border-light)" }}>
+									<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-text-secondary)" }}>
+										This service is disabled.
+									</span>
+								</div>
 							</div>
 						)}
+
+						<div className={`svc-card ${selectedService.isDisabled ? "svc-card--off" : ""}`}>
+							<div className="svc-card__price">
+								<span className="svc-card__label">Price</span>
+								<div className="svc-card__amount">
+									<span className="svc-card__currency">Rs.</span>
+									<span className="svc-card__value">{selectedService.rate}</span>
+									<span className="svc-card__unit">/ page</span>
+								</div>
+							</div>
+
+							<div className="svc-card__section">
+								<div className="svc-card__section-head">
+									<span className="svc-card__label">Printers</span>
+									<span className="svc-card__count">{boundPrinters.length}</span>
+								</div>
+								{boundPrinters.length === 0 ? (
+									<p className="svc-card__empty">No printers assigned. Edit the service to add one.</p>
+								) : (
+									<ul className="svc-card__printers">
+										{boundPrinters.map(({ printer, useAuto }, i) => (
+											<li className="svc-card__printer" key={printer?._id || i}>
+												<span className="svc-card__printer-icon"><PrinterIcon /></span>
+												<span className="svc-card__printer-name">{printer?.label || "Unknown printer"}</span>
+												{useAuto && (
+													<span className="svc-card__auto" title="Jobs for this service print automatically">
+														<BoltIcon />
+														Auto
+													</span>
+												)}
+												<span className={`svc-card__status ${printer?.online ? "svc-card__status--on" : ""}`}>
+													<span className={`printer-dot ${printer?.online ? "printer-dot--on" : "printer-dot--off"}`} />
+													{printer?.online ? "Online" : "Offline"}
+												</span>
+											</li>
+										))}
+									</ul>
+								)}
+							</div>
+						</div>
+
 					</div>
 				) : (
 					<WelcomePane />
@@ -349,8 +437,8 @@ function ServicesTab() {
 
 			{confirmDelete && createPortal(
 				<ConfirmDialog
-					title="Delete this service?"
-					message={`Are you sure you want to delete "${confirmDelete.name || serviceLabel(confirmDelete.keys)}"? This cannot be undone.`}
+					title={`Delete ${serviceCode(confirmDelete.keys)}?`}
+					message="Are you sure you want to delete this service?"
 					confirmLabel="Delete"
 					cancelLabel="Cancel"
 					danger

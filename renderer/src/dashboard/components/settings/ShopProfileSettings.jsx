@@ -1,7 +1,127 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useId } from "react";
 import { createPortal } from "react-dom";
-import { WalletIcon } from "../../icons";
+import { useBlocker } from "react-router-dom";
+import { WalletIcon, PhoneIcon, CashIcon, ClockIcon, AlertIcon, StoreIcon, LockGlyph, LocIcon } from "../../icons";
 import ConfirmDialog from "../ConfirmDialog";
+
+// One section of the profile form: a card with an icon, title and blurb, an
+// optional control (e.g. a toggle or link) on the right of the header, and
+// the section's fields below.
+function ProfileCard({ Icon, title, description, action, children }) {
+	return (
+		<section className="profile-card">
+			<div className="profile-card__head">
+				<span className="profile-card__icon"><Icon /></span>
+				<div className="profile-card__heading">
+					<h4 className="profile-card__title">{title}</h4>
+					{description && <p className="profile-card__desc">{description}</p>}
+				</div>
+				{action && <div className="profile-card__action">{action}</div>}
+			</div>
+			{children && <div className="profile-card__body">{children}</div>}
+		</section>
+	);
+}
+
+// A coordinate for display: at most 4 decimal places, trailing zeros dropped.
+const roundCoord = (n) => Number(n.toFixed(4));
+
+// Read-only facts about the shop that only an admin can change: photo, name,
+// address, location and status. Shown above the editable sections.
+function ShopDetailsCard({ shop }) {
+	const [imageReady, setImageReady] = useState(false);
+
+	// The photo is an uploaded file; fetch the original into the local file cache
+	// (the same path payment proofs use) and show it from there.
+	useEffect(() => {
+		setImageReady(false);
+		if (!shop.imageFile) return;
+		let cancelled = false;
+		window.electronAPI
+			.ensureProof(shop.imageFile)
+			.then((r) => !cancelled && setImageReady(!!r?.success))
+			.catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	}, [shop.imageFile]);
+
+	const [lat, lng] = Array.isArray(shop.coordinates) ? shop.coordinates : [];
+	const hasCoords = Number.isFinite(lat) && Number.isFinite(lng);
+
+	return (
+		<section className="profile-card shop-details">
+			<div className="shop-details__photo">
+				{imageReady ? (
+					<img src={window.electronAPI.proofUrl(shop.imageFile)} alt="" onError={() => setImageReady(false)} />
+				) : (
+					<StoreIcon />
+				)}
+			</div>
+
+			<div className="shop-details__info">
+				<div className="shop-details__top">
+					<h3 className="shop-details__name">{shop.name || "Unnamed shop"}</h3>
+					<div className="shop-details__badges">
+						<span className={`shop-details__chip ${shop.isDisabled ? "shop-details__chip--off" : "shop-details__chip--on"}`}>
+							{shop.isDisabled ? "Disabled" : "Active"}
+						</span>
+						<span className="shop-details__locked" title="These details can only be changed by a ClickPrint admin.">
+							<LockGlyph />
+							Managed by admin
+						</span>
+					</div>
+				</div>
+
+				{shop.address && <p className="shop-details__address">{shop.address}</p>}
+
+				<div className="shop-details__meta">
+					{hasCoords && (
+						<a
+							className="shop-details__map"
+							href={`https://www.google.com/maps?q=${lat},${lng}`}
+							target="_blank"
+							rel="noreferrer"
+							title="Open in Google Maps"
+						>
+							<LocIcon />
+							{roundCoord(lat)}, {roundCoord(lng)}
+						</a>
+					)}
+				</div>
+			</div>
+		</section>
+	);
+}
+
+// Blocks in-app navigation (sidebar tabs, settings sections) while `when` is
+// true, and asks before discarding. Rendered only on the dashboard, where the
+// form sits inside the data router that useBlocker needs.
+function UnsavedChangesGuard({ when, onBlocked, onDiscard }) {
+	const blocker = useBlocker(when);
+	const blocked = blocker.state === "blocked";
+
+	useEffect(() => {
+		if (blocked) onBlocked?.();
+	}, [blocked, onBlocked]);
+
+	if (!blocked) return null;
+	return createPortal(
+		<ConfirmDialog
+			title="Discard unsaved changes?"
+			message="You have unsaved changes to your shop profile. If you leave now, they'll be lost."
+			confirmLabel="Discard"
+			cancelLabel="Keep editing"
+			danger
+			onConfirm={() => {
+				onDiscard();
+				blocker.proceed();
+			}}
+			onCancel={() => blocker.reset()}
+		/>,
+		document.body
+	);
+}
 
 const DAYS = [
 	"Monday",
@@ -168,8 +288,12 @@ function validateTimings(timings) {
 // `embedded` drops the page header and the in-form submit button so a host (the
 // onboarding flow) can submit via an external `<button form={formId}>`; it gets
 // the submit state through `onStatusChange` and is told about a save via `onSaved`.
-function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved }) {
+function ShopProfileSettings({ embedded = false, formId: hostFormId, onStatusChange, onSaved }) {
+	// The header's save button sits outside the <form>, so it targets it by id.
+	const ownFormId = useId();
+	const formId = hostFormId || ownFormId;
 	const [shopId, setShopId] = useState("");
+	const [shopInfo, setShopInfo] = useState(null); // admin-only fields, shown read-only
 	const [wallet, setWallet] = useState({
 		bank: "",
 		title: "",
@@ -182,6 +306,9 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 	const [timings, setTimings] = useState(defaultTimings);
 	const [cod, setCod] = useState({ enabled: false, limit: "" });
 	const [confirmHighCod, setConfirmHighCod] = useState(false);
+	// Last loaded/saved values, to tell whether the form has unsaved changes.
+	const [saved, setSaved] = useState(null);
+	const [nudge, setNudge] = useState(0); // bumps to re-run the unsaved bar's attention animation
 
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
@@ -222,18 +349,32 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 			if (result.success && result.data) {
 				const shop = result.data;
 				setShopId(shop._id || "");
-				setWallet({
-					bank: shop.wallet?.bank || "",
-					title: shop.wallet?.title || "",
-					number: shop.wallet?.number || "",
+				setShopInfo({
+					name: shop.name,
+					address: shop.address,
+					coordinates: shop.coordinates,
+					imageFile: shop.imageFile,
+					isDisabled: !!shop.isDisabled,
 				});
-				setForm({
-					contactNumber: shop.contactNumber || "",
-					googleMapsLink: shop.googleMapsLink || "",
-				});
-				setTimings(parseTimings(shop.timings));
 				const codLimit = Number(shop.codLimit) || 0;
-				setCod({ enabled: codLimit > 0, limit: codLimit > 0 ? String(codLimit) : "" });
+				const loaded = {
+					wallet: {
+						bank: shop.wallet?.bank || "",
+						title: shop.wallet?.title || "",
+						number: shop.wallet?.number || "",
+					},
+					form: {
+						contactNumber: shop.contactNumber || "",
+						googleMapsLink: shop.googleMapsLink || "",
+					},
+					timings: parseTimings(shop.timings),
+					cod: { enabled: codLimit > 0, limit: codLimit > 0 ? String(codLimit) : "" },
+				};
+				setWallet(loaded.wallet);
+				setForm(loaded.form);
+				setTimings(loaded.timings);
+				setCod(loaded.cod);
+				setSaved(loaded);
 			} else {
 				setError(result.message || "Failed to load shop profile.");
 			}
@@ -295,6 +436,22 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 
 	const canSubmit = !saving && !loading && !validationError;
 
+	const isDirty = useMemo(
+		() => !!saved && JSON.stringify({ wallet, form, timings, cod }) !== JSON.stringify(saved),
+		[saved, wallet, form, timings, cod]
+	);
+
+	const discardChanges = () => {
+		if (!saved) return;
+		setWallet(saved.wallet);
+		setForm(saved.form);
+		setTimings(saved.timings);
+		setCod(saved.cod);
+		setError(null);
+	};
+
+	const handleBlocked = useCallback(() => setNudge((n) => n + 1), []);
+
 	useEffect(() => {
 		onStatusChange?.({ canSubmit, saving, validationError });
 	}, [canSubmit, saving, validationError, onStatusChange]);
@@ -325,6 +482,7 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 		setSaving(true);
 		setError(null);
 		setSuccessMessage(null);
+		const submitted = { wallet, form, timings, cod };
 
 		const timingStrings = timings.map(serializeTiming);
 		const cleanedWalletNumber = wallet.number
@@ -348,6 +506,7 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 		try {
 			const result = await window.electronAPI.updateShop(shopId, payload);
 			if (result.success) {
+				setSaved(submitted);
 				if (embedded) {
 					onSaved?.();
 				} else {
@@ -378,401 +537,344 @@ function ShopProfileSettings({ embedded = false, formId, onStatusChange, onSaved
 	return (
 		<div
 			className={embedded ? undefined : "db-detail__view"}
-			style={embedded ? undefined : { maxWidth: "780px", margin: "0 auto", padding: "28px" }}
+			style={embedded ? undefined : { maxWidth: "1180px", margin: "0 auto", padding: "28px" }}
 		>
 			{/* Page Header */}
 			{!embedded && (
-			<div style={{ marginBottom: "24px" }}>
-				<span
-					style={{
-						fontSize: "11px",
-						fontWeight: 700,
-						letterSpacing: "1.2px",
-						textTransform: "uppercase",
-						color: "var(--color-text-muted)",
-					}}
-				>
-					SHOPS
-				</span>
-				<h2
-					style={{
-						fontSize: "26px",
-						fontWeight: 700,
-						color: "var(--color-text-primary)",
-						marginTop: "4px",
-						marginBottom: "4px",
-					}}
-				>
-					Shop profile
-				</h2>
-				<p style={{ fontSize: "13.5px", color: "var(--color-text-secondary)" }}>
-					Manage your wallet, contact and timings.
-				</p>
+			<div className="profile-header">
+				<div>
+					<span
+						style={{
+							fontSize: "11px",
+							fontWeight: 700,
+							letterSpacing: "1.2px",
+							textTransform: "uppercase",
+							color: "var(--color-text-muted)",
+						}}
+					>
+						SHOPS
+					</span>
+					<h2
+						style={{
+							fontSize: "26px",
+							fontWeight: 700,
+							color: "var(--color-text-primary)",
+							marginTop: "4px",
+							marginBottom: "4px",
+						}}
+					>
+						Shop profile
+					</h2>
+					<p style={{ fontSize: "13.5px", color: "var(--color-text-secondary)" }}>
+						Manage your wallet, contact and timings.
+					</p>
+				</div>
+				<div className="profile-header__save">
+					<button type="submit" form={formId} className="btn-gradient" disabled={!canSubmit || !isDirty}>
+						{saving ? "Saving changes…" : "Save changes"}
+					</button>
+					{!saving && isDirty && validationError && (
+						<span className="profile-header__hint">{validationError}</span>
+					)}
+				</div>
 			</div>
 			)}
 
-			<form
-				id={formId}
-				onSubmit={handleSubmit}
-				style={{
-					background: "var(--color-bg-card)",
-					border: "1px solid var(--border-light)",
-					borderRadius: "var(--radius-lg)",
-					boxShadow: "var(--shadow-md)",
-					padding: "24px 28px",
-					display: "flex",
-					flexDirection: "column",
-					gap: "22px",
-				}}
-			>
+			<form id={formId} onSubmit={handleSubmit} className="profile-form">
 				{error && <div className="form-error">{error}</div>}
 
-				{/* 1. Wallet Section (at the top) */}
-				<div
-					style={{
-						border: "1px solid var(--border-light)",
-						borderRadius: "var(--radius-md)",
-						padding: "16px 18px",
-						background: "var(--color-bg)",
-						display: "flex",
-						flexDirection: "column",
-						gap: "14px",
-					}}
-				>
-					<div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-						<div
-							style={{
-								width: "34px",
-								height: "34px",
-								borderRadius: "var(--radius-sm)",
-								background: "rgba(0, 217, 163, 0.12)",
-								color: "var(--color-primary)",
-								display: "flex",
-								alignItems: "center",
-								justifyContent: "center",
-								flexShrink: 0,
-							}}
-						>
-							<WalletIcon />
-						</div>
-						<div>
-							<h4 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "var(--color-text-primary)" }}>
-								Wallet
-							</h4>
-							<p style={{ margin: 0, fontSize: "12px", color: "var(--color-text-secondary)", marginTop: "2px" }}>
-								Provide your bank account / mobile wallet where your earnings will be deposited.
-							</p>
-						</div>
-					</div>
+				{/* Top row: the admin-managed shop details beside its contact info. */}
+				<div className="profile-form__grid profile-form__grid--top">
+					{shopInfo && <ShopDetailsCard shop={shopInfo} />}
 
-					{/* Bank / Provider Name */}
-					<div className="form-field" style={{ marginBottom: 0 }}>
-						<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
-							Bank / Wallet provider
-						</label>
-						<input
-							className="form-input"
-							type="text"
-							value={wallet.bank}
-							onChange={(e) => updateWallet("bank", e.target.value)}
-							placeholder="e.g. Meezan Bank, EasyPaisa"
-							required
-						/>
-					</div>
-
-					{/* Account Title & Account/IBAN Number in 2 columns */}
-					<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-						<div className="form-field" style={{ marginBottom: 0 }}>
-							<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
-								Account title
-							</label>
-							<input
-								className="form-input"
-								type="text"
-								value={wallet.title}
-								onChange={(e) => updateWallet("title", e.target.value)}
-								placeholder="e.g. Tehseen Riaz"
-								required
-							/>
-						</div>
-
-						<div className="form-field" style={{ marginBottom: 0 }}>
-							<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
-								IBAN / Account number
-							</label>
-							<input
-								className="form-input"
-								type="text"
-								value={wallet.number}
-								onChange={(e) => updateWallet("number", e.target.value)}
-								required
-								style={{
-									textTransform:
-										wallet.number.startsWith("PK") || wallet.number.startsWith("pk") ? "uppercase" : "none",
-								}}
-								placeholder="e.g. 03xxxxxxxx"
-							/>
-						</div>
-					</div>
-					<span style={{ fontSize: "11.5px", color: "var(--color-text-muted)" }}>
-						Supports 24-character IBAN, 8–20 digit bank account number, or mobile wallet (e.g. 03XXXXXXXXX).
-					</span>
-				</div>
-
-				{/* 2. Contact Number & Google Maps Link */}
-				<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-					<div className="form-field" style={{ marginBottom: 0 }}>
-						<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
-							Contact number
-						</label>
-						<input
-							className="form-input"
-							type="text"
-							value={form.contactNumber}
-							onChange={(e) => updateForm("contactNumber", e.target.value)}
-							placeholder="03XXXXXXXXX"
-							required
-						/>
-					</div>
-
-					<div className="form-field" style={{ marginBottom: 0 }}>
-						<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
-							Google Maps link <span style={{ fontWeight: 400, color: "var(--color-text-muted)" }}>(optional)</span>
-						</label>
-						<input
-							className="form-input"
-							type="url"
-							value={form.googleMapsLink}
-							onChange={(e) => updateForm("googleMapsLink", e.target.value)}
-						/>
-					</div>
-				</div>
-
-				{/* 3. Cash on Pickup */}
-				<div
-					style={{
-						border: "1px solid var(--border-light)",
-						borderRadius: "var(--radius-md)",
-						padding: "14px 18px",
-						background: "var(--color-bg)",
-						display: "flex",
-						flexDirection: "column",
-						gap: "12px",
-					}}
-				>
-					<div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-						<div style={{ flex: 1 }}>
-							<div style={{ fontSize: "13px", fontWeight: 600, color: "var(--color-text-primary)" }}>
-								Cash on Pickup
+					{/* Contact Number & Google Maps Link */}
+					<ProfileCard Icon={PhoneIcon} title="Contact" description="How customers reach and find your shop.">
+						<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+							<div className="form-field" style={{ marginBottom: 0 }}>
+								<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
+									Contact number
+								</label>
+								<input
+									className="form-input"
+									type="text"
+									value={form.contactNumber}
+									onChange={(e) => updateForm("contactNumber", e.target.value)}
+									placeholder="03XXXXXXXXX"
+									required
+								/>
 							</div>
-							<div style={{ fontSize: "12px", color: "var(--color-text-secondary)", marginTop: "2px" }}>
-								Let customers pay in cash when they collect their prints.
+
+							<div className="form-field" style={{ marginBottom: 0 }}>
+								<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
+									Google Maps link <span style={{ fontWeight: 400, color: "var(--color-text-muted)" }}>(optional)</span>
+								</label>
+								<input
+									className="form-input"
+									type="url"
+									value={form.googleMapsLink}
+									onChange={(e) => updateForm("googleMapsLink", e.target.value)}
+								/>
 							</div>
 						</div>
-						<button
-							type="button"
-							className={`toggle ${cod.enabled ? "toggle--on" : ""}`}
-							onClick={() => setCod((prev) => ({ ...prev, enabled: !prev.enabled }))}
-							role="switch"
-							aria-checked={cod.enabled}
-							aria-label="Cash on Pickup"
-						>
-							<span className="toggle__knob" />
-						</button>
-					</div>
+					</ProfileCard>
+				</div>
 
-					{cod.enabled && (
-						<div className="form-field" style={{ marginBottom: 0 }}>
-							<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
-								Maximum order amount for Cash on Pickup (Rs)
-							</label>
-							<input
-								className="form-input"
-								type="number"
-								min="1"
-								max={COD_LIMIT_MAX}
-								step="1"
-								value={cod.limit}
-								onChange={(e) => setCod((prev) => ({ ...prev, limit: e.target.value }))}
-								placeholder="e.g. 500"
-								style={{ maxWidth: "240px" }}
-							/>
-							<span style={{ fontSize: "11.5px", color: "var(--color-text-muted)", marginTop: "4px", display: "block" }}>
-								Orders above this amount must be paid online. Up to Rs {COD_LIMIT_MAX.toLocaleString()}.
+				{/* Two columns when there's room: wallet and cash on pickup left, the tall timings card right. */}
+				<div className="profile-form__grid">
+					<div className="profile-form__col">
+						{/* 1. Wallet */}
+						<ProfileCard
+							Icon={WalletIcon}
+							title="Wallet"
+							description="Provide your bank account / mobile wallet where your earnings will be deposited."
+						>
+							{/* Bank / Provider Name */}
+							<div className="form-field" style={{ marginBottom: 0 }}>
+								<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
+									Bank / Wallet provider
+								</label>
+								<input
+									className="form-input"
+									type="text"
+									value={wallet.bank}
+									onChange={(e) => updateWallet("bank", e.target.value)}
+									placeholder="e.g. Meezan Bank, EasyPaisa"
+									required
+								/>
+							</div>
+
+							{/* Account Title & Account/IBAN Number in 2 columns */}
+							<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+								<div className="form-field" style={{ marginBottom: 0 }}>
+									<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
+										Account title
+									</label>
+									<input
+										className="form-input"
+										type="text"
+										value={wallet.title}
+										onChange={(e) => updateWallet("title", e.target.value)}
+										placeholder="e.g. Tehseen Riaz"
+										required
+									/>
+								</div>
+
+								<div className="form-field" style={{ marginBottom: 0 }}>
+									<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
+										IBAN / Account number
+									</label>
+									<input
+										className="form-input"
+										type="text"
+										value={wallet.number}
+										onChange={(e) => updateWallet("number", e.target.value)}
+										required
+										style={{
+											textTransform:
+												wallet.number.startsWith("PK") || wallet.number.startsWith("pk") ? "uppercase" : "none",
+										}}
+										placeholder="e.g. 03xxxxxxxx"
+									/>
+								</div>
+							</div>
+							<span style={{ fontSize: "11.5px", color: "var(--color-text-muted)" }}>
+								Supports 24-character IBAN, 8–20 digit bank account number, or mobile wallet (e.g. 03XXXXXXXXX).
 							</span>
-						</div>
-					)}
-				</div>
+						</ProfileCard>
 
-				{/* 4. Timings */}
-				<div>
-					<div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "8px" }}>
-						<label className="form-label" style={{ fontWeight: 600, fontSize: "13px", margin: 0 }}>
-							Timings
-						</label>
-						<button
-							type="button"
-							onClick={copyMondayToAll}
-							style={{
-								background: "none",
-								border: "none",
-								color: "var(--color-primary)",
-								fontSize: "12.5px",
-								fontWeight: 600,
-								cursor: "pointer",
-								textDecoration: "none",
-								padding: 0,
-							}}
-							onMouseEnter={(e) => {
-								e.currentTarget.style.textDecoration = "underline";
-							}}
-							onMouseLeave={(e) => {
-								e.currentTarget.style.textDecoration = "none";
-							}}
+						{/* 2. Cash on Pickup */}
+						<ProfileCard
+							Icon={CashIcon}
+							title="Cash on Pickup"
+							description="Let customers pay in cash when they collect their prints."
+							action={
+								<button
+									type="button"
+									className={`toggle ${cod.enabled ? "toggle--on" : ""}`}
+									onClick={() => setCod((prev) => ({ ...prev, enabled: !prev.enabled }))}
+									role="switch"
+									aria-checked={cod.enabled}
+									aria-label="Cash on Pickup"
+								>
+									<span className="toggle__knob" />
+								</button>
+							}
 						>
-							Apply Monday to all days
-						</button>
+							{cod.enabled && (
+								<div className="form-field" style={{ marginBottom: 0 }}>
+									<label className="form-label" style={{ fontWeight: 600, fontSize: "13px" }}>
+										Maximum order amount for Cash on Pickup (Rs)
+									</label>
+									<input
+										className="form-input"
+										type="number"
+										min="1"
+										max={COD_LIMIT_MAX}
+										step="1"
+										value={cod.limit}
+										onChange={(e) => setCod((prev) => ({ ...prev, limit: e.target.value }))}
+										placeholder="e.g. 500"
+										style={{ maxWidth: "240px" }}
+									/>
+									<span style={{ fontSize: "11.5px", color: "var(--color-text-muted)", marginTop: "4px", display: "block" }}>
+										Orders above this amount must be paid online. Up to Rs {COD_LIMIT_MAX.toLocaleString()}.
+									</span>
+								</div>
+							)}
+						</ProfileCard>
+
 					</div>
 
-					{/* 7-day timing list */}
-					<div
-						style={{
-							borderRadius: "var(--radius-md)",
-							border: "1px solid var(--border-light)",
-							overflow: "hidden",
-							background: "var(--color-bg)",
-						}}
-					>
-						{timings.map((day, index) => (
+					<div className="profile-form__col">
+						{/* 3. Timings */}
+						<ProfileCard
+							Icon={ClockIcon}
+							title="Timings"
+							description="When your shop is open to take orders."
+							action={
+								<button type="button" className="profile-card__link" onClick={copyMondayToAll}>
+									Apply Monday to all days
+								</button>
+							}
+						>
+							{/* 7-day timing list */}
 							<div
-								key={DAYS[index]}
 								style={{
-									display: "flex",
-									alignItems: "center",
-									flexWrap: "wrap",
-									gap: "12px",
-									padding: "10px 14px",
-									borderBottom: index < 6 ? "1px solid var(--border-light)" : "none",
-									background: day.closed ? "var(--color-bg-card)" : "transparent",
-									opacity: day.closed ? 0.7 : 1,
-									transition: "opacity var(--transition-fast)",
+									borderRadius: "var(--radius-md)",
+									border: "1px solid var(--border-light)",
+									overflow: "hidden",
 								}}
 							>
-								{/* Day Name */}
-								<span
-									style={{
-										width: "90px",
-										fontSize: "13px",
-										fontWeight: 600,
-										color: day.closed ? "var(--color-text-muted)" : "var(--color-text-primary)",
-									}}
-								>
-									{DAYS[index]}
-								</span>
+								{timings.map((day, index) => (
+									<div
+										key={DAYS[index]}
+										style={{
+											display: "flex",
+											alignItems: "center",
+											flexWrap: "wrap",
+											gap: "12px",
+											padding: "10px 14px",
+											borderBottom: index < 6 ? "1px solid var(--border-light)" : "none",
+											background: day.closed ? "var(--color-bg-card)" : "transparent",
+											opacity: day.closed ? 0.7 : 1,
+											transition: "opacity var(--transition-fast)",
+										}}
+									>
+										{/* Day Name */}
+										<span
+											style={{
+												width: "90px",
+												fontSize: "13px",
+												fontWeight: 600,
+												color: day.closed ? "var(--color-text-muted)" : "var(--color-text-primary)",
+											}}
+										>
+											{DAYS[index]}
+										</span>
 
-								{/* Open Time */}
-								<input
-									type="time"
-									className="form-input"
-									value={day.open}
-									disabled={day.closed}
-									onChange={(e) => updateTiming(index, { open: e.target.value })}
-									style={{
-										width: "120px",
-										padding: "6px 10px",
-										fontSize: "13px",
-										background: "var(--color-bg-card)",
-										cursor: day.closed ? "not-allowed" : "text",
-									}}
-								/>
+										{/* Open Time */}
+										<input
+											type="time"
+											className="form-input"
+											value={day.open}
+											disabled={day.closed}
+											onChange={(e) => updateTiming(index, { open: e.target.value })}
+											style={{
+												width: "120px",
+												padding: "6px 10px",
+												fontSize: "13px",
+												background: "var(--color-bg-card)",
+												cursor: day.closed ? "not-allowed" : "text",
+											}}
+										/>
 
-								<span style={{ fontSize: "12.5px", color: "var(--color-text-muted)" }}>to</span>
+										<span style={{ fontSize: "12.5px", color: "var(--color-text-muted)" }}>to</span>
 
-								{/* Close Time */}
-								<input
-									type="time"
-									className="form-input"
-									value={day.close}
-									disabled={day.closed}
-									onChange={(e) => updateTiming(index, { close: e.target.value })}
-									style={{
-										width: "120px",
-										padding: "6px 10px",
-										fontSize: "13px",
-										background: "var(--color-bg-card)",
-										cursor: day.closed ? "not-allowed" : "text",
-									}}
-								/>
+										{/* Close Time */}
+										<input
+											type="time"
+											className="form-input"
+											value={day.close}
+											disabled={day.closed}
+											onChange={(e) => updateTiming(index, { close: e.target.value })}
+											style={{
+												width: "120px",
+												padding: "6px 10px",
+												fontSize: "13px",
+												background: "var(--color-bg-card)",
+												cursor: day.closed ? "not-allowed" : "text",
+											}}
+										/>
 
-								{/* Closed Checkbox */}
-								<label
-									style={{
-										marginLeft: "auto",
-										display: "flex",
-										alignItems: "center",
-										gap: "6px",
-										fontSize: "12.5px",
-										color: "var(--color-text-muted)",
-										cursor: "pointer",
-										userSelect: "none",
-									}}
-								>
-									<input
-										type="checkbox"
-										checked={day.closed}
-										onChange={(e) => updateTiming(index, { closed: e.target.checked })}
-										style={{ cursor: "pointer" }}
-									/>
-									Closed
-								</label>
+										{/* Closed Checkbox */}
+										<label
+											style={{
+												marginLeft: "auto",
+												display: "flex",
+												alignItems: "center",
+												gap: "6px",
+												fontSize: "12.5px",
+												color: "var(--color-text-muted)",
+												cursor: "pointer",
+												userSelect: "none",
+											}}
+										>
+											<input
+												type="checkbox"
+												checked={day.closed}
+												onChange={(e) => updateTiming(index, { closed: e.target.checked })}
+												style={{ cursor: "pointer" }}
+											/>
+											Closed
+										</label>
+									</div>
+								))}
 							</div>
-						))}
+						</ProfileCard>
 					</div>
 				</div>
 
-				{/* 5. Action Bar & Submit */}
-				<div style={{ marginTop: "10px", display: "flex", flexDirection: "column", gap: "8px" }}>
-					{!embedded && (
-					<button
-						type="submit"
-						className="btn-gradient"
-						disabled={!canSubmit}
+				{/* Embedded hosts own the submit button, so say what's blocking it here. */}
+				{embedded && !saving && validationError && (
+					<div
 						style={{
-							width: "100%",
-							padding: "12px",
-							fontSize: "14px",
+							textAlign: "center",
+							fontSize: "12px",
 							fontWeight: 600,
-							borderRadius: "var(--radius-md)",
-							cursor: canSubmit ? "pointer" : "not-allowed",
-							opacity: canSubmit ? 1 : 0.5,
-							transition: "all var(--transition-fast)",
+							color: "var(--color-accent)",
+							display: "flex",
+							alignItems: "center",
+							justifyContent: "center",
+							gap: "6px",
+							padding: "4px 8px",
 						}}
 					>
-						{saving ? "Saving changes…" : "Save changes"}
-					</button>
-					)}
-
-					{/* Red hint text describing what is wrong when button is disabled */}
-					{!saving && validationError && (
-						<div
-							style={{
-								textAlign: "center",
-								fontSize: "12px",
-								fontWeight: 600,
-								color: "var(--color-accent)",
-								display: "flex",
-								alignItems: "center",
-								justifyContent: "center",
-								gap: "6px",
-								padding: "4px 8px",
-							}}
-						>
-							<span>⚠️</span>
-							<span>{validationError}</span>
-						</div>
-					)}
-				</div>
+						<span>⚠️</span>
+						<span>{validationError}</span>
+					</div>
+				)}
 			</form>
+
+			{!embedded && isDirty && (
+				<div
+					key={nudge}
+					className={`unsaved-bar ${nudge ? "unsaved-bar--nudge" : ""}`}
+					role="status"
+				>
+					<span className="unsaved-bar__icon"><AlertIcon /></span>
+					<span className="unsaved-bar__text">You have unsaved changes</span>
+					<button type="button" className="btn-outline" onClick={discardChanges} disabled={saving}>
+						Discard
+					</button>
+					<button type="submit" form={formId} className="btn-gradient" disabled={!canSubmit}>
+						{saving ? "Saving…" : "Save changes"}
+					</button>
+				</div>
+			)}
+
+			{!embedded && (
+				<UnsavedChangesGuard when={isDirty} onBlocked={handleBlocked} onDiscard={discardChanges} />
+			)}
 
 			{confirmHighCod && createPortal(
 				<ConfirmDialog

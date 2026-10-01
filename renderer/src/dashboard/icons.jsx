@@ -312,3 +312,68 @@ export const LockGlyph = () => (
 		<path d="M7 11V7a5 5 0 0 1 10 0v4" />
 	</svg>
 );
+
+// Services tree glyphs: paper size → color mode → sidedness.
+
+export const SvcPaperGlyph = () => (
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+		<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+		<polyline points="14 2 14 8 20 8" />
+	</svg>
+);
+
+// Page split half solid / half empty.
+export const SvcBwGlyph = () => (
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+		<path d="M12 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5z" fill="currentColor" />
+		<rect x="5" y="3" width="14" height="18" rx="2" />
+	</svg>
+);
+
+// Page with rainbow stripes; the stripe colors are fixed on purpose.
+export const SvcColorGlyph = () => (
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+		<rect x="5" y="3" width="14" height="18" rx="2" />
+		<line x1="8.5" y1="8" x2="15.5" y2="8" stroke="#ef4444" />
+		<line x1="8.5" y1="11" x2="15.5" y2="11" stroke="#f59e0b" />
+		<line x1="8.5" y1="14" x2="15.5" y2="14" stroke="#22c55e" />
+		<line x1="8.5" y1="17" x2="15.5" y2="17" stroke="#3b82f6" />
+	</svg>
+);
+
+export const SvcSingleGlyph = () => (
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+		<rect x="6" y="3" width="12" height="18" rx="2" />
+	</svg>
+);
+
+// Two pages, the back one peeking out top-right.
+export const SvcDoubleGlyph = () => (
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+		<path d="M9 6V4a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2h-2" />
+		<rect x="4" y="6" width="12" height="16" rx="2" />
+	</svg>
+);
+
+// Shop profile section glyphs.
+
+export const PhoneIcon = () => (
+	<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+		<path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z" />
+	</svg>
+);
+
+export const CashIcon = () => (
+	<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+		<rect x="2" y="6" width="20" height="12" rx="2" />
+		<circle cx="12" cy="12" r="2.5" />
+		<path d="M6 12h.01M18 12h.01" />
+	</svg>
+);
+
+export const ClockIcon = () => (
+	<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+		<circle cx="12" cy="12" r="9" />
+		<polyline points="12 7 12 12 15 14" />
+	</svg>
+);

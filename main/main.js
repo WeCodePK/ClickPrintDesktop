@@ -5,7 +5,7 @@ const { loadPersistedAuth, getAuth } = require('./state');
 const { startOfflineWatcher } = require('./printers');
 const { initLoginItem, startedHidden } = require('./startup');
 const { initUpdater } = require('./updater');
-const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell } = require('electron');
 
 // The app lives in the tray and keeps printing while its window is hidden, so a
 // second launch must hand off to the running instance rather than start a rival
@@ -129,6 +129,14 @@ function createWindow(startHidden) {
 		window.hide();
 	});
 	window.on("closed", () => window = null);
+
+	// Links that open a new window (target="_blank", e.g. the shop's location on
+	// Google Maps) go to the default browser; the app never spawns a bare window.
+	window.webContents.setWindowOpenHandler(({ url }) => {
+		if (/^https:\/\//i.test(url)) shell.openExternal(url);
+		return { action: "deny" };
+	});
+
 	window.once("ready-to-show", () => {
 		// A login launch loads the renderer (so the print engine and its UI state
 		// are warm) but never flashes a window — the operator opens it from the tray.

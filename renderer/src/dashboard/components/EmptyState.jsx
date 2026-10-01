@@ -37,7 +37,34 @@ const HistoryArt = () => (
 	</svg>
 );
 
-const ART = { tray: TrayArt, "all-clear": AllClearArt, search: SearchArt, history: HistoryArt };
+// A printer with a blank sheet — no printers registered yet.
+const PrinterArt = () => (
+	<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+		<path d="M20 24V10h24v14" />
+		<rect x="10" y="24" width="44" height="20" rx="4" />
+		<path d="M20 38h24v16H20z" />
+		<path d="M26 44h12M26 49h8" opacity="0.5" />
+		<circle cx="46" cy="31" r="1.5" fill="currentColor" stroke="none" />
+	</svg>
+);
+
+// A price tag — no priced print services yet.
+const ServiceArt = () => (
+	<svg viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+		<path d="M34 10H52a2 2 0 0 1 2 2v18a4 4 0 0 1-1.2 2.8L32.8 52.8a4 4 0 0 1-5.6 0L11.2 36.8a4 4 0 0 1 0-5.6L31.2 11.2A4 4 0 0 1 34 10Z" />
+		<circle cx="44" cy="20" r="3" />
+		<path d="M24 34l8 8M29 29l8 8" opacity="0.5" />
+	</svg>
+);
+
+const ART = {
+	tray: TrayArt,
+	"all-clear": AllClearArt,
+	search: SearchArt,
+	history: HistoryArt,
+	printer: PrinterArt,
+	service: ServiceArt,
+};
 
 function EmptyState({ art = "tray", title, hint }) {
 	const Art = ART[art] || TrayArt;

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import ListColumn from "../components/ListColumn";
 import WelcomePane from "../components/WelcomePane";
+import EmptyState from "../components/EmptyState";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { useAutoPrint } from "../AutoPrintContext";
 import { PrinterIcon, CheckIcon, TrashIcon } from "../icons";
@@ -276,7 +277,7 @@ function PrintersTab() {
 		<>
 			<ListColumn
 				title="Printers"
-				count={entries.length}
+				bodyClassName="db-list__entries--column"
 				action={
 					<button className="db-list__add" onClick={openAdd} title="Add printers">
 						+ Add
@@ -293,12 +294,7 @@ function PrintersTab() {
 						<p>{error}</p>
 					</div>
 				) : entries.length === 0 ? (
-					<div className="db-coming-soon">
-						<p>No printers added</p>
-						<p style={{ fontSize: "11.5px", color: "var(--color-text-secondary)" }}>
-							Use “+ Add” to register a connected printer.
-						</p>
-					</div>
+					<EmptyState art="printer" title="No printers added" />
 				) : (
 					entries.map((entry) => (
 						<div
@@ -323,7 +319,7 @@ function PrintersTab() {
 									{entry.isDisabled
 										? "Disabled"
 										: entry.online
-											? `Ready${entry.local?.isDefault ? " · System default" : ""}`
+											? "Ready"
 											: "Offline"}
 								</span>
 							</div>
@@ -352,7 +348,7 @@ function PrintersTab() {
 									) : (
 										<>
 											<PrinterIcon />
-											Print Test Doc
+											Print Test Page
 										</>
 									)}
 								</button>
@@ -362,7 +358,7 @@ function PrintersTab() {
 									onClick={() => setConfirmDelete(selectedEntry)}
 								>
 									<TrashIcon />
-									Remove Printer
+									Delete
 								</button>
 								<button
 									type="button"
@@ -376,6 +372,51 @@ function PrintersTab() {
 									<span className="toggle__knob" />
 								</button>
 							</div>
+						</div>
+
+						{/* Status messages, above the details. */}
+						<div className="printer-alerts">
+							{selectedEntry.isDisabled && (
+								<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(134, 150, 160, 0.08)", borderColor: "var(--border-light)" }}>
+									<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-text-secondary)" }}>
+										This printer is disabled.
+									</span>
+								</div>
+							)}
+
+							{!selectedEntry.online && (
+								<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(255, 87, 10, 0.08)", borderColor: "var(--color-accent)" }}>
+									<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-accent)" }}>
+										This printer is offline. Turn it on or reconnect it to print.
+									</span>
+								</div>
+							)}
+
+							{testState[selectedEntry.name] === "testing" && (
+								<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(0, 230, 173, 0.05)", borderColor: "var(--color-primary)" }}>
+									<div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+										<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)" }} />
+										<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-primary)" }}>
+											Sending test page to {selectedEntry.local?.displayName || selectedEntry.name}…
+										</span>
+									</div>
+								</div>
+							)}
+							{testState[selectedEntry.name] === "success" && (
+								<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(0, 230, 173, 0.1)", borderColor: "var(--color-primary)" }}>
+									<div style={{ display: "flex", alignItems: "center", gap: "10px", color: "var(--color-primary)" }}>
+										<CheckIcon />
+										<span style={{ fontSize: "13px", fontWeight: "600" }}>Test page sent! Check the paper output.</span>
+									</div>
+								</div>
+							)}
+							{testState[selectedEntry.name] === "error" && (
+								<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(255, 87, 10, 0.08)", borderColor: "var(--color-accent)" }}>
+									<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-accent)" }}>
+										Couldn't print the test page. Check that the printer is on and connected.
+									</span>
+								</div>
+							)}
 						</div>
 
 						{/* What Windows reports about this printer. */}
@@ -403,50 +444,6 @@ function PrintersTab() {
 										</dl>
 									</section>
 								))}
-							</div>
-						)}
-
-						{/* Status messages */}
-
-						{selectedEntry.isDisabled && (
-							<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(255, 87, 10, 0.08)", borderColor: "var(--color-accent)" }}>
-								<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-accent)" }}>
-									This printer is disabled. Use the toggle beside its name to enable it again.
-								</span>
-							</div>
-						)}
-
-						{!selectedEntry.online && (
-							<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(255, 87, 10, 0.08)", borderColor: "var(--color-accent)" }}>
-								<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-accent)" }}>
-									This printer is offline. Turn it on or reconnect it to print.
-								</span>
-							</div>
-						)}
-
-						{testState[selectedEntry.name] === "testing" && (
-							<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(0, 230, 173, 0.05)", borderColor: "var(--color-primary)" }}>
-								<div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-									<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)" }} />
-									<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-primary)" }}>
-										Sending test page to {selectedEntry.local?.displayName || selectedEntry.name}…
-									</span>
-								</div>
-							</div>
-						)}
-						{testState[selectedEntry.name] === "success" && (
-							<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(0, 230, 173, 0.1)", borderColor: "var(--color-primary)" }}>
-								<div style={{ display: "flex", alignItems: "center", gap: "10px", color: "var(--color-primary)" }}>
-									<CheckIcon />
-									<span style={{ fontSize: "13px", fontWeight: "600" }}>Test page sent! Check the paper output.</span>
-								</div>
-							</div>
-						)}
-						{testState[selectedEntry.name] === "error" && (
-							<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(255, 87, 10, 0.08)", borderColor: "var(--color-accent)" }}>
-								<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-accent)" }}>
-									Couldn't print the test page. Check that the printer is on and connected.
-								</span>
 							</div>
 						)}
 
@@ -495,9 +492,7 @@ function PrintersTab() {
 														? "Not installed on this PC"
 														: p.offline
 															? "Offline"
-															: p.isDefault
-																? "System default"
-																: "Ready"}
+															: "Ready"}
 												</span>
 											</span>
 										</button>
@@ -515,7 +510,7 @@ function PrintersTab() {
 								onClick={confirmAdd}
 								disabled={addSaving || !pickChanged}
 							>
-								{addSaving ? "Saving…" : "Save"}
+								{addSaving ? "Adding…" : "Add"}
 							</button>
 						</div>
 					</div>
@@ -525,9 +520,9 @@ function PrintersTab() {
 
 			{confirmDelete && createPortal(
 				<ConfirmDialog
-					title="Remove this printer?"
-					message={`Remove “${confirmDelete.local?.displayName || confirmDelete.name}” from this shop? You can add it back later.`}
-					confirmLabel="Remove"
+					title={`Delete ${confirmDelete.local?.displayName || confirmDelete.name}?`}
+					message="Are you sure you want to delete this printer?"
+					confirmLabel="Delete"
 					cancelLabel="Cancel"
 					danger
 					onConfirm={() => handleDelete(confirmDelete)}
