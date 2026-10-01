@@ -2012,6 +2012,16 @@ body,
 	object-fit: contain;
 }
 
+.receipt-channel__logo--whatsapp {
+	display: inline-flex;
+	color: #25d366;
+}
+
+.receipt-channel__logo--whatsapp svg {
+	width: 100%;
+	height: 100%;
+}
+
 /* Where the job came in from (WhatsApp, the app, walk-in). */
 .receipt-channel {
 	display: inline-flex;

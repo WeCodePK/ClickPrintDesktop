@@ -42,6 +42,7 @@ function slimJob(job) {
 		// The id is all the proof tile needs; null (attached but unresolved) is kept.
 		paymentProofFile: proof && typeof proof === "object" ? { _id: proof._id } : proof,
 		createdBy: by && typeof by === "object" ? { _id: by._id, name: by.name, number: by.number } : by,
+		customer: job.customer && { name: job.customer.name, number: job.customer.number },
 		files: (job.files || []).map((entry) => ({
 			file: entry.file
 				? {

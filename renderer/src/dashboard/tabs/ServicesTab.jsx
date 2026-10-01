@@ -212,20 +212,6 @@ function ServicesTab() {
 							</div>
 							<div className="db-entry__price-actions">
 								<span className="db-entry__price">Rs. {service.rate}</span>
-								<button
-									type="button"
-									className={`toggle ${service.isDisabled ? "" : "toggle--on"}`}
-									role="switch"
-									aria-checked={!service.isDisabled}
-									title={service.isDisabled ? "Enable this service" : "Disable this service"}
-									disabled={togglingId === service._id}
-									onClick={(e) => {
-										e.stopPropagation();
-										handleToggleDisabled(service);
-									}}
-								>
-									<span className="toggle__knob" />
-								</button>
 							</div>
 						</div>
 					))
@@ -235,7 +221,22 @@ function ServicesTab() {
 			<div className="db-detail">
 				{selectedService ? (
 					<div className="db-detail__view">
-						<h3 className="db-detail__title">Service Configuration</h3>
+						<div className="db-detail__titlebar">
+							<h3 className="db-detail__title">{selectedService.name || serviceLabel(selectedService.keys)}</h3>
+							<div className="db-detail__titlebar-actions">
+								<button
+									type="button"
+									className={`toggle ${selectedService.isDisabled ? "" : "toggle--on"}`}
+									role="switch"
+									aria-checked={!selectedService.isDisabled}
+									title={selectedService.isDisabled ? "Enable this service" : "Disable this service"}
+									disabled={togglingId === selectedService._id}
+									onClick={() => handleToggleDisabled(selectedService)}
+								>
+									<span className="toggle__knob" />
+								</button>
+							</div>
+						</div>
 
 						<div className="printer-status-card">
 							<div className="printer-grid">
@@ -319,7 +320,7 @@ function ServicesTab() {
 						{selectedService.isDisabled && (
 							<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(255, 87, 10, 0.08)", borderColor: "var(--color-accent)" }}>
 								<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-accent)" }}>
-									This service is disabled. Use its toggle in the list to enable it again.
+									This service is disabled. Use the toggle above to enable it again.
 								</span>
 							</div>
 						)}

@@ -11,6 +11,7 @@ import {
 	AlertFilledIcon,
 	WalletIcon,
 	CommentIcon,
+	WhatsAppIcon,
 } from "../icons";
 import { useFiles } from "../FilesContext";
 import { getJobTotalPages, getBlockedReason, channelLabel, channelKey, statusTone } from "../jobUtils";
@@ -550,6 +551,11 @@ function JobDetailCard({ entry, headerActions, onOpenFile, onChangeFileSettings,
 							{channelLabel(entry.channel)}
 							{channelKey(entry.channel) === "app" && (
 								<img className="receipt-channel__logo" src="icon.png" alt="ClickPrint app" />
+							)}
+							{channelKey(entry.channel) === "whatsapp" && (
+								<span className="receipt-channel__logo receipt-channel__logo--whatsapp" aria-hidden="true">
+									<WhatsAppIcon />
+								</span>
 							)}
 						</span>
 					</div>

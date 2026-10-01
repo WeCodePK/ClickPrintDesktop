@@ -121,9 +121,11 @@ export function transformJob(job) {
 		// Full detail consumed by JobDetailCard.
 		files,
 		cost: job.cost || null,
-		// The jobs endpoint populates createdBy as { name, number }; the history
-		// endpoint returns just an id string, which we can't display.
-		createdBy: job.createdBy && typeof job.createdBy === "object" ? job.createdBy : null,
+		// Who the job is for, as { name, number }. Jobs the shop made for a
+		// WhatsApp customer carry them in `customer` — their createdBy is the
+		// shop's own account. Otherwise the jobs endpoint populates createdBy; the
+		// history endpoint returns just an id string, which we can't display.
+		createdBy: job.customer || (job.createdBy && typeof job.createdBy === "object" ? job.createdBy : null),
 		statusHistory: job.statusHistory || [],
 	};
 }

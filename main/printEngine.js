@@ -101,7 +101,8 @@ function jobDiskFileIds(job) {
 // Human label for toast copy, led by the job's 4-digit code — what the operator
 // and the customer both identify a job by.
 function jobWho(job) {
-	const name = job?.createdBy?.name || job?.createdBy?.number;
+	const who = job?.customer || job?.createdBy;
+	const name = who?.name || who?.number;
 	const code = job?.code != null && job.code !== "" ? `#${job.code}` : null;
 	if (code) return name ? `${code} · ${name}` : code;
 	return name || `#${String(job?._id || "").slice(-6)}`;
