@@ -189,7 +189,7 @@ function PrintJobsTab() {
 	// Manual print handlers delegate to the shared context (used only when
 	// auto-print is off — the buttons are disabled when it's on).
 	const handlePrintFile = (file, deviceName) => printFileManual(selectedEntry, file, deviceName);
-	const handlePrintAll = (deviceName) => printAllManual(selectedEntry, deviceName);
+	const handlePrintAll = () => printAllManual(selectedEntry);
 
 	// Human label for a job's queue position — or, for a job automated printing
 	// never takes, what the operator has to do before printing it by hand.
@@ -347,7 +347,7 @@ function PrintJobsTab() {
 				{selectedEntry ? (() => {
 					const jobPrinted = printedFiles[selectedEntry._id] || {};
 					const jobStates = fileStates[selectedEntry._id] || {};
-					const remainingCount = (selectedEntry.files || []).filter((f) => !jobPrinted[f.fileId]).length;
+					const remainingCount = (selectedEntry.files || []).filter((f) => !jobPrinted[f.docId]).length;
 					// Destructive actions stay available while documents merely wait in
 					// the queue (declining drops them) — only an in-flight print locks them.
 					const actionsLocked = jobPrintingNow(selectedEntry._id);
@@ -365,7 +365,7 @@ function PrintJobsTab() {
 						<JobDetailCard
 							entry={selectedEntry}
 							onOpenFile={handleOpenFile}
-							onChangeFileSettings={(file, patch) => setFileSettings(selectedEntry._id, file.fileId, patch)}
+							onChangeFileSettings={(file, patch) => setFileSettings(selectedEntry._id, file.docId, patch)}
 							onPrintFile={handlePrintFile}
 							printedFileIds={jobPrinted}
 							fileStates={jobStates}
@@ -436,11 +436,12 @@ function PrintJobsTab() {
 											// (empty when idle). During the
 											// post-stop drain (in-flight doc finishing, nothing queued)
 											// it's Print-all again — clicking it simply resumes.
+											// No printer dropdown here: each document routes to its
+											// own service's printer — overriding is per document.
 											<PrintSplitButton
 												size="md"
 												onPrint={handlePrintAll}
-												onOpen={() => refreshPrinters(true)}
-												printers={printers}
+												showMenu={false}
 												disabled={remainingCount === 0}
 												showInfo
 												info={hasQueued || actionsLocked ? "Printing…" : undefined}
@@ -452,7 +453,7 @@ function PrintJobsTab() {
 												label={
 													<>
 														<PrinterIcon />
-														Print ({remainingCount} {remainingCount === 1 ? "doc" : "docs"})
+														Print
 													</>
 												}
 											/>

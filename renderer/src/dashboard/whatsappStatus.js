@@ -10,9 +10,11 @@ export const WA_STATUS = {
 	open:         { label: "Connected",        tone: "ok",   busy: false },
 };
 
-const EMPTY = { state: "idle", qr: null, me: null, error: null };
+const EMPTY = { state: "idle", qr: null, me: null, error: null, enabled: true, flow: "menu" };
 
-// Live WhatsApp link snapshot { state, qr, me, error } from the main process.
+// Live WhatsApp link snapshot { state, qr, me, error, enabled, flow } from the
+// main process; `enabled` is false while message handling is paused, and `flow`
+// is the ordering flow ("menu" | "chat") for new orders.
 // Seeded on mount (replay for a late mount) and kept live via the push channel.
 export function useWhatsAppStatus() {
 	const [status, setStatus] = useState(EMPTY);

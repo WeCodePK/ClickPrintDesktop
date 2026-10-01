@@ -35,14 +35,12 @@ function loadEngine({ jobs = [], storeData = {} } = {}) {
 				onIdentified?.(`spool-${state.printed.length}`);
 				return Promise.resolve({ outcome: "printed" });
 			},
-			savePdfCopy: async () => {},
 			deleteJobFiles: async () => {},
 			deleteJobProof: async () => {},
 			addStatusListener: (fn) => state.statusListeners.push(fn),
 		},
 		spooler: { abortAll: () => {} },
 		printerRegistry: {
-			isPdfDevice: () => false,
 			rebuild: () => {},
 			reconcile: async () => {},
 			hasAutoRoute: () => true,

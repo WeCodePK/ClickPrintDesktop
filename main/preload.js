@@ -22,9 +22,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		return () => ipcRenderer.removeListener("sse:status", handler);
 	},
 
-	// WhatsApp linked device — status snapshot { state, qr, me, error } where
-	// state is "idle" | "connecting" | "qr" | "open" | "reconnecting" |
-	// "logged_out". `qr` is a PNG data URL while waiting for a scan.
+	// WhatsApp linked device — status snapshot { state, qr, me, error, enabled,
+	// flow } where state is "idle" | "connecting" | "qr" | "open" | "reconnecting"
+	// | "logged_out". `qr` is a PNG data URL while waiting for a scan; `enabled` is
+	// false while message handling is paused; `flow` is "menu" or "chat".
 	getWhatsAppStatus: () => ipcRenderer.invoke("whatsapp:get-status"),
 	onWhatsAppStatus: (callback) => {
 		const handler = (_event, status) => callback(status);
@@ -33,6 +34,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	},
 	connectWhatsApp: () => ipcRenderer.invoke("whatsapp:connect"),
 	unlinkWhatsApp: () => ipcRenderer.invoke("whatsapp:unlink"),
+	setWhatsAppEnabled: (enabled) => ipcRenderer.invoke("whatsapp:set-enabled", enabled),
+	// "menu" | "chat": the ordering flow for this shop's new WhatsApp orders.
+	setWhatsAppFlow: (flow) => ipcRenderer.invoke("whatsapp:set-flow", flow),
 
 	// Jobs — the list is pushed authoritatively from main; operator actions are
 	// commands handled entirely by the main-process print engine.
@@ -63,11 +67,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.on("engine:toast", handler);
 		return () => ipcRenderer.removeListener("engine:toast", handler);
 	},
-	printJob: (jobId, deviceName) => ipcRenderer.invoke("engine:print-job", jobId, deviceName),
-	printJobFile: (jobId, fileId, deviceName) => ipcRenderer.invoke("engine:print-file", jobId, fileId, deviceName),
+	printJob: (jobId) => ipcRenderer.invoke("engine:print-job", jobId),
+	printJobFile: (jobId, docId, deviceName) => ipcRenderer.invoke("engine:print-file", jobId, docId, deviceName),
 	// Override a document's print settings (partial), or pass null to restore the
 	// customer's. Resolves { success, message? }.
-	setFileSettings: (jobId, fileId, patch) => ipcRenderer.invoke("engine:set-file-settings", jobId, fileId, patch),
+	setFileSettings: (jobId, docId, patch) => ipcRenderer.invoke("engine:set-file-settings", jobId, docId, patch),
 	// Stop a running print-all batch (queued docs withdrawn; in-flight doc finishes).
 	stopPrintJob: (jobId) => ipcRenderer.invoke("engine:stop-job", jobId),
 	setQueuePaused: (paused) => ipcRenderer.invoke("engine:set-paused", paused),
@@ -121,6 +125,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	// All installed printers (online + offline) for the add-printer picker
 	listAllPrinters: (force) => ipcRenderer.invoke("printers:list-all", force),
 	testPrinter: (deviceName) => ipcRenderer.invoke("printers:test", deviceName),
+	getPrinterDetails: (name) => ipcRenderer.invoke("printers:details", name),
 
 	// Shop
 	updateShop: (shopId, data) => ipcRenderer.invoke("shop:update", shopId, data),

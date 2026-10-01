@@ -1,10 +1,10 @@
 const path = require("path");
 const { code } = require("./whatsappSettings");
 
-// Pure helpers for documents customers send over WhatsApp: finding the document
-// in a Baileys message, naming it the way the backend's tus upload accepts, and
-// turning an upload failure into a reply the customer can act on. No Electron or
-// Baileys imports, so these run under plain `node --test`.
+// Pure helpers for files customers send over WhatsApp — documents and photos:
+// finding the file in a Baileys message, naming it the way the backend's tus
+// upload accepts, and turning an upload failure into a reply the customer can
+// act on. No Electron or Baileys imports, so these run under plain `node --test`.
 
 // The backend refuses anything larger (413).
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -37,19 +37,45 @@ const EXTENSIONS = {
 
 const MAX_NAME_LENGTH = 255;
 
-// The documentMessage inside a Baileys message, or null. A document sent with a
-// caption arrives wrapped in documentWithCaptionMessage.
-function documentOf(msg) {
-	const content = msg?.message;
-	return content?.documentMessage ?? content?.documentWithCaptionMessage?.message?.documentMessage ?? null;
+// protobuf Longs, numbers, or (after JSON) strings → a number, or null.
+function toNumber(value) {
+	if (value == null) return null;
+	const n = typeof value.toNumber === "function" ? value.toNumber() : Number(value);
+	return Number.isFinite(n) ? n : null;
 }
 
-// fileLength arrives as a protobuf Long, a number, or (after JSON) a string.
-function documentSize(doc) {
-	const length = doc?.fileLength;
-	if (length == null) return null;
-	const size = typeof length.toNumber === "function" ? length.toNumber() : Number(length);
-	return Number.isFinite(size) ? size : null;
+const pad = (n) => String(n).padStart(2, "0");
+
+// Photos carry no filename, so they're named the way WhatsApp saves them — by
+// when they were sent (local time) — plus the end of the message id, since an
+// album arrives within the same second: "IMG-20261001-143012-3A5F".
+function photoName(msg) {
+	const seconds = toNumber(msg?.messageTimestamp);
+	const d = seconds ? new Date(seconds * 1000) : new Date();
+	const date = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+	const time = `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+	const id = String(msg?.key?.id || "").slice(-4).toUpperCase();
+	return `IMG-${date}-${time}${id ? `-${id}` : ""}`;
+}
+
+// The file in a Baileys message: { kind: "document" | "photo", fileName,
+// mimetype, fileLength }, or null for anything else. A document sent with a
+// caption arrives wrapped in documentWithCaptionMessage; stickers and view-once
+// photos aren't print jobs and are left alone.
+function mediaOf(msg) {
+	const content = msg?.message;
+	const doc = content?.documentMessage ?? content?.documentWithCaptionMessage?.message?.documentMessage;
+	if (doc) return { kind: "document", fileName: doc.fileName, mimetype: doc.mimetype, fileLength: doc.fileLength };
+	const image = content?.imageMessage;
+	if (image && !image.viewOnce) {
+		return { kind: "photo", fileName: photoName(msg), mimetype: image.mimetype || "image/jpeg", fileLength: image.fileLength };
+	}
+	return null;
+}
+
+// The file's size in bytes, when WhatsApp reports it.
+function mediaSize(media) {
+	return toNumber(media?.fileLength);
 }
 
 // A filename the backend accepts: none of / \ < > : " | ? * or control
@@ -95,4 +121,4 @@ function uploadErrorReply(fileName, { status, message } = {}) {
 	}
 }
 
-module.exports = { MAX_UPLOAD_BYTES, documentOf, documentSize, uploadName, uploadErrorReply };
+module.exports = { MAX_UPLOAD_BYTES, mediaOf, mediaSize, photoName, uploadName, uploadErrorReply };

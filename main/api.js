@@ -580,6 +580,27 @@ function deleteDraft(draftId) {
 	return draftRequest("DELETE", `/${draftId}`, null, "draft");
 }
 
+// ── Inference (WhatsApp AI chat flow) ─────────────────────────────────────────
+
+// Asks the backend to read a customer's message about their order. `body` is
+// { shop, message, files, history }; the backend owns the prompt. Resolves the
+// usual shape plus `status`, with `data` the result { intent, language,
+// changes, question }. The backend gives up on the model after 20s.
+async function inferSettings(body) {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/webhooks/inference`, {
+			method: "POST",
+			headers: authHeaders(),
+			body: JSON.stringify(body),
+			signal: AbortSignal.timeout(25000),
+		});
+		return { ...unwrap(await readJson(response), "result"), status: response.status };
+	} catch (error) {
+		console.error("[API] inferSettings error:", error.message);
+		return apiError(error);
+	}
+}
+
 let _sse = null;
 let _sseTimer = null;
 let _onJobsUpdate = null;
@@ -780,4 +801,5 @@ module.exports = {
 	checkDraft,
 	submitDraft,
 	deleteDraft,
+	inferSettings,
 };

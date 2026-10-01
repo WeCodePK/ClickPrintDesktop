@@ -22,8 +22,6 @@ import JobCode from "./JobCode";
 
 function blockedTitle(reason) {
 	switch (reason) {
-		case "pdf-cancel":
-			return "The PDF save dialog was cancelled — this document has not printed";
 		case "route":
 			return "No service printer matches this document's settings";
 		default:
@@ -209,8 +207,8 @@ function FilePreview({ file, index, onOpen, onPrint, onChangeSettings, showPrevi
 									Printing…
 								</button>
 							) : blocked ? (
-								// Blocked for ANY reason — failed print, cancelled PDF save, or no
-								// matching service printer. Accent orange, never the go-green, and
+								// Blocked for ANY reason — failed print, or no matching
+								// service printer. Accent orange, never the go-green, and
 								// always with the dropdown so the operator can force a printer
 								// (the only way out of a routing gap without editing Services).
 								<PrintSplitButton
@@ -292,12 +290,7 @@ function FilePreview({ file, index, onOpen, onPrint, onChangeSettings, showPrevi
 			{blocked && (
 				<div className="file-preview__failure">
 					<span>
-						{blockedReason === "pdf-cancel" ? (
-							<>
-								Saving document ({index + 1}) as a PDF was cancelled — nothing was printed
-								and the job has not been changed. Press <strong>Retry</strong> to try again.
-							</>
-						) : blockedReason === "route" ? (
+						{blockedReason === "route" ? (
 							<>
 								No service printer matches document ({index + 1})'s settings, so it can't be
 								printed automatically. Assign a printer to a matching service in the Services
@@ -624,19 +617,21 @@ function JobDetailCard({ entry, headerActions, onOpenFile, onChangeFileSettings,
 					<div className="detail-tile__body--scroll file-preview-list">
 						{files.map((file, index) => (
 							<FilePreview
-								key={file.fileId || index}
+								// docId, not fileId: a job can list the same file more than
+								// once, and a duplicate key makes React pile up stale copies.
+								key={file.docId}
 								file={file}
 								index={index}
 								onOpen={onOpenFile}
 								onChangeSettings={onChangeFileSettings}
 								onPrint={onPrintFile}
 								showPreview={showPreview}
-								printed={!!printedFileIds?.[file.fileId]}
+								printed={!!printedFileIds?.[file.docId]}
 								onMarkJobFailed={onMarkJobFailed}
 								printers={printers}
 								onPrinterMenuOpen={onPrinterMenuOpen}
 								autoPrintOn={autoPrintOn}
-								state={fileStates?.[file.fileId]}
+								state={fileStates?.[file.docId]}
 							/>
 						))}
 					</div>

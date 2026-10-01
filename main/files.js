@@ -1,7 +1,7 @@
 const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
-const { app, protocol, shell, BrowserWindow, dialog } = require("electron");
+const { app, protocol, shell, BrowserWindow } = require("electron");
 const { fetchFileBuffer } = require("./api");
 const spooler = require("./spooler");
 
@@ -672,40 +672,6 @@ function buildPrintOptions(settings = {}) {
 	return options;
 }
 
-// Prompts the operator for where to save a PDF, defaulting to Downloads with the
-// given suggested name. Returns the chosen path, or null if they cancelled.
-// Shared by "printing" to Microsoft Print to PDF and the printer test page.
-async function askSavePdfPath(suggestedName) {
-	const base = String(suggestedName || "document")
-		.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_") // strip characters Windows filenames forbid
-		.replace(/\.pdf$/i, "")
-		.trim() || "document";
-	const parent = BrowserWindow.getFocusedWindow();
-	const options = {
-		title: "Save PDF",
-		defaultPath: path.join(app.getPath("downloads"), `${base}.pdf`),
-		filters: [{ name: "PDF", extensions: ["pdf"] }],
-	};
-	const { canceled, filePath } = parent
-		? await dialog.showSaveDialog(parent, options)
-		: await dialog.showSaveDialog(options);
-	return canceled || !filePath ? null : filePath;
-}
-
-// "Printing" to Microsoft Print to PDF just re-renders a PDF we already have on
-// disk — and its webContents.print callback lies (success=false even when the
-// file saved fine), which used to need an 8s/30s forgiveness timer. So that
-// pseudo-printer is never actually printed to: the operator picks a save
-// location and the cached PDF is copied there. The distinct error message on
-// cancel lets the renderer show PDF-specific guidance instead of a generic
-// print-failed message.
-async function savePdfCopy(fileId, fileName) {
-	const dest = await askSavePdfPath(fileName || fileId);
-	if (!dest) throw new Error("pdf save cancelled");
-	await fsp.copyFile(localPath(fileId), dest);
-	console.log(`[Files] saved PDF copy ${fileId} → ${dest}`);
-}
-
 // Loads a cached PDF into an offscreen window, ready to print. The caller owns
 // the returned window and must destroy it.
 async function openPrintWindow(fileId) {
@@ -763,7 +729,6 @@ function startPrint(win, fileId, options) {
 // `onIdentified(spoolId)` fires as soon as our Windows spool job id is pinned
 // down (or null if it never appeared) — the engine releases that printer's
 // spool lock there, letting the next document start spooling behind ours.
-// Callers must not pass a Print-to-PDF pseudo-printer here (use savePdfCopy).
 async function printAndVerify(fileId, settings, deviceName, fileName, { onPhase, onIdentified } = {}) {
 	let win;
 	try {
@@ -843,7 +808,6 @@ function registerFileProtocol() {
 
 module.exports = {
 	FILE_SCHEME,
-	askSavePdfPath,
 	syncJobFiles,
 	getStatusMap,
 	setNotifier,
@@ -853,7 +817,6 @@ module.exports = {
 	openFile,
 	getRawFileInfo,
 	buildPrintOptions,
-	savePdfCopy,
 	printAndVerify,
 	deleteJobFiles,
 	openJobFolder,

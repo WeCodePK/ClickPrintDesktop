@@ -10,7 +10,7 @@ import { StoreIcon, PrinterIcon, WalletIcon, WhatsAppIcon } from "../icons";
 const SECTIONS = [
 	{
 		id: "profile",
-		label: "Shop Profile",
+		label: "Profile",
 		description: "Manage shop details, location & timings",
 		Icon: StoreIcon,
 	},

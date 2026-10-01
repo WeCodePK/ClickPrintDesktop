@@ -64,6 +64,9 @@ function ServicesTab() {
 
 	const selectedService = services.find((s) => s._id === selectedId) || null;
 
+	// Cheapest first in the list column.
+	const sortedServices = [...services].sort((a, b) => (Number(a.rate) || 0) - (Number(b.rate) || 0));
+
 	// The selected service's printers resolved against the registered list. Kept
 	// even when the printer can't be resolved (deleted / not populated) so the
 	// row count stays honest.
@@ -184,7 +187,7 @@ function ServicesTab() {
 						</p>
 					</div>
 				) : (
-					services.map((service) => (
+					sortedServices.map((service) => (
 						<div
 							key={service._id}
 							className={`db-entry ${selectedId === service._id ? "db-entry--active" : ""} ${service.isDisabled ? "db-entry--offline" : ""}`}

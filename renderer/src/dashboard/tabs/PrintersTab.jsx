@@ -4,10 +4,69 @@ import ListColumn from "../components/ListColumn";
 import WelcomePane from "../components/WelcomePane";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { useAutoPrint } from "../AutoPrintContext";
-import { PrinterIcon, PaperIcon, CheckIcon, TrashIcon } from "../icons";
+import { PrinterIcon, CheckIcon, TrashIcon } from "../icons";
 
 // How often the tab re-checks which registered printers are still reachable.
 const ONLINE_POLL_MS = 15000;
+
+const DUPLEX_LABELS = {
+	OneSided: "Single-sided",
+	TwoSidedLongEdge: "Double-sided (long edge)",
+	TwoSidedShortEdge: "Double-sided (short edge)",
+};
+
+// The detail page's groups of rows, from the app's own state and what Windows
+// reports (`d`, from printers:details). Rows without a value are left out, and
+// so is a group left with none.
+function printerFacts(entry, d) {
+	const status = entry.isDisabled ? "Disabled" : entry.online ? "Ready" : "Offline";
+	const address = d.hostAddress ? `${d.hostAddress}${d.portNumber ? `:${d.portNumber}` : ""}` : null;
+	const resolution =
+		d.horizontalResolution && d.verticalResolution ? `${d.horizontalResolution} × ${d.verticalResolution} dpi` : null;
+	const groups = [
+		{
+			title: "Status",
+			rows: [
+				["Status", status],
+				["Windows status", d.printerStatus],
+				["Jobs in queue", d.jobCount != null ? String(d.jobCount) : null],
+				["System default", d.isDefault == null ? null : d.isDefault ? "Yes" : "No"],
+			],
+		},
+		{
+			title: "Connection",
+			rows: [
+				["Connection", d.type === "Connection" ? "Network (shared printer)" : d.type],
+				["Port", d.portName],
+				["Port type", d.portDescription],
+				["Address", address],
+				["Shared as", d.shared ? d.shareName : null],
+				["Location", d.location],
+				["Comment", d.comment],
+			],
+		},
+		{
+			title: "Driver",
+			rows: [
+				["Driver", d.driverName],
+				["Manufacturer", d.driverManufacturer],
+				["Version", d.driverVersion],
+			],
+		},
+		{
+			title: "Defaults",
+			rows: [
+				["Colour", d.color == null ? null : d.color ? "Colour" : "Black & white"],
+				["Sides", DUPLEX_LABELS[d.duplexingMode] || d.duplexingMode],
+				["Paper size", d.paperSize],
+				["Resolution", resolution],
+			],
+		},
+	];
+	return groups
+		.map((g) => ({ ...g, rows: g.rows.filter(([, value]) => value != null && value !== "") }))
+		.filter((g) => g.rows.length > 0);
+}
 
 // Printers settings section: the shop's registered printers (GET /api/printers),
 // each shown with its live online/offline state. Adding opens a picker of the
@@ -75,14 +134,47 @@ function PrintersTab() {
 		return { ...p, online: !!local, local };
 	});
 	const selectedEntry = entries.find((e) => e._id === selectedId) || null;
+	const selectedName = selectedEntry?.name || null;
 
-	const registeredNames = new Set(registered.map((p) => p.name));
-	const availableChoices = addChoices.filter((p) => !registeredNames.has(p.name));
+	// What Windows reports about the selected printer: { name, data } once loaded
+	// (data null = not installed here). Keyed by name so a quick switch never
+	// shows the previous printer's details.
+	const [details, setDetails] = useState(null);
+	useEffect(() => {
+		if (!selectedName) return;
+		let active = true;
+		setDetails(null);
+		window.electronAPI
+			.getPrinterDetails(selectedName)
+			.then((result) => active && setDetails({ name: selectedName, data: result?.data ?? null }))
+			.catch((err) => {
+				console.error("[Renderer] failed to load printer details:", err);
+				if (active) setDetails({ name: selectedName, data: null });
+			});
+		return () => {
+			active = false;
+		};
+	}, [selectedName]);
+	const selectedDetails = details?.name === selectedName ? details : null;
 
-	// ── Add printer ────────────────────────────────────────────────────────────
+	// The picker lists every installed printer, plus any registered printer that
+	// isn't installed on this machine — so it can still be unticked to remove it.
+	const installedNames = new Set(addChoices.map((p) => p.name));
+	const pickChoices = [
+		...addChoices,
+		...registered
+			.filter((p) => !installedNames.has(p.name))
+			.map((p) => ({ name: p.name, displayName: p.name, notInstalled: true })),
+	];
+	const toAdd = addSelected.filter((name) => !registered.some((p) => p.name === name));
+	const toRemove = registered.filter((p) => !addSelected.includes(p.name));
+	const pickChanged = toAdd.length > 0 || toRemove.length > 0;
+
+	// ── Add / remove printers ──────────────────────────────────────────────────
 	const openAdd = async () => {
 		setAddOpen(true);
-		setAddSelected([]);
+		// Start from the shop's current printers, ticked.
+		setAddSelected(registered.map((p) => p.name));
 		setAddError(null);
 		setAddLoading(true);
 		try {
@@ -105,21 +197,30 @@ function PrintersTab() {
 	const toggleChoice = (name) =>
 		setAddSelected((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
 
+	// Ticked printers that aren't registered yet are added; registered printers
+	// that were unticked are removed.
 	const confirmAdd = async () => {
-		if (addSelected.length === 0) return;
+		if (!pickChanged) return;
 		setAddSaving(true);
 		setAddError(null);
 		try {
-			for (const name of addSelected) {
+			for (const name of toAdd) {
 				const result = await window.electronAPI.createPrinter(name);
 				if (!result?.success) throw new Error(result?.message || `Couldn't add “${name}”.`);
 			}
-			await loadRegistered();
+			for (const printer of toRemove) {
+				const result = await window.electronAPI.deletePrinter(printer._id);
+				if (!result?.success) throw new Error(result?.message || `Couldn't remove “${printer.name}”.`);
+				if (selectedId === printer._id) setSelectedId(null);
+			}
 			setAddOpen(false);
 		} catch (err) {
-			console.error("[Renderer] failed to add printer(s):", err);
-			setAddError(err.message || "Failed to add printer(s).");
+			console.error("[Renderer] failed to save printers:", err);
+			setAddError(err.message || "Failed to save printers.");
 		} finally {
+			// Reflect whatever did go through, even after a partial failure.
+			await loadRegistered();
+			if (toRemove.length) refreshPrinterState(); // services may have routed to these
 			setAddSaving(false);
 		}
 	};
@@ -177,7 +278,7 @@ function PrintersTab() {
 				title="Printers"
 				count={entries.length}
 				action={
-					<button className="db-list__add" onClick={openAdd} title="Add a printer">
+					<button className="db-list__add" onClick={openAdd} title="Add printers">
 						+ Add
 					</button>
 				}
@@ -226,22 +327,6 @@ function PrintersTab() {
 											: "Offline"}
 								</span>
 							</div>
-							<div className="db-entry__price-actions">
-								<button
-									type="button"
-									className={`toggle ${entry.isDisabled ? "" : "toggle--on"}`}
-									role="switch"
-									aria-checked={!entry.isDisabled}
-									title={entry.isDisabled ? "Enable this printer" : "Disable this printer"}
-									disabled={togglingId === entry._id}
-									onClick={(e) => {
-										e.stopPropagation();
-										handleToggleDisabled(entry);
-									}}
-								>
-									<span className="toggle__knob" />
-								</button>
-							</div>
 						</div>
 					))
 				)}
@@ -250,75 +335,83 @@ function PrintersTab() {
 			<div className="db-detail">
 				{selectedEntry ? (
 					<div className="db-detail__view">
-						<h3 className="db-detail__title">Printer Configuration</h3>
-
-						<div className="printer-status-card">
-							<div className="printer-grid">
-								<div className="printer-grid-item">
-									<div className="printer-grid-item-icon"><PrinterIcon /></div>
-									<div className="printer-grid-item-details">
-										<span className="printer-grid-item-label">Printer</span>
-										<span className="printer-grid-item-value">{selectedEntry.local?.displayName || selectedEntry.name}</span>
-									</div>
-								</div>
-								<div className="printer-grid-item">
-									<div className="printer-grid-item-icon"><CheckIcon /></div>
-									<div className="printer-grid-item-details">
-										<span className="printer-grid-item-label">Status</span>
-										<span className="printer-grid-item-value" style={selectedEntry.online && !selectedEntry.isDisabled ? undefined : { color: "var(--color-accent)" }}>
-											{selectedEntry.isDisabled ? "Disabled" : selectedEntry.online ? "Ready" : "Offline"}
-										</span>
-									</div>
-								</div>
-								<div className="printer-grid-item">
-									<div className="printer-grid-item-icon"><PaperIcon /></div>
-									<div className="printer-grid-item-details">
-										<span className="printer-grid-item-label">System Default</span>
-										<span className="printer-grid-item-value">{selectedEntry.local?.isDefault ? "Yes" : "No"}</span>
-									</div>
-								</div>
+						<div className="db-detail__titlebar">
+							<h3 className="db-detail__title">{selectedEntry.local?.displayName || selectedEntry.name}</h3>
+							<div className="db-detail__titlebar-actions">
+								<button
+									type="button"
+									className="btn-outline"
+									onClick={() => handleTest(selectedEntry)}
+									disabled={!selectedEntry.online || testState[selectedEntry.name] === "testing"}
+								>
+									{testState[selectedEntry.name] === "testing" ? (
+										<>
+											<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)", width: "13px", height: "13px" }} />
+											Printing…
+										</>
+									) : (
+										<>
+											<PrinterIcon />
+											Print Test Doc
+										</>
+									)}
+								</button>
+								<button
+									type="button"
+									className="btn-outline db-detail__remove"
+									onClick={() => setConfirmDelete(selectedEntry)}
+								>
+									<TrashIcon />
+									Remove Printer
+								</button>
+								<button
+									type="button"
+									className={`toggle ${selectedEntry.isDisabled ? "" : "toggle--on"}`}
+									role="switch"
+									aria-checked={!selectedEntry.isDisabled}
+									title={selectedEntry.isDisabled ? "Enable this printer" : "Disable this printer"}
+									disabled={togglingId === selectedEntry._id}
+									onClick={() => handleToggleDisabled(selectedEntry)}
+								>
+									<span className="toggle__knob" />
+								</button>
 							</div>
-							{selectedEntry.local?.description && (
-								<p style={{ fontSize: "12px", color: "var(--color-text-muted)", marginTop: "4px" }}>
-									{selectedEntry.local.description}
-								</p>
-							)}
 						</div>
 
-						<div className="action-panel">
-							<button
-								className="btn-outline"
-								onClick={() => handleTest(selectedEntry)}
-								disabled={!selectedEntry.online || testState[selectedEntry.name] === "testing"}
-							>
-								{testState[selectedEntry.name] === "testing" ? (
-									<>
-										<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)", width: "14px", height: "14px" }} />
-										Printing…
-									</>
-								) : (
-									<>
-										<PrinterIcon />
-										Print Test Doc
-									</>
-								)}
-							</button>
-							<button
-								className="btn-outline"
-								style={{ color: "var(--color-accent)", borderColor: "var(--color-accent)" }}
-								onClick={() => setConfirmDelete(selectedEntry)}
-							>
-								<TrashIcon />
-								Remove Printer
-							</button>
-						</div>
+						{/* What Windows reports about this printer. */}
+						{!selectedDetails ? (
+							<p className="printer-facts__note">
+								<span className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)", width: "14px", height: "14px" }} />
+								Reading printer details…
+							</p>
+						) : !selectedDetails.data ? (
+							<p className="printer-facts__note">
+								This printer isn't installed on this PC, so Windows has no details for it.
+							</p>
+						) : (
+							<div className="printer-facts">
+								{printerFacts(selectedEntry, selectedDetails.data).map((group) => (
+									<section key={group.title} className="printer-facts__group">
+										<h4 className="printer-facts__title">{group.title}</h4>
+										<dl className="printer-facts__list">
+											{group.rows.map(([label, value]) => (
+												<div key={label} className="printer-facts__row">
+													<dt>{label}</dt>
+													<dd>{value}</dd>
+												</div>
+											))}
+										</dl>
+									</section>
+								))}
+							</div>
+						)}
 
 						{/* Status messages */}
 
 						{selectedEntry.isDisabled && (
 							<div className="printer-status-card" style={{ gap: "10px", padding: "16px", background: "rgba(255, 87, 10, 0.08)", borderColor: "var(--color-accent)" }}>
 								<span style={{ fontSize: "13px", fontWeight: "600", color: "var(--color-accent)" }}>
-									This printer is disabled. Use its toggle in the list to enable it again.
+									This printer is disabled. Use the toggle beside its name to enable it again.
 								</span>
 							</div>
 						)}
@@ -366,10 +459,11 @@ function PrintersTab() {
 			{addOpen && createPortal(
 				<div className="modal-overlay" onClick={() => !addSaving && setAddOpen(false)}>
 					<div className="modal-card modal-card--wide" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-						<h3 className="modal-title">Add a printer</h3>
+						<h3 className="modal-title">Add printers</h3>
 						<p className="modal-message">
-						Pick the printers you want to add to this shop. Offline printers can also be added and will work once reconnected.
-					</p>
+							Pick the printers you want to add to this shop.
+						</p>
+						<div className="modal-divider" />
 
 						{addError && <div className="form-error">{addError}</div>}
 
@@ -378,17 +472,13 @@ function PrintersTab() {
 								<div className="spinner spinner--dark" />
 								<p>Finding printers…</p>
 							</div>
-						) : availableChoices.length === 0 ? (
+						) : pickChoices.length === 0 ? (
 							<div className="db-detail__empty">
-								<p>
-							{addChoices.length
-								? "All installed printers have already been added."
-								: "No printers found. Install a printer on this machine and try again."}
-								</p>
+								<p>No printers found. Install a printer on this machine and try again.</p>
 							</div>
 						) : (
 							<div className="printer-pick-list">
-								{availableChoices.map((p) => {
+								{pickChoices.map((p) => {
 									const checked = addSelected.includes(p.name);
 									return (
 										<button
@@ -400,7 +490,15 @@ function PrintersTab() {
 											<span className="printer-pick__check">{checked && <CheckIcon />}</span>
 											<span className="printer-pick__info">
 												<span className="printer-pick__name">{p.displayName}</span>
-												<span className="printer-pick__meta">{p.offline ? "Offline" : p.isDefault ? "System default" : "Ready"}</span>
+												<span className="printer-pick__meta">
+													{p.notInstalled
+														? "Not installed on this PC"
+														: p.offline
+															? "Offline"
+															: p.isDefault
+																? "System default"
+																: "Ready"}
+												</span>
 											</span>
 										</button>
 									);
@@ -415,9 +513,9 @@ function PrintersTab() {
 							<button
 								className="btn-gradient"
 								onClick={confirmAdd}
-								disabled={addSaving || addSelected.length === 0}
+								disabled={addSaving || !pickChanged}
 							>
-								{addSaving ? "Adding…" : `Confirm${addSelected.length ? ` (${addSelected.length})` : ""}`}
+								{addSaving ? "Saving…" : "Save"}
 							</button>
 						</div>
 					</div>

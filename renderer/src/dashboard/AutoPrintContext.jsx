@@ -45,8 +45,6 @@ function toastMessage({ kind, who, fileName }) {
 		// Automated printing hit a failure and parked the job for a human.
 		case "auto-paused-failure":
 			return `“${fileName}” failed to print — automated printing is paused for job (${who}). It needs your attention.`;
-		case "pdf-cancel":
-			return `Saving “${fileName}” (job ${who}) as PDF was cancelled. To cancel the job, use the Cancel button.`;
 		case "fail-report-error":
 			return "Couldn't mark the job as failed — please try again.";
 		// The click never got as far as queueing anything: the job couldn't be
@@ -159,7 +157,7 @@ export function AutoPrintProvider({ children }) {
 	const { autoPrint, paused, queuedJobIds, printedFiles, files: fileStates } = snapshot;
 
 	const isFilePrinted = useCallback(
-		(jobId, fileId) => !!printedFiles[jobId]?.[fileId],
+		(jobId, docId) => !!printedFiles[jobId]?.[docId],
 		[printedFiles]
 	);
 
@@ -248,11 +246,11 @@ export function AutoPrintProvider({ children }) {
 	const disableAutoPrint = useCallback(() => window.electronAPI.setAutoPrint(false), []);
 
 	const printFileManual = useCallback(
-		(job, file, deviceName) => window.electronAPI.printJobFile(job._id, file.fileId, deviceName),
+		(job, file, deviceName) => window.electronAPI.printJobFile(job._id, file.docId, deviceName),
 		[]
 	);
 	const printAllManual = useCallback(
-		(job, deviceName) => window.electronAPI.printJob(job._id, deviceName),
+		(job) => window.electronAPI.printJob(job._id),
 		[]
 	);
 	// Stop a running print-all: queued docs withdrawn, in-flight doc finishes.
@@ -261,7 +259,7 @@ export function AutoPrintProvider({ children }) {
 	// Operator overrides of a document's print settings (null restores the
 	// customer's). The engine re-pushes its snapshot with the change applied.
 	const setFileSettings = useCallback(
-		(jobId, fileId, patch) => window.electronAPI.setFileSettings(jobId, fileId, patch),
+		(jobId, docId, patch) => window.electronAPI.setFileSettings(jobId, docId, patch),
 		[]
 	);
 
@@ -294,7 +292,7 @@ export function AutoPrintProvider({ children }) {
 		disableAutoPrint,
 		printFileManual,
 		printAllManual,
-		// { [jobId]: { [fileId]: { ...changed settings } } }
+		// { [jobId]: { [docId]: { ...changed settings } } }
 		settingsOverrides: snapshot.settingsOverrides || {},
 		setFileSettings,
 		failJob,

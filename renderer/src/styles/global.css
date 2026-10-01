@@ -1860,6 +1860,59 @@ body,
 	word-break: break-word;
 }
 
+/* Detail title with a control (e.g. the enable toggle) on the far right. */
+.db-detail__titlebar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	margin-bottom: 24px;
+}
+
+.db-detail__titlebar .db-detail__title {
+	margin-bottom: 0;
+	min-width: 0;
+}
+
+/* Compact controls beside the title. Scoped selectors on purpose: `.btn-sm`
+   is declared before `.btn-outline` and loses the cascade on its own. */
+.db-detail__titlebar-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+
+.db-detail__titlebar-actions .btn-outline {
+	flex: none;
+	min-height: 32px;
+	padding: 0 12px;
+	font-size: 13px;
+	line-height: 1;
+	white-space: nowrap;
+}
+
+.db-detail__titlebar-actions .btn-outline svg {
+	width: 15px;
+	height: 15px;
+	flex: none;
+}
+
+.db-detail__titlebar-actions .toggle {
+	margin-left: 4px;
+}
+
+/* Destructive (remove) — danger red, not the accent orange. */
+.db-detail__titlebar-actions .btn-outline.db-detail__remove {
+	color: var(--color-danger);
+	border-color: color-mix(in srgb, var(--color-danger) 35%, transparent);
+}
+
+.db-detail__titlebar-actions .btn-outline.db-detail__remove:hover:not(:disabled) {
+	background: color-mix(in srgb, var(--color-danger) 8%, transparent);
+	border-color: var(--color-danger);
+}
+
 /* Sadapay receipt card for print job */
 
 
@@ -2604,10 +2657,12 @@ body,
 	padding: 14px 16px;
 }
 
+/* Stretches to the height of the settings beside it (the row aligns items to
+   stretch); the page image inside is contained, so it never distorts. */
 .file-preview__thumb {
 	flex-shrink: 0;
 	width: 150px;
-	height: 212px; /* A4 proportions (1 : 1.414) */
+	min-height: 140px; /* room for the glyph + label states */
 	display: flex;
 	flex-direction: column;
 	align-items: center;
@@ -2625,15 +2680,20 @@ body,
 	height: 52px;
 }
 
-/* When the cached PDF is ready, its rendered first page fills the thumb area. */
+/* When the cached PDF is ready, its rendered first page sits in the thumb area,
+   scaled to fit; the tinted backdrop shows around it where the shapes differ. */
 .file-preview__thumb--pdf {
+	position: relative;
 	padding: 0;
 	overflow: hidden;
-	background: #ffffff;
 	border-style: solid;
 }
 
+/* Absolutely placed so the image's own size never feeds back into the thumb's
+   height — the settings alone set it. */
 .file-preview__page {
+	position: absolute;
+	inset: 0;
 	display: block;
 	width: 100%;
 	height: 100%;
@@ -3099,6 +3159,13 @@ input.file-preview__spec-input {
 	line-height: 1.55;
 	color: var(--color-text-secondary);
 	margin-bottom: 22px;
+}
+
+/* Rule between a modal's intro text and its body. */
+.modal-divider {
+	height: 1px;
+	background: var(--border-light);
+	margin: -8px 0 18px;
 }
 
 .modal-actions {
@@ -4013,6 +4080,71 @@ input.file-preview__spec-input {
 }
 
 /* Toner indicator & Printer info cards */
+/* Printer detail page: what Windows reports, as labelled groups of rows. */
+.printer-facts {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+	gap: 16px;
+}
+
+.printer-facts__group {
+	background: var(--color-bg-card);
+	border: 1px solid var(--border-light);
+	border-radius: var(--radius-lg);
+	padding: 16px 18px;
+}
+
+.printer-facts__title {
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+	color: var(--color-text-muted);
+	margin: 0 0 10px;
+}
+
+.printer-facts__list {
+	margin: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.printer-facts__row {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 16px;
+	padding: 7px 0;
+	border-top: 1px solid var(--border-light);
+	font-size: 13px;
+}
+
+.printer-facts__row:first-child {
+	border-top: none;
+}
+
+.printer-facts__row dt {
+	color: var(--color-text-secondary);
+	flex-shrink: 0;
+}
+
+.printer-facts__row dd {
+	margin: 0;
+	font-weight: 600;
+	color: var(--color-text-primary);
+	text-align: right;
+	word-break: break-word;
+	min-width: 0;
+}
+
+.printer-facts__note {
+	font-size: 13px;
+	color: var(--color-text-muted);
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
 .printer-status-card {
 	background: var(--color-bg-card);
 	border-radius: var(--radius-lg);
@@ -6432,6 +6564,13 @@ body:has(.conn-toast) .toast-stack {
 
 .wa-settings__title svg {
 	color: var(--color-primary);
+}
+
+/* On/off switch, top right of the WhatsApp settings header. */
+.wa-handling {
+	display: flex;
+	flex-shrink: 0;
+	padding-top: 4px;
 }
 
 .wa-card {

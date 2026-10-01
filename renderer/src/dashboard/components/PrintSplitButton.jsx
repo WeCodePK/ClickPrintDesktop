@@ -4,7 +4,8 @@ import { ChevronDownIcon, StopIcon } from "../icons";
 
 // The main button prints without an explicit device — each document is routed
 // to its service's automated printer (resolved in AutoPrintContext). The
-// dropdown overrides that with a specific printer for this one print.
+// dropdown overrides that with a specific printer for this one print;
+// `showMenu={false}` leaves it out (the job-level Print routes by service only).
 //
 // While a print-all batch is running, `stopMode` turns the whole control into a
 // single Stop button (accent orange, no printer dropdown) wired to `onStop`;
@@ -23,6 +24,7 @@ function PrintSplitButton({
 	infoActive = false,
 	stopMode = false,
 	onStop = null,
+	showMenu = true,
 	// "default" = the green print action; "retry" = accent orange, used once the
 	// document has failed and this button re-attempts it.
 	tone = "default",
@@ -83,22 +85,24 @@ function PrintSplitButton({
 					<>
 						<button
 							type="button"
-							className="print-split__main"
+							className={`print-split__main ${showMenu ? "" : "print-split__main--solo"}`}
 							onClick={() => onPrint(undefined)}
 							disabled={disabled}
 						>
 							{label}
 						</button>
-						<button
-							type="button"
-							className="print-split__toggle"
-							onClick={() => (open ? setOpen(false) : openMenu())}
-							disabled={disabled || printers.length === 0}
-							aria-label="Print to a different printer"
-							title="Print to a different printer"
-						>
-							<ChevronDownIcon />
-						</button>
+						{showMenu && (
+							<button
+								type="button"
+								className="print-split__toggle"
+								onClick={() => (open ? setOpen(false) : openMenu())}
+								disabled={disabled || printers.length === 0}
+								aria-label="Print to a different printer"
+								title="Print to a different printer"
+							>
+								<ChevronDownIcon />
+							</button>
+						)}
 					</>
 				)}
 			</div>

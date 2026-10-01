@@ -16,7 +16,8 @@ const DEFAULT_SETTINGS = {
 	orientation: "portrait",
 };
 
-const MAX_COPIES = 1000;
+// The backend's limit for numberOfCopies.
+const MAX_COPIES = 100;
 
 // A filename as inline code, so WhatsApp shows it monospaced.
 function code(name) {
@@ -152,20 +153,28 @@ function parseCopies(answer) {
 
 // Page ranges: comma-separated pages (3), ranges (1-4) and open ranges (2-,
 // page 2 to the end). Spaces are ignored; "all" clears the selection. Pages past
-// the end of the document are refused when its page count is known.
+// the end of the document are refused when its page count is known. Neither the
+// backend nor the print engine understands open ranges, so they're stored with
+// the last page filled in ("2-" → "2-12"), and refused when it isn't known.
 function parsePages(answer, { numberOfPages } = {}) {
 	const text = answer.replace(/\s+/g, "").toLowerCase();
 	if (text === "all") return { value: "" };
 	const example = "Please reply like *1-3,5* or *2-*, or *all* for every page.";
 	if (!/^\d+(-\d*)?(,\d+(-\d*)?)*$/.test(text)) return { error: example };
+	const parts = [];
 	for (const part of text.split(",")) {
-		const [start, end] = part.split("-").map((n) => (n === "" ? null : Number(n)));
-		if (start < 1 || (end != null && end < start)) return { error: `"${part}" isn't a valid page range. ${example}` };
-		if (numberOfPages && Math.max(start, end ?? start) > numberOfPages) {
+		const [start, rawEnd] = part.split("-");
+		const from = Number(start);
+		const open = rawEnd === "";
+		if (open && !numberOfPages) return { error: `Please give the last page too, like *${from}-10*.` };
+		const to = open ? numberOfPages : rawEnd === undefined ? from : Number(rawEnd);
+		if (from < 1 || to < from) return { error: `"${part}" isn't a valid page range. ${example}` };
+		if (numberOfPages && to > numberOfPages) {
 			return { error: `This file only has ${plural(numberOfPages, "page")}.` };
 		}
+		parts.push(from === to ? String(from) : `${from}-${to}`);
 	}
-	return { value: text };
+	return { value: parts.join(",") };
 }
 
 // "(3 pages · file 2 of 2)" for a file of the order, or "" when there's
@@ -232,7 +241,9 @@ function fileSummary(file) {
 
 module.exports = {
 	DEFAULT_SETTINGS,
+	MAX_COPIES,
 	SETTINGS,
+	autoDuplex,
 	code,
 	num,
 	settingByKey,

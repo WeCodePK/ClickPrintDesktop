@@ -2,6 +2,22 @@ import { useState } from "react";
 import { WhatsAppIcon, TrashIcon } from "../../icons";
 import { useWhatsAppStatus, formatWhatsAppId } from "../../whatsappStatus";
 import ConfirmDialog from "../ConfirmDialog";
+import { Segmented } from "../Segmented";
+
+// The WhatsApp ordering flows a shop can pick between (see main/whatsapp.js's
+// FLOWS). Removing a flow later: drop its entry here too.
+const FLOW_OPTIONS = [
+	{
+		value: "menu",
+		label: "Numbered menu",
+		caption: "Customers change each file's settings by replying with numbers from a menu, then confirm twice.",
+	},
+	{
+		value: "chat",
+		label: "AI chat",
+		caption: "Customers say how to print in their own words, in English or Urdu, and confirm once after seeing the total.",
+	},
+];
 
 // Turns what the operator typed into a contact id, or an error message.
 // Accepts a phone number in any common format ("+92 300-1234567") or a full
@@ -132,6 +148,39 @@ function ConnectionCard() {
 	);
 }
 
+// How customers place orders over WhatsApp: the numbered menu or the AI chat.
+function ConversationStyleCard() {
+	const { status } = useWhatsAppStatus();
+	const [saving, setSaving] = useState(false);
+	const flow = FLOW_OPTIONS.some((o) => o.value === status.flow) ? status.flow : "menu";
+	const selected = FLOW_OPTIONS.find((o) => o.value === flow);
+
+	const choose = async (value) => {
+		if (value === flow || saving) return;
+		setSaving(true);
+		try {
+			await window.electronAPI.setWhatsAppFlow(value);
+		} finally {
+			setSaving(false);
+		}
+	};
+
+	return (
+		<section className="wa-card">
+			<div className="wa-card__head">
+				<div>
+					<h4 className="wa-card__title">Conversation style</h4>
+					<p className="wa-card__sub">
+						How customers tell you their print settings. Orders already in progress keep their style.
+					</p>
+				</div>
+			</div>
+			<Segmented options={FLOW_OPTIONS} value={flow} onChange={choose} />
+			<p className="wa-card__sub">{selected.caption}</p>
+		</section>
+	);
+}
+
 function ExcludedContactsCard() {
 	const { contacts, add, remove } = useExcludedContacts();
 	const [number, setNumber] = useState("");
@@ -214,8 +263,24 @@ function ExcludedContactsCard() {
 	);
 }
 
-// Settings → WhatsApp: link the shop's account and manage excluded contacts.
+// Settings → WhatsApp: link the shop's account, pause message handling, and
+// manage excluded contacts.
 function WhatsAppSettings() {
+	const { status } = useWhatsAppStatus();
+	const [saving, setSaving] = useState(false);
+	const enabled = status.enabled !== false;
+
+	// Pausing keeps the link: messages still arrive in WhatsApp, ClickPrint just
+	// ignores them until this is switched back on.
+	const toggle = async () => {
+		setSaving(true);
+		try {
+			await window.electronAPI.setWhatsAppEnabled(!enabled);
+		} finally {
+			setSaving(false);
+		}
+	};
+
 	return (
 		<div className="db-detail__view wa-settings">
 			<div className="settings-panel__header">
@@ -228,9 +293,24 @@ function WhatsAppSettings() {
 						Link your shop's WhatsApp so that ClickPrint can process print jobs automatically.
 					</p>
 				</div>
+				<div className="wa-handling">
+					<button
+						type="button"
+						className={`toggle ${enabled ? "toggle--on" : ""}`}
+						onClick={toggle}
+						disabled={saving}
+						role="switch"
+						aria-checked={enabled}
+						aria-label="Handle WhatsApp messages"
+						title={enabled ? "Pause WhatsApp message handling" : "Resume WhatsApp message handling"}
+					>
+						<span className="toggle__knob" />
+					</button>
+				</div>
 			</div>
 
 			<ConnectionCard />
+			<ConversationStyleCard />
 			<ExcludedContactsCard />
 		</div>
 	);

@@ -24,10 +24,6 @@ const spooler = require("./spooler");
 // remember to clean up after every terminal outcome.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function isPdfDevice(name) {
-	return /print to pdf/i.test(name || "");
-}
-
 // device -> { docs: [{taskId, jobId, fileId, fileName, spoolId, state, at}], foreign }
 const _queues = new Map();
 
@@ -187,7 +183,7 @@ let _reconciling = false;
 
 async function reconcile() {
 	if (_reconciling) return;
-	const devices = [..._queues.keys()].filter((d) => !isPdfDevice(d));
+	const devices = [..._queues.keys()];
 	if (devices.length === 0) return;
 
 	_reconciling = true;
@@ -255,7 +251,7 @@ function leastLoaded(devices) {
 
 // Picks the printer a document should go to.
 //   • overrideDevice — the operator chose one explicitly from the dropdown;
-//     honour it as long as it's reachable (PDF pseudo-printers always are).
+//     honour it as long as it's reachable.
 //   • otherwise      — match the document to its service and load-balance across
 //     that service's eligible printers.
 //   • exclude        — devices already tried for this document (a retry prefers
@@ -263,7 +259,7 @@ function leastLoaded(devices) {
 // Returns { device, reason }: reason is a wait code when no printer is usable.
 function choosePrinter(settings, { mode = "manual", overrideDevice = null, exclude = [] } = {}) {
 	if (overrideDevice) {
-		if (isPdfDevice(overrideDevice) || _online.has(overrideDevice)) {
+		if (_online.has(overrideDevice)) {
 			return { device: overrideDevice, reason: null };
 		}
 		return { device: null, reason: "no-online-printer" };
@@ -274,15 +270,12 @@ function choosePrinter(settings, { mode = "manual", overrideDevice = null, exclu
 
 	const configured = service.devices.filter((d) => {
 		if (d.isDisabled) return false;
-		// Print-to-PDF is eligible for automated printing like any other printer the
-		// operator marked useAuto. Note it prints by asking for a save location
-		// (files.savePdfCopy), so an unattended queue will wait on that dialog.
 		if (mode === "auto" && !d.useAuto) return false;
 		return true;
 	});
 	if (configured.length === 0) return { device: null, reason: "route" };
 
-	const reachable = configured.filter((d) => _online.has(d.name) || isPdfDevice(d.name)).map((d) => d.name);
+	const reachable = configured.filter((d) => _online.has(d.name)).map((d) => d.name);
 	if (reachable.length === 0) return { device: null, reason: "no-online-printer" };
 
 	const skip = new Set(exclude);
@@ -339,7 +332,7 @@ function getDeviceLoads() {
 }
 
 // True when at least one enabled service has an automated, enabled printer
-// registered — Print-to-PDF included. Gates the auto-print toggle; deliberately
+// registered. Gates the auto-print toggle; deliberately
 // ignores online-ness so a briefly powered-off printer doesn't disable the
 // feature.
 function hasAutoRoute() {
@@ -354,7 +347,6 @@ function reset() {
 }
 
 module.exports = {
-	isPdfDevice,
 	matchesService,
 	findService,
 	rebuild,

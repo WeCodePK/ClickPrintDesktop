@@ -1,6 +1,5 @@
 const { BrowserWindow } = require("electron");
 const { execFile } = require("child_process");
-const fsp = require("fs/promises");
 
 // Win32 PRINTER_STATUS_OFFLINE flag — set when the printer is unreachable.
 const PRINTER_STATUS_OFFLINE = 0x80;
@@ -97,7 +96,7 @@ function _isOffline(printer) {
 }
 
 // Lists every currently-ONLINE printer installed on this machine, virtual ones
-// (XPS / OneNote / Fax / Print to PDF …) included — the operator decides which to
+// (XPS / OneNote / Fax …) included — the operator decides which to
 // register for the shop. Offline printers are excluded so callers can treat this
 // as "what's reachable right now". The printer enumeration is always live; the
 // offline map is served from cache (refreshed in the background), except on the
@@ -175,9 +174,7 @@ const TEST_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
 
 // Prints a self-contained test page to the given printer (silently, directly).
 // Resolves once spooled; a flaky/missing completion callback is assumed-spooled
-// after a grace period so the renderer never hangs. Microsoft Print to PDF is
-// never printed to (its callback is unreliable) — the page is rendered with
-// printToPDF and saved wherever the operator picks instead.
+// after a grace period so the renderer never hangs.
 async function printTestPage(deviceName) {
 	const win = new BrowserWindow({ show: false });
 	try {
@@ -186,16 +183,6 @@ async function printTestPage(deviceName) {
 			.replace("__DEVICE__", deviceName || "the default printer");
 		await win.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
 		await new Promise((r) => setTimeout(r, 200));
-
-		if (/print to pdf/i.test(deviceName || "")) {
-			const { askSavePdfPath } = require("./files");
-			const data = await win.webContents.printToPDF({ printBackground: true });
-			const dest = await askSavePdfPath("ClickPrint Test Page");
-			if (!dest) throw new Error("pdf save cancelled");
-			await fsp.writeFile(dest, data);
-			console.log(`[Printers] test page saved → ${dest}`);
-			return;
-		}
 
 		await new Promise((resolve, reject) => {
 			let settled = false;
@@ -225,4 +212,75 @@ async function printTestPage(deviceName) {
 	}
 }
 
-module.exports = { listPrinters, listAllPrinters, printTestPage, startOfflineWatcher };
+// ── Printer details ─────────────────────────────────────────────────────────
+// Everything Windows reports about one printer, for the Printers tab's detail
+// page: the printer itself (Get-Printer), its port, driver, default print
+// configuration, and resolution / default / offline flags from WMI. The name
+// reaches PowerShell through an environment variable, never the script text, so
+// no printer name can break out of the query. Enums are stringified so the JSON
+// carries "Normal" / "OneSided" rather than numbers.
+const DETAILS_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+$n = $env:CLICKPRINT_PRINTER
+$p = Get-Printer -Name $n
+$c = $null; try { $c = Get-PrintConfiguration -PrinterName $n } catch {}
+$port = $null; try { $port = Get-PrinterPort -Name $p.PortName } catch {}
+$d = $null; try { $d = Get-PrinterDriver -Name $p.DriverName } catch {}
+$w = Get-CimInstance Win32_Printer | Where-Object { $_.Name -eq $n } | Select-Object -First 1
+$ver = $null
+if ($d -and $d.DriverVersion) {
+	$v = [uint64]$d.DriverVersion
+	$ver = '{0}.{1}.{2}.{3}' -f (($v -shr 48) -band 0xffff), (($v -shr 32) -band 0xffff), (($v -shr 16) -band 0xffff), ($v -band 0xffff)
+}
+[pscustomobject]@{
+	name = $p.Name
+	type = [string]$p.Type
+	printerStatus = [string]$p.PrinterStatus
+	jobCount = $p.JobCount
+	shared = [bool]$p.Shared
+	shareName = $p.ShareName
+	location = $p.Location
+	comment = $p.Comment
+	portName = $p.PortName
+	portDescription = if ($port) { $port.Description } else { $null }
+	hostAddress = if ($port) { $port.PrinterHostAddress } else { $null }
+	portNumber = if ($port) { $port.PortNumber } else { $null }
+	driverName = $p.DriverName
+	driverManufacturer = if ($d) { $d.Manufacturer } else { $null }
+	driverVersion = $ver
+	color = if ($c) { [bool]$c.Color } else { $null }
+	duplexingMode = if ($c) { [string]$c.DuplexingMode } else { $null }
+	paperSize = if ($c) { [string]$c.PaperSize } else { $null }
+	horizontalResolution = if ($w) { $w.HorizontalResolution } else { $null }
+	verticalResolution = if ($w) { $w.VerticalResolution } else { $null }
+	isDefault = if ($w) { [bool]$w.Default } else { $null }
+} | ConvertTo-Json -Compress
+`;
+
+// Resolves the details object, or null when the printer isn't installed on this
+// machine (Get-Printer finds nothing) or the query fails.
+function getPrinterDetails(name) {
+	if (process.platform !== "win32" || !name) return Promise.resolve(null);
+	return new Promise((resolve) => {
+		execFile(
+			"powershell.exe",
+			["-NoProfile", "-NonInteractive", "-Command", DETAILS_SCRIPT],
+			{ windowsHide: true, timeout: 10000, env: { ...process.env, CLICKPRINT_PRINTER: name } },
+			(error, stdout) => {
+				if (error) {
+					console.warn(`[Printers] details for "${name}" unavailable:`, error.message.split("\n")[0]);
+					resolve(null);
+					return;
+				}
+				try {
+					resolve(JSON.parse(stdout));
+				} catch (parseError) {
+					console.error("[Printers] details parse failed:", parseError.message);
+					resolve(null);
+				}
+			}
+		);
+	});
+}
+
+module.exports = { listPrinters, listAllPrinters, printTestPage, startOfflineWatcher, getPrinterDetails };

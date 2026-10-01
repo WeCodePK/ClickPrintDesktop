@@ -30,8 +30,8 @@ const {
 	getShopId,
 } = require("./api");
 const { syncJobFiles, getStatusMap, setNotifier, openFile, getRawFileInfo, redownloadFile, ensureProof, openProof, openJobFolder } = require("./files");
-const { listPrinters, listAllPrinters, printTestPage } = require("./printers");
-const { getJobs } = require("./state");
+const { listPrinters, listAllPrinters, printTestPage, getPrinterDetails } = require("./printers");
+const { getJobs, setJobs } = require("./state");
 const historyCache = require("./historyCache");
 const engine = require("./printEngine");
 const whatsapp = require("./whatsapp");
@@ -174,6 +174,10 @@ function registerIpcHandlers(getMainWindow) {
 		const result = await fetchJobs();
 		// On initial load / reload, acknowledge new jobs and cache their files.
 		if (result.success) {
+			// The engine looks jobs up in main's copy, which the SSE stream otherwise
+			// only fills once it connects — without this, every print and settings
+			// command fails with "job not found" while the stream is down.
+			setJobs(result.data);
 			acknowledgeNewJobs(result.data);
 			syncJobFiles(result.data, handleJobFailed);
 			// Hide any jobs mid-transition to "failed" (see beginJobsSync) and apply
@@ -349,6 +353,12 @@ function registerIpcHandlers(getMainWindow) {
 		}
 	});
 
+	// What Windows reports about one printer (port, driver, configuration…);
+	// data is null when it isn't installed on this machine.
+	ipcMain.handle("printers:details", async (_event, name) => {
+		return { success: true, data: await getPrinterDetails(name) };
+	});
+
 	ipcMain.handle("printers:test", async (_event, deviceName) => {
 		console.log(`[IPC] printers:test → ${deviceName}`);
 		try {
@@ -375,26 +385,36 @@ function registerIpcHandlers(getMainWindow) {
 		return await whatsapp.unlink();
 	});
 
+	ipcMain.handle("whatsapp:set-enabled", async (_event, enabled) => {
+		console.log("[IPC] whatsapp:set-enabled", enabled);
+		return whatsapp.setEnabled(!!enabled);
+	});
+
+	ipcMain.handle("whatsapp:set-flow", async (_event, flow) => {
+		console.log("[IPC] whatsapp:set-flow", flow);
+		return whatsapp.setFlow(String(flow));
+	});
+
 	// ── Print engine (all orchestration/state lives in main) ───────────────────
 	ipcMain.handle("engine:get-state", async () => {
 		return engine.getSnapshot();
 	});
 
-	ipcMain.handle("engine:print-job", async (_event, jobId, deviceName) => {
-		console.log(`[IPC] engine:print-job → ${jobId}${deviceName ? ` (@${deviceName})` : ""}`);
-		return engine.printJob(jobId, deviceName || null);
+	ipcMain.handle("engine:print-job", async (_event, jobId) => {
+		console.log(`[IPC] engine:print-job → ${jobId}`);
+		return engine.printJob(jobId);
 	});
 
 	// The operator's change to a document's print settings; `patch === null`
 	// restores the customer's.
-	ipcMain.handle("engine:set-file-settings", async (_event, jobId, fileId, patch) => {
-		console.log(`[IPC] engine:set-file-settings → ${jobId}:${fileId}`, patch);
-		return engine.setFileSettings(jobId, fileId, patch ?? null);
+	ipcMain.handle("engine:set-file-settings", async (_event, jobId, docId, patch) => {
+		console.log(`[IPC] engine:set-file-settings → ${jobId}:${docId}`, patch);
+		return engine.setFileSettings(jobId, docId, patch ?? null);
 	});
 
-	ipcMain.handle("engine:print-file", async (_event, jobId, fileId, deviceName) => {
-		console.log(`[IPC] engine:print-file → ${jobId}:${fileId}${deviceName ? ` (@${deviceName})` : ""}`);
-		return engine.printFile(jobId, fileId, deviceName || null);
+	ipcMain.handle("engine:print-file", async (_event, jobId, docId, deviceName) => {
+		console.log(`[IPC] engine:print-file → ${jobId}:${docId}${deviceName ? ` (@${deviceName})` : ""}`);
+		return engine.printFile(jobId, docId, deviceName || null);
 	});
 
 	// Stop a running print-all batch: queued documents are withdrawn, the one

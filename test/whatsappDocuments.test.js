@@ -1,7 +1,7 @@
-// Documents customers send over WhatsApp: picking the document out of a Baileys
-// message, naming it so the backend's tus upload accepts it, and the reply sent
-// back when the upload fails. uploadFile itself runs against a minimal local tus
-// server, with Electron stubbed.
+// Files customers send over WhatsApp: picking the document or photo out of a
+// Baileys message, naming it so the backend's tus upload accepts it, and the
+// reply sent back when the upload fails. uploadFile itself runs against a
+// minimal local tus server, with Electron stubbed.
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -10,21 +10,45 @@ const path = require("node:path");
 const http = require("node:http");
 const Module = require("node:module");
 
-const { documentOf, documentSize, uploadName, uploadErrorReply } = require("../main/whatsappDocuments");
+const { mediaOf, mediaSize, photoName, uploadName, uploadErrorReply } = require("../main/whatsappDocuments");
 
 test("finds a document, with or without a caption", () => {
-	const doc = { fileName: "a.pdf" };
-	assert.equal(documentOf({ message: { documentMessage: doc } }), doc);
-	assert.equal(documentOf({ message: { documentWithCaptionMessage: { message: { documentMessage: doc } } } }), doc);
-	assert.equal(documentOf({ message: { conversation: "hi" } }), null);
-	assert.equal(documentOf({}), null);
+	const doc = { fileName: "a.pdf", mimetype: "application/pdf", fileLength: 7 };
+	const expected = { kind: "document", fileName: "a.pdf", mimetype: "application/pdf", fileLength: 7 };
+	assert.deepEqual(mediaOf({ message: { documentMessage: doc } }), expected);
+	assert.deepEqual(mediaOf({ message: { documentWithCaptionMessage: { message: { documentMessage: doc } } } }), expected);
+	assert.equal(mediaOf({ message: { conversation: "hi" } }), null);
+	assert.equal(mediaOf({ message: { stickerMessage: { mimetype: "image/webp" } } }), null);
+	assert.equal(mediaOf({}), null);
+});
+
+test("finds a photo and names it by when it was sent", () => {
+	const sent = new Date(2026, 9, 1, 14, 30, 12); // local time
+	const msg = {
+		key: { id: "3EB0C2A1F9D83A5F" },
+		messageTimestamp: sent.getTime() / 1000,
+		message: { imageMessage: { mimetype: "image/jpeg", fileLength: 1234, caption: "print this" } },
+	};
+	assert.deepEqual(mediaOf(msg), {
+		kind: "photo",
+		fileName: "IMG-20261001-143012-3A5F",
+		mimetype: "image/jpeg",
+		fileLength: 1234,
+	});
+	assert.equal(uploadName(mediaOf(msg).fileName, "image/jpeg"), "IMG-20261001-143012-3A5F.jpg");
+	assert.equal(photoName({ ...msg, messageTimestamp: { toNumber: () => sent.getTime() / 1000 } }), "IMG-20261001-143012-3A5F");
+});
+
+test("a photo without a type is taken as JPEG, and view-once photos are skipped", () => {
+	assert.equal(mediaOf({ message: { imageMessage: {} } }).mimetype, "image/jpeg");
+	assert.equal(mediaOf({ message: { imageMessage: { viewOnce: true } } }), null);
 });
 
 test("reads the size from a Long, a number or a string", () => {
-	assert.equal(documentSize({ fileLength: { low: 5, toNumber: () => 5 } }), 5);
-	assert.equal(documentSize({ fileLength: 7 }), 7);
-	assert.equal(documentSize({ fileLength: "9" }), 9);
-	assert.equal(documentSize({}), null);
+	assert.equal(mediaSize({ fileLength: { low: 5, toNumber: () => 5 } }), 5);
+	assert.equal(mediaSize({ fileLength: 7 }), 7);
+	assert.equal(mediaSize({ fileLength: "9" }), 9);
+	assert.equal(mediaSize({}), null);
 });
 
 test("names are cleaned to what the backend accepts", () => {

@@ -33,6 +33,21 @@ function transformFile(entry, index) {
 	};
 }
 
+// A job can list the same file more than once, each entry with its own
+// settings. `fileId` names the file (preview, open, download status); `docId`
+// names the entry and keys everything per document — printed state, engine
+// state, overrides, print and settings commands. Must match the engine's
+// jobFileList (main/printEngine.js): the first entry for a file keeps the bare
+// id, repeats get "<fileId>~2", "~3", …
+function assignDocIds(files) {
+	const seen = {};
+	return files.map((file) => {
+		seen[file.fileId] = (seen[file.fileId] || 0) + 1;
+		const n = seen[file.fileId];
+		return { ...file, docId: n === 1 ? file.fileId : `${file.fileId}~${n}` };
+	});
+}
+
 // A customer's number as shown in the job lists: the backend's international
 // form (e.g. "923001234567") as a local one ("03001234567"). null when there is
 // no number.
@@ -78,7 +93,7 @@ export function channelLabel(channel) {
 }
 
 export function transformJob(job) {
-	const files = (job.files || []).map(transformFile);
+	const files = assignDocIds((job.files || []).map(transformFile));
 	const totalCopies = files.reduce((sum, f) => sum + (f.settings.numberOfCopies || 1), 0);
 	const anyColor = files.some((f) => f.settings.color);
 
@@ -113,14 +128,14 @@ export function transformJob(job) {
 	};
 }
 
-// Layers the operator's setting overrides (engine snapshot, { [fileId]: {…} })
+// Layers the operator's setting overrides (engine snapshot, { [docId]: {…} })
 // onto a transformed job. Each file keeps the customer's choice in
 // `originalSettings` and lists what the operator changed in `overriddenKeys`;
 // the job's summary fields (copies, colour) are recomputed from the result.
 export function applySettingsOverrides(entry, jobOverrides) {
 	if (!jobOverrides || Object.keys(jobOverrides).length === 0) return entry;
 	const files = (entry.files || []).map((file) => {
-		const override = jobOverrides[file.fileId];
+		const override = jobOverrides[file.docId];
 		if (!override) return file;
 		// `duplexExplicit` marks a flip edge the operator chose; it's bookkeeping,
 		// not a print setting, so it's listed as changed but not merged in.
@@ -141,16 +156,44 @@ export function applySettingsOverrides(entry, jobOverrides) {
 	};
 }
 
-// Total pages physically printed across a job's files (page count × copies).
-// Returns null when no file reports a page count (older data) so callers can
-// render a placeholder.
+// How many of a document's pages its page selection ("1-3, 5") covers. Pages
+// past the end are dropped and overlapping ranges count once, matching what the
+// printer actually outputs. Blank / "all" / unparseable → every page.
+export function selectedPageCount(selection, numberOfPages) {
+	if (!selection || /all/i.test(selection)) return numberOfPages;
+	const ranges = [];
+	let parsed = false;
+	for (const part of String(selection).split(",")) {
+		const match = part.trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+		if (!match) continue;
+		parsed = true;
+		const from = parseInt(match[1], 10);
+		const to = Math.min(match[2] ? parseInt(match[2], 10) : from, numberOfPages);
+		if (from >= 1 && to >= from) ranges.push([from, to]);
+	}
+	if (!parsed) return numberOfPages;
+	ranges.sort((a, b) => a[0] - b[0]);
+	let count = 0;
+	let covered = 0; // highest page counted so far
+	for (const [from, to] of ranges) {
+		if (to <= covered) continue;
+		count += to - Math.max(from, covered + 1) + 1;
+		covered = to;
+	}
+	return count;
+}
+
+// Total pages physically printed across a job's files (selected pages ×
+// copies). Returns null when no file reports a page count (older data) so
+// callers can render a placeholder.
 export function getJobTotalPages(entry) {
 	const files = entry.files || [];
 	let total = 0;
 	let any = false;
 	for (const file of files) {
 		if (typeof file.numberOfPages === "number") {
-			total += file.numberOfPages * (file.settings?.numberOfCopies || 1);
+			const pages = selectedPageCount(file.settings?.pageSelection, file.numberOfPages);
+			total += pages * (file.settings?.numberOfCopies || 1);
 			any = true;
 		}
 	}
@@ -159,9 +202,8 @@ export function getJobTotalPages(entry) {
 
 // Why a document can't print without the operator doing something, derived from
 // the engine's per-file state. Returns null when nothing is wrong.
-//   "print"      — the print attempt failed outright.
-//   "pdf-cancel" — the operator dismissed the Print-to-PDF save dialog.
-//   "route"      — no enabled service printer matches these settings.
+//   "print" — the print attempt failed outright.
+//   "route" — no enabled service printer matches these settings.
 // Shared by the document card (which renders the warning) and AutoPrintContext
 // (which sounds the alert), so the two can never disagree about what counts as
 // a failure. Note none of these is the job-level "failed" PATCH — that is only
@@ -170,13 +212,13 @@ export function getBlockedReason(state, printed = false) {
 	if (printed) return null;
 	if (state?.status === "printing" || state?.status === "verifying") return null;
 	if (state?.status === "failed") {
-		return state?.failureReason === "pdf-cancel" ? "pdf-cancel" : "print";
+		return "print";
 	}
 	if (state?.status === "waiting" && state?.waitReason === "route") return "route";
 	return null;
 }
 
-// Every currently-blocked document in an engine snapshot, as "jobId:fileId"
+// Every currently-blocked document in an engine snapshot, as "jobId:docId"
 // keys. Comparing successive results is how AutoPrintContext spots a NEW
 // failure to alert on. A routing gap is only believed once the routing table
 // has loaded — before that every task reports "route" merely because no
@@ -185,13 +227,13 @@ export function collectBlockedKeys(snapshot) {
 	const keys = new Set();
 	const files = snapshot?.files || {};
 	for (const jobId of Object.keys(files)) {
-		const byFile = files[jobId] || {};
-		for (const fileId of Object.keys(byFile)) {
-			const printed = !!snapshot?.printedFiles?.[jobId]?.[fileId];
-			const reason = getBlockedReason(byFile[fileId], printed);
+		const byDoc = files[jobId] || {};
+		for (const docId of Object.keys(byDoc)) {
+			const printed = !!snapshot?.printedFiles?.[jobId]?.[docId];
+			const reason = getBlockedReason(byDoc[docId], printed);
 			if (!reason) continue;
 			if (reason === "route" && !snapshot?.routingLoaded) continue;
-			keys.add(`${jobId}:${fileId}`);
+			keys.add(`${jobId}:${docId}`);
 		}
 	}
 	return keys;

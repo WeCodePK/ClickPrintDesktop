@@ -19,7 +19,7 @@ const { sanitizeSettingsPatch, applySettingsPatch, effectiveSettings } = require
 // commands over IPC.
 //
 // Model:
-//  - Every printable document is a task {jobId, fileId}. Tasks live in a FIFO
+//  - Every printable document is a task {jobId, docId}. Tasks live in a FIFO
 //    list; each is matched to a service by its print settings and dispatched to
 //    the least-loaded printer of that service (printerRegistry.choosePrinter).
 //  - A printer holds a QUEUE of our documents (printerRegistry), so work is
@@ -61,25 +61,41 @@ const SETTINGS_OVERRIDES_STORE_KEY = "fileSettingsOverrides";
 // key, which silently restored the on/off state.
 const AUTO_PRINT_ARMED_KEY = "autoPrintArmed";
 
-const isPdfDevice = registry.isPdfDevice;
 
-// Normalises a raw backend job's files: [{fileId, name, settings, originalSettings}].
+// Normalises a raw backend job's files: [{docId, fileId, name, settings, originalSettings}].
 // `settings` are what the document prints with — the customer's, with any
 // operator override applied on top.
+//
+// A job can list the same file more than once, each entry with its own settings
+// (e.g. page 1 in colour, the rest in black & white). `fileId` names the file on
+// disk, shared by every entry for it; `docId` names the ENTRY and keys
+// everything per document — tasks, printed progress, overrides, UI state. The
+// first entry for a file keeps the bare file id (so progress saved before
+// repeats were supported stays valid); repeats get "<fileId>~2", "~3", …
+// renderer/src/dashboard/jobUtils.js (transformFile) derives the same ids.
 function jobFileList(job) {
 	const out = [];
+	const seen = {};
 	(job?.files || []).forEach((entry, i) => {
 		const fileId = entry.file?._id || entry.fileId;
 		if (!fileId) return;
+		seen[fileId] = (seen[fileId] || 0) + 1;
+		const docId = seen[fileId] === 1 ? fileId : `${fileId}~${seen[fileId]}`;
 		const originalSettings = entry.settings || {};
 		out.push({
+			docId,
 			fileId,
 			name: entry.file?.name || entry.name || `Document ${i + 1}`,
-			settings: effectiveSettings(originalSettings, engine.settingsOverrides[job._id]?.[fileId]),
+			settings: effectiveSettings(originalSettings, engine.settingsOverrides[job._id]?.[docId]),
 			originalSettings,
 		});
 	});
 	return out;
+}
+
+// The files a job's documents live in, each once — for disk cleanup.
+function jobDiskFileIds(job) {
+	return [...new Set(jobFileList(job).map((f) => f.fileId))];
 }
 
 // Human label for toast copy, led by the job's 4-digit code — what the operator
@@ -118,14 +134,14 @@ const engine = {
 	localPrinters: [], // online local printers [{name, displayName}]
 	routingLoaded: false,
 
-	// FIFO task list; one task per (jobId, fileId). See dispatch/schedule.
+	// FIFO task list; one task per (jobId, docId). See dispatch/schedule.
 	tasks: [],
 
-	// Persisted per-file progress: { [jobId]: { [fileId]: true } }.
+	// Persisted per-document progress: { [jobId]: { [docId]: true } }.
 	printedFiles: {},
 
 	// Persisted operator changes to documents' print settings:
-	// { [jobId]: { [fileId]: { ...only the keys that differ } } }.
+	// { [jobId]: { [docId]: { ...only the keys that differ } } }.
 	settingsOverrides: {},
 
 	// Backend-transition guards / local status overrides.
@@ -171,7 +187,7 @@ function getSnapshot() {
 	const queuedJobIds = [];
 	for (const task of engine.tasks) {
 		if (!fileMap[task.jobId]) fileMap[task.jobId] = {};
-		fileMap[task.jobId][task.fileId] = {
+		fileMap[task.jobId][task.docId] = {
 			status: task.status,
 			waitReason: task.status === "waiting" ? task.waitReason : null,
 			failureReason: task.failureReason,
@@ -251,13 +267,13 @@ function persistPrintedFiles() {
 	store.set(PRINTED_STORE_KEY, engine.printedFiles);
 }
 
-function isFilePrinted(jobId, fileId) {
-	return !!engine.printedFiles[jobId]?.[fileId];
+function isFilePrinted(jobId, docId) {
+	return !!engine.printedFiles[jobId]?.[docId];
 }
 
-function markFilePrinted(jobId, fileId) {
+function markFilePrinted(jobId, docId) {
 	if (!engine.printedFiles[jobId]) engine.printedFiles[jobId] = {};
-	engine.printedFiles[jobId][fileId] = true;
+	engine.printedFiles[jobId][docId] = true;
 	persistPrintedFiles();
 }
 
@@ -341,14 +357,14 @@ async function reconcilePrinterQueues() {
 
 // ── task helpers ─────────────────────────────────────────────────────────────
 
-function findTask(jobId, fileId) {
-	return engine.tasks.find((t) => t.jobId === jobId && t.fileId === fileId);
+function findTask(jobId, docId) {
+	return engine.tasks.find((t) => t.jobId === jobId && t.docId === docId);
 }
 
 // Adds (or refreshes) tasks for a job's unprinted files. Explicit commands
 // reset failed tasks and apply overrides; auto-enqueue leaves existing tasks
 // alone. In-flight tasks are never touched.
-function addTasks(job, mode, overrideDevice = null, { onlyFileId = null, explicit = false, sequential = false } = {}) {
+function addTasks(job, mode, overrideDevice = null, { onlyDocId = null, explicit = false, sequential = false } = {}) {
 	// Every automated enqueue comes through here, so this is where a job that
 	// needs a human is kept out of automated printing.
 	if (mode === "auto" && requiresManualPrinting(job)) {
@@ -357,10 +373,10 @@ function addTasks(job, mode, overrideDevice = null, { onlyFileId = null, explici
 	}
 	let added = false;
 	for (const file of jobFileList(job)) {
-		if (onlyFileId && file.fileId !== onlyFileId) continue;
-		if (isFilePrinted(job._id, file.fileId)) continue;
+		if (onlyDocId && file.docId !== onlyDocId) continue;
+		if (isFilePrinted(job._id, file.docId)) continue;
 
-		const existing = findTask(job._id, file.fileId);
+		const existing = findTask(job._id, file.docId);
 		if (existing) {
 			if (!explicit) continue;
 			if (existing.status === "printing" || existing.status === "verifying") continue;
@@ -383,9 +399,10 @@ function addTasks(job, mode, overrideDevice = null, { onlyFileId = null, explici
 		}
 
 		engine.tasks.push({
-			id: `${job._id}:${file.fileId}`,
+			id: `${job._id}:${file.docId}`,
 			jobId: job._id,
-			fileId: file.fileId,
+			docId: file.docId,
+			fileId: file.fileId, // the file on disk — shared by repeats of it
 			fileName: file.name,
 			settings: file.settings,
 			mode,
@@ -564,53 +581,48 @@ async function dispatch(task, device) {
 			return;
 		}
 
-		if (isPdfDevice(device)) {
-			// Manual override to Print-to-PDF: Save dialog + copy. Never auto-fails.
-			await files.savePdfCopy(task.fileId, task.fileName);
-		} else {
-			let printing = null;
-			await withSpoolLock(device, async () => {
-				// Re-check INSIDE the lock. While queued behind other documents on
-				// this printer the engine may have stopped, or the job may have been
-				// cancelled/completed remotely — spooling now would put paper out for
-				// work nobody is waiting for any more.
-				if (!engine.running || !engine.tasks.includes(task)) return;
+		let printing = null;
+		await withSpoolLock(device, async () => {
+			// Re-check INSIDE the lock. While queued behind other documents on
+			// this printer the engine may have stopped, or the job may have been
+			// cancelled/completed remotely — spooling now would put paper out for
+			// work nobody is waiting for any more.
+			if (!engine.running || !engine.tasks.includes(task)) return;
 
-				const gate = deferred();
-				printing = files.printAndVerify(task.fileId, task.settings, device, task.fileName, {
-					onPhase: () => {
-						task.status = "verifying";
-						emit();
-					},
-					onIdentified: (spoolId) => {
-						registry.setSpoolId(device, task.id, spoolId);
-						gate.resolve();
-					},
-				});
-				// Release the lock however this ends — one bad print must not wedge
-				// a printer for every document behind it.
-				printing.then(gate.resolve, gate.resolve);
-				await gate.promise;
+			const gate = deferred();
+			printing = files.printAndVerify(task.fileId, task.settings, device, task.fileName, {
+				onPhase: () => {
+					task.status = "verifying";
+					emit();
+				},
+				onIdentified: (spoolId) => {
+					registry.setSpoolId(device, task.id, spoolId);
+					gate.resolve();
+				},
 			});
+			// Release the lock however this ends — one bad print must not wedge
+			// a printer for every document behind it.
+			printing.then(gate.resolve, gate.resolve);
+			await gate.promise;
+		});
 
-			if (!printing) {
-				// Never spooled — the guard inside the lock fired. Nothing printed.
-				registry.dequeue(device, task.id);
-				return;
-			}
+		if (!printing) {
+			// Never spooled — the guard inside the lock fired. Nothing printed.
+			registry.dequeue(device, task.id);
+			return;
+		}
 
-			const result = await printing;
-			if (result.outcome === "aborted") {
-				// Engine stopped mid-flight — the physical outcome is unknowable, so
-				// put the task back only if the engine is somehow still running (it
-				// isn't, for abortAll; this just avoids losing the task either way).
-				if (engine.running && engine.tasks.includes(task)) {
-					task.status = "waiting";
-					task.device = null;
-				}
-				registry.dequeue(device, task.id);
-				return;
+		const result = await printing;
+		if (result.outcome === "aborted") {
+			// Engine stopped mid-flight — the physical outcome is unknowable, so
+			// put the task back only if the engine is somehow still running (it
+			// isn't, for abortAll; this just avoids losing the task either way).
+			if (engine.running && engine.tasks.includes(task)) {
+				task.status = "waiting";
+				task.device = null;
 			}
+			registry.dequeue(device, task.id);
+			return;
 		}
 
 		// Discard the outcome if the job vanished (remote cancel) meanwhile.
@@ -621,7 +633,7 @@ async function dispatch(task, device) {
 
 		task.status = "printed";
 		task.failureReason = null;
-		markFilePrinted(task.jobId, task.fileId);
+		markFilePrinted(task.jobId, task.docId);
 		registry.dequeue(device, task.id);
 		console.log(`[Engine] printed ${task.id} on "${device}"`);
 		await maybeCompleteJob(task.jobId);
@@ -667,20 +679,13 @@ async function handleDispatchFailure(task, device, err) {
 	console.warn(`[Engine] print failed for ${task.id} on "${device}":`, err.message);
 	if (!engine.running || !engine.tasks.includes(task)) return; // job dropped meanwhile
 
-	// A dismissed Print-to-PDF save dialog is operator-side, not a printer fault —
-	// so it isn't recorded as an attempt (there's no bad printer to steer away
-	// from) and it gets its own message. Everything after that is identical: it
-	// stops the job's printing exactly like any other failure.
-	const pdfCancelled = err.message === "pdf save cancelled";
-	if (!pdfCancelled) {
-		// Recorded so an operator-initiated retry is steered away from the printer
-		// that just failed this document (schedule() passes it to choosePrinter as
-		// `exclude`). It is NOT a retry counter — a failure is always permanent.
-		task.attempts.push({ device, error: err.message, at: Date.now() });
-	}
+	// Recorded so an operator-initiated retry is steered away from the printer
+	// that just failed this document (schedule() passes it to choosePrinter as
+	// `exclude`). It is NOT a retry counter — a failure is always permanent.
+	task.attempts.push({ device, error: err.message, at: Date.now() });
 
 	task.status = "failed";
-	task.failureReason = pdfCancelled ? "pdf-cancel" : "print";
+	task.failureReason = "print";
 	task.device = null;
 
 	// The job is NEVER failed automatically, in either mode — not even when the
@@ -688,28 +693,20 @@ async function handleDispatchFailure(task, device, err) {
 	// forceFailJob, the operator's explicit control.
 	if (task.mode === "auto") {
 		// Part 3: unattended printing stops for THIS job the moment a document
-		// fails. There is no retry — a failure means paper, toner, a dismissed save
-		// dialog or the printer itself needs a human, and the rest of the queue must
+		// fails. There is no retry — a failure means paper, toner or the printer
+		// itself needs a human, and the rest of the queue must
 		// not keep feeding it. The job's remaining documents stay queued (held by
 		// the pause) so resuming continues where it left off; the failed document
 		// waits for the operator to retry it by hand.
 		engine.autoPausedJobs.set(task.jobId, "failure");
 		console.log(`[Engine] ${task.id} failed — automated printing paused for job ${task.jobId} (needs attention)`);
-		toast(
-			pdfCancelled
-				? { kind: "pdf-cancel", jobId: task.jobId, fileName: task.fileName, who: jobWho(getJobs().find((j) => j._id === task.jobId)) }
-				: { kind: "auto-paused-failure", jobId: task.jobId, fileName: task.fileName, who: jobWho(getJobs().find((j) => j._id === task.jobId)) }
-		);
+		toast({ kind: "auto-paused-failure", jobId: task.jobId, fileName: task.fileName, who: jobWho(getJobs().find((j) => j._id === task.jobId)) });
 	} else {
 		// Manual print: the document is flagged and a print-all batch stops here
 		// (its remaining documents are withdrawn — see haltSequentialBatch).
 		console.log(`[Engine] ${task.id} failed permanently — awaiting operator (job left untouched)`);
 		haltSequentialBatch(task);
-		toast(
-			pdfCancelled
-				? { kind: "pdf-cancel", jobId: task.jobId, fileName: task.fileName, who: jobWho(getJobs().find((j) => j._id === task.jobId)) }
-				: { kind: "doc-failed-print", jobId: task.jobId, fileName: task.fileName, who: jobWho(getJobs().find((j) => j._id === task.jobId)) }
-		);
+		toast({ kind: "doc-failed-print", jobId: task.jobId, fileName: task.fileName, who: jobWho(getJobs().find((j) => j._id === task.jobId)) });
 	}
 	jobsChanged();
 }
@@ -771,15 +768,15 @@ async function maybeCompleteJob(jobId) {
 	if (engine.jobsCompleting.has(jobId)) return;
 	const job = getJobs().find((j) => j._id === jobId);
 	if (!job) return;
-	const fileIds = jobFileList(job).map((f) => f.fileId);
-	if (fileIds.length === 0 || !fileIds.every((id) => isFilePrinted(jobId, id))) return;
+	const docIds = jobFileList(job).map((f) => f.docId);
+	if (docIds.length === 0 || !docIds.every((id) => isFilePrinted(jobId, id))) return;
 
 	engine.jobsCompleting.add(jobId);
 	const result = await updateJobStatus(jobId, "completed");
 	if (result?.success) {
 		console.log(`[Engine] job ${jobId} completed`);
 		engine.overrides.set(jobId, "completed");
-		finalizeJob(jobId, fileIds);
+		finalizeJob(jobId, jobDiskFileIds(job));
 		jobsChanged();
 	} else {
 		console.error(`[Engine] failed to complete job ${jobId}:`, result?.message);
@@ -809,7 +806,7 @@ async function autoFailJob(jobId) {
 	console.warn(`[Engine] job ${jobId} marked failed (refund)`);
 	engine.overrides.set(jobId, "failed");
 	toast({ kind: "job-failed-print", jobId, who: jobWho(job) });
-	finalizeJob(jobId, jobFileList(job).map((f) => f.fileId));
+	finalizeJob(jobId, jobDiskFileIds(job));
 	jobsChanged();
 	emit();
 	return true;
@@ -892,7 +889,7 @@ function onJobsReconciled(jobs) {
 		// immediately, since some may have printed just before the app closed.
 		if (!engine.autoPrint && store.get(AUTO_PRINT_ARMED_KEY) === true) {
 			const pendingJobs = activeJobs.filter(
-				(j) => !requiresManualPrinting(j) && jobFileList(j).some((f) => !isFilePrinted(j._id, f.fileId))
+				(j) => !requiresManualPrinting(j) && jobFileList(j).some((f) => !isFilePrinted(j._id, f.docId))
 			).length;
 			engine.resumePrompt = { pendingJobs };
 			console.log(`[Engine] automated printing was on last session — asking to resume (${pendingJobs} job(s) pending)`);
@@ -914,20 +911,21 @@ function onJobsReconciled(jobs) {
 
 // ── commands (IPC surface) ───────────────────────────────────────────────────
 
-// Part 2 — "Print all" / "Print (n docs)". Moves the WHOLE job to "printing" on
+// Part 2 — the job's main "Print" button. Moves the WHOLE job to "printing" on
 // the backend, then queues every unprinted document as a SEQUENTIAL batch: the
 // task list is the job's own state array, and the scheduler feeds the printer
 // one document at a time — the next is sent only after the previous settles,
-// never dumping the whole job into the Windows spool queue at once.
-//   • dropdown printer chosen → every document goes to that device;
-//   • plain click             → each document, when its turn comes, is routed to
-//     the least-loaded printer of its matching service (registry.choosePrinter).
+// never dumping the whole job into the Windows spool queue at once. Each
+// document, when its turn comes, is routed to the least-loaded printer of its
+// matching service (registry.choosePrinter). There is deliberately no printer
+// override here: a job's documents can need different printers (colour vs
+// B&W), so forcing one device is only offered per document (printFile).
 // A mid-batch failure flags that document (Part 1 rules — never fails the job)
 // and STOPS the batch right there (haltSequentialBatch): the remaining
 // documents are withdrawn. Clicking Print-all again re-issues every unprinted
 // document — the failed one first, in document order — via addTasks' explicit
 // re-issue path.
-async function printJob(jobId, deviceName = null) {
+async function printJob(jobId) {
 	const job = getJobs().find((j) => j._id === jobId);
 	if (!job) return { success: false, message: "job not found" };
 
@@ -937,7 +935,7 @@ async function printJob(jobId, deviceName = null) {
 		return { success: false, message: "could not move the job to printing" };
 	}
 
-	addTasks(job, "manual", deviceName, { explicit: true, sequential: true });
+	addTasks(job, "manual", null, { explicit: true, sequential: true });
 	schedule();
 	return { success: true };
 }
@@ -961,7 +959,7 @@ function stopJobBatch(jobId) {
 // "printing" on the backend up front, then queues just this document: to the
 // printer chosen from the dropdown, or (no choice) to the least-loaded printer
 // of the service that matches the document's settings.
-async function printFile(jobId, fileId, deviceName = null) {
+async function printFile(jobId, docId, deviceName = null) {
 	const job = getJobs().find((j) => j._id === jobId);
 	if (!job) return { success: false, message: "job not found" };
 
@@ -972,7 +970,7 @@ async function printFile(jobId, fileId, deviceName = null) {
 		return { success: false, message: "could not move the job to printing" };
 	}
 
-	addTasks(job, "manual", deviceName, { onlyFileId: fileId, explicit: true });
+	addTasks(job, "manual", deviceName, { onlyDocId: docId, explicit: true });
 	schedule();
 	return { success: true };
 }
@@ -984,14 +982,14 @@ async function printFile(jobId, fileId, deviceName = null) {
 // is at a printer or has printed — the change could no longer take effect. A
 // queued document picks the change up before it dispatches, re-routed if the
 // new settings match a different service.
-function setFileSettings(jobId, fileId, patch) {
+function setFileSettings(jobId, docId, patch) {
 	const job = getJobs().find((j) => j._id === jobId);
 	if (!job) return { success: false, message: "job not found" };
 	if (!ACTIVE_STATUSES.has(effectiveStatus(job))) return { success: false, message: "this job is already closed" };
-	const file = jobFileList(job).find((f) => f.fileId === fileId);
+	const file = jobFileList(job).find((f) => f.docId === docId);
 	if (!file) return { success: false, message: "document not found" };
-	if (isFilePrinted(jobId, fileId)) return { success: false, message: "this document has already printed" };
-	const task = findTask(jobId, fileId);
+	if (isFilePrinted(jobId, docId)) return { success: false, message: "this document has already printed" };
+	const task = findTask(jobId, docId);
 	if (task && (task.status === "printing" || task.status === "verifying")) {
 		return { success: false, message: "this document is printing" };
 	}
@@ -1000,16 +998,16 @@ function setFileSettings(jobId, fileId, patch) {
 	if (patch !== null) {
 		const { patch: clean, error } = sanitizeSettingsPatch(patch);
 		if (error) return { success: false, message: error };
-		override = applySettingsPatch(file.originalSettings, engine.settingsOverrides[jobId]?.[fileId], clean);
+		override = applySettingsPatch(file.originalSettings, engine.settingsOverrides[jobId]?.[docId], clean);
 	}
 
 	const forJob = { ...(engine.settingsOverrides[jobId] || {}) };
-	if (override) forJob[fileId] = override;
-	else delete forJob[fileId];
+	if (override) forJob[docId] = override;
+	else delete forJob[docId];
 	if (Object.keys(forJob).length) engine.settingsOverrides[jobId] = forJob;
 	else delete engine.settingsOverrides[jobId];
 	persistSettingsOverrides();
-	console.log(`[Engine] settings for ${jobId}:${fileId} →`, override || "customer's");
+	console.log(`[Engine] settings for ${jobId}:${docId} →`, override || "customer's");
 
 	if (task) task.settings = effectiveSettings(file.originalSettings, override);
 	schedule();
@@ -1130,7 +1128,7 @@ async function declineJob(jobId) {
 	const result = await updateJobStatus(jobId, "cancelled");
 	if (result?.success) {
 		engine.overrides.set(jobId, "cancelled");
-		finalizeJob(jobId, jobFileList(job).map((f) => f.fileId));
+		finalizeJob(jobId, jobDiskFileIds(job));
 		jobsChanged();
 		return { success: true };
 	}
@@ -1149,7 +1147,7 @@ async function completeJob(jobId, { force = false } = {}) {
 	const result = await updateJobStatus(jobId, "completed");
 	if (result?.success) {
 		engine.overrides.set(jobId, "completed");
-		finalizeJob(jobId, jobFileList(job).map((f) => f.fileId));
+		finalizeJob(jobId, jobDiskFileIds(job));
 		jobsChanged();
 		return { success: true };
 	}

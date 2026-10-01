@@ -6,16 +6,18 @@ const pino = require("pino");
 const { pipeline } = require("stream/promises");
 const api = require("./api");
 const store = require("./store");
-const { MAX_UPLOAD_BYTES, documentOf, documentSize, uploadName, uploadErrorReply } = require("./whatsappDocuments");
-const { textOf, createDraftManager } = require("./whatsappDrafts");
+const { MAX_UPLOAD_BYTES, mediaOf, mediaSize, uploadName, uploadErrorReply } = require("./whatsappDocuments");
+const { textOf, createOrderCore } = require("./whatsappOrders");
+const { createMenuFlow } = require("./whatsappMenuFlow");
+const { createChatFlow } = require("./whatsappChatFlow");
 
 // The shop's linked WhatsApp account, driven by Baileys. One socket per app
 // (the single-instance lock in main.js guarantees that), scoped to the selected
-// shop. Documents customers send are uploaded to /api/files and collected into a
-// draft per customer, whose print settings they change from a numbered menu and
-// which "confirm" submits as a job (see whatsappDrafts.js);
-// the backend sends text back out through the "whatsappSend" SSE event (see
-// api.js).
+// shop. Documents and photos customers send are uploaded to /api/files and
+// collected into a draft per customer, which one of two ordering flows then
+// talks them through — a numbered menu (whatsappMenuFlow.js) or an AI chat
+// (whatsappChatFlow.js) — picked per shop in Settings. The backend sends text
+// back out through the "whatsappSend" SSE event (see api.js).
 //
 // Credentials live under userData/whatsapp/<shopId>, so a linked device
 // survives restarts and app logout — only "Unlink" (or the phone removing the
@@ -30,19 +32,37 @@ async function baileys() {
 
 const logger = pino({ level: "silent" });
 
-const drafts = createDraftManager({
+const orders = createOrderCore({
 	api,
 	load: () => store.get("whatsappDrafts") || {},
 	save: (map) => store.set("whatsappDrafts", map),
 });
+
+// The ordering flows being tried out, by the name the settings store. Each has
+// addFile(shopId, customer, file, name, { morePending }) and handleText(shopId,
+// customer, text), both resolving the reply (a text, or an array of texts sent
+// as separate messages) or null; the chat flow also has
+// flush() for a held-back "files received" reply. Removing a flow: delete its
+// file and its entry here (and its option in WhatsAppSettings.jsx).
+const FLOWS = {
+	menu: createMenuFlow(orders),
+	chat: createChatFlow(orders, api),
+};
+const DEFAULT_FLOW = "menu";
 
 // One promise chain per chat: a customer's documents and commands are handled
 // strictly in order, so a burst of documents lands in one draft and a "confirm"
 // sent right after them waits for their uploads.
 const _chatQueues = new Map();
 
+// Files per chat queued but not yet being handled, so a flow can answer a burst
+// of files (an album) once instead of per file.
+const _pendingMedia = new Map();
+
 // state: "idle" | "connecting" | "qr" | "open" | "reconnecting" | "logged_out"
-let _snapshot = { state: "idle", qr: null, me: null, error: null };
+// enabled: false while the operator has paused message handling (see setEnabled).
+// flow: the shop's ordering flow for new orders (see setFlow).
+let _snapshot = { state: "idle", qr: null, me: null, error: null, enabled: true, flow: DEFAULT_FLOW };
 let _notify = null;
 
 let _shopId = null;
@@ -99,6 +119,7 @@ function start(shopId) {
 	if (!shopId) return;
 	if (_shopId !== shopId) _teardown();
 	_shopId = shopId;
+	_set({ enabled: isEnabled(shopId), flow: flowSetting(shopId) });
 	if (_sock) return;
 	if (isLinked(shopId)) {
 		console.log("[WA] linked device found — reconnecting");
@@ -214,23 +235,100 @@ async function _onConnectionUpdate(sock, shopId, { connection, lastDisconnect, q
 	_retryDelay = Math.min(_retryDelay * 2, MAX_RETRY_DELAY);
 }
 
+// Whether the shop's incoming messages are handled. Paused shops are listed in
+// the store, so the switch survives restarts; the default is on.
+function isEnabled(shopId) {
+	return !(store.get("whatsappPaused") || {})[shopId];
+}
+
+// Settings "WhatsApp" switch: pauses or resumes message handling for the current
+// shop. The socket stays connected either way — paused messages are simply
+// ignored, and not handled later.
+function setEnabled(enabled) {
+	if (!_shopId) return { success: false, message: "No shop selected." };
+	const paused = store.get("whatsappPaused") || {};
+	if (enabled) delete paused[_shopId];
+	else paused[_shopId] = true;
+	store.set("whatsappPaused", paused);
+	console.log(`[WA] message handling ${enabled ? "resumed" : "paused"}`);
+	_set({ enabled: !!enabled });
+	return { success: true };
+}
+
+// The shop's ordering flow for new orders, from the store; the menu by default.
+function flowSetting(shopId) {
+	const flow = (store.get("whatsappFlow") || {})[shopId];
+	return FLOWS[flow] ? flow : DEFAULT_FLOW;
+}
+
+// Settings "Conversation style": which flow the current shop uses for new
+// orders. A customer already mid-order keeps the flow their draft started in.
+function setFlow(flow) {
+	if (!_shopId) return { success: false, message: "No shop selected." };
+	if (!FLOWS[flow]) return { success: false, message: "Unknown conversation style." };
+	const flows = store.get("whatsappFlow") || {};
+	flows[_shopId] = flow;
+	store.set("whatsappFlow", flows);
+	console.log(`[WA] ordering flow set to ${flow}`);
+	_set({ flow });
+	return { success: true };
+}
+
+// The flow handling this customer: their open draft's, else the shop's.
+function _flowFor(shopId, customer) {
+	return FLOWS[orders.flowOf(shopId, customer.number)] || FLOWS[flowSetting(shopId)];
+}
+
 // Handles genuinely incoming one-to-one messages (not our own sends, groups or
-// status updates): documents go into the customer's draft, and text messages
+// status updates): documents and photos go into the customer's draft, and text messages
 // drive its settings menu and "confirm" / "cancel". Text that isn't meant for
-// the order flow gets no reply.
+// the order flow gets no reply. Every one is marked delivered; only the ones the
+// app acts on are marked read. Nothing is handled — or read — while paused.
 async function _onMessagesUpsert(sock, shopId, { type, messages }) {
 	if (type !== "notify") return;
 	const { isPnUser, isLidUser } = await baileys();
-	for (const msg of messages || []) {
-		const jid = msg.key?.remoteJid;
-		if (msg.key?.fromMe || !(isPnUser(jid) || isLidUser(jid))) continue;
+	const incoming = (messages || []).filter((m) => {
+		const jid = m.key?.remoteJid;
+		return !m.key?.fromMe && (isPnUser(jid) || isLidUser(jid));
+	});
+	for (const msg of incoming) _markDelivered(sock, msg);
 
-		if (documentOf(msg)) {
-			_enqueue(jid, () => _onDocument(sock, shopId, msg));
+	if (!_snapshot.enabled) {
+		if (incoming.length) console.log(`[WA] paused — ignoring ${incoming.length} message(s)`);
+		return;
+	}
+	for (const msg of incoming) {
+		const jid = msg.key.remoteJid;
+		if (mediaOf(msg)) {
+			_markRead(sock, msg);
+			_pendingMedia.set(jid, (_pendingMedia.get(jid) || 0) + 1);
+			_enqueue(jid, () => _onMedia(sock, shopId, msg));
 			continue;
 		}
 		const text = textOf(msg);
 		if (text) _enqueue(jid, () => _onText(sock, shopId, msg, text));
+	}
+}
+
+// Delivery receipt (two grey ticks). Baileys only sends one itself while the
+// socket is marked online; otherwise its receipt is "inactive", which the
+// sender sees as a single tick. We stay offline so the shop's phone keeps
+// getting notifications, and send the receipt explicitly.
+async function _markDelivered(sock, msg) {
+	try {
+		await sock.sendReceipt(msg.key.remoteJid, msg.key.participant, [msg.key.id], undefined);
+	} catch (error) {
+		console.error(`[WA] delivery receipt for ${msg.key.id} failed:`, error.message);
+	}
+}
+
+// Read receipt (blue ticks, if the account shares read receipts). Also marks
+// the message read on the shop's phone.
+async function _markRead(sock, msg) {
+	try {
+		await sock.readMessages([msg.key]);
+	} catch (error) {
+		console.error(`[WA] read receipt for ${msg.key.id} failed:`, error.message);
 	}
 }
 
@@ -244,17 +342,35 @@ function _enqueue(jid, task) {
 	});
 }
 
-async function _onDocument(sock, shopId, msg) {
-	const uploaded = await _handleDocument(sock, shopId, msg);
-	if (!uploaded) return;
+async function _onMedia(sock, shopId, msg) {
+	const jid = msg.key.remoteJid;
+	const left = (_pendingMedia.get(jid) || 1) - 1;
+	if (left > 0) _pendingMedia.set(jid, left);
+	else _pendingMedia.delete(jid);
+
+	const uploaded = await _handleMedia(sock, shopId, msg);
+	// Checked after the upload: files arriving meanwhile are part of the burst.
+	const morePending = _pendingMedia.has(jid);
 	const customer = await _customerOf(sock, msg);
-	await _reply(shopId, msg, await drafts.addFile(shopId, customer, uploaded.file, uploaded.name));
+	const flow = _flowFor(shopId, customer);
+
+	if (!uploaded) {
+		// This file failed (the customer was told); earlier ones may still be
+		// waiting for their "received" reply.
+		const held = !morePending && flow.flush ? flow.flush(shopId, customer) : null;
+		if (held) await _reply(shopId, msg, held);
+		return;
+	}
+	const reply = await flow.addFile(shopId, customer, uploaded.file, uploaded.name, { morePending });
+	if (reply) await _reply(shopId, msg, reply);
 }
 
 async function _onText(sock, shopId, msg, text) {
 	const customer = await _customerOf(sock, msg);
-	const reply = await drafts.handleText(shopId, customer, text);
-	if (reply) await _reply(shopId, msg, reply);
+	const reply = await _flowFor(shopId, customer).handleText(shopId, customer, text);
+	if (!reply) return; // ordinary chat: left unread for the shop
+	_markRead(sock, msg);
+	await _reply(shopId, msg, reply);
 }
 
 // { name, number } for the draft: the sender's WhatsApp display name and phone
@@ -277,17 +393,17 @@ function documentsDir(shopId) {
 	return path.join(app.getPath("userData"), "whatsapp-files", String(shopId));
 }
 
-// Downloads a customer's document into whatsapp-files/<shopId>/ and uploads it
-// to the backend. Returns { file, name } — the backend's File object and the name
-// it was uploaded under — or null after replying to the customer with what went
-// wrong. The local copy is kept either way.
-async function _handleDocument(sock, shopId, msg) {
-	const doc = documentOf(msg);
-	const name = uploadName(doc.fileName, doc.mimetype);
+// Downloads a customer's document or photo into whatsapp-files/<shopId>/ and
+// uploads it to the backend. Returns { file, name } — the backend's File object
+// and the name it was uploaded under — or null after replying to the customer
+// with what went wrong. The local copy is kept either way.
+async function _handleMedia(sock, shopId, msg) {
+	const media = mediaOf(msg);
+	const name = uploadName(media.fileName, media.mimetype);
 	const from = msg.key?.remoteJid;
-	console.log(`[WA] document "${name}" from ${from} (${msg.key?.id})`);
+	console.log(`[WA] ${media.kind} "${name}" from ${from} (${msg.key?.id})`);
 
-	const size = documentSize(doc);
+	const size = mediaSize(media);
 	if (size != null && size > MAX_UPLOAD_BYTES) {
 		console.error(`[WA] "${name}" is ${size} bytes — over the upload limit`);
 		await _reply(shopId, msg, uploadErrorReply(name, { status: 413 }));
@@ -308,26 +424,31 @@ async function _handleDocument(sock, shopId, msg) {
 		return null;
 	}
 
-	const result = await api.uploadFile(filePath, { filename: name, filetype: doc.mimetype });
+	const result = await api.uploadFile(filePath, { filename: name, filetype: media.mimetype });
 	if (result.success) return { file: result.data, name };
 	await _reply(shopId, msg, uploadErrorReply(name, result));
 	return null;
 }
 
-// Replies to a customer's message, quoting it, on whichever socket is current —
-// an upload can outlive a reconnect. Dropped (and logged) when the shop changed
-// or WhatsApp isn't connected.
-async function _reply(shopId, msg, text) {
+// Replies to a customer's message on whichever socket is current — an upload
+// can outlive a reconnect. A reply can be several messages (an array), sent in
+// order with only the first quoting the customer's. Dropped (and logged) when
+// the shop changed or WhatsApp isn't connected.
+async function _reply(shopId, msg, reply) {
 	const jid = msg.key?.remoteJid;
-	if (_shopId !== shopId || !_sock || _snapshot.state !== "open") {
-		console.error(`[WA] dropped reply to ${jid}: not connected`);
-		return;
-	}
-	try {
-		await _sock.sendMessage(jid, { text }, { quoted: msg });
-		console.log(`[WA] replied to ${jid}: ${text}`);
-	} catch (error) {
-		console.error(`[WA] reply to ${jid} failed:`, error.message);
+	const texts = [].concat(reply);
+	for (const [i, text] of texts.entries()) {
+		if (_shopId !== shopId || !_sock || _snapshot.state !== "open") {
+			console.error(`[WA] dropped reply to ${jid}: not connected`);
+			return;
+		}
+		try {
+			await _sock.sendMessage(jid, { text }, i === 0 ? { quoted: msg } : undefined);
+			console.log(`[WA] replied to ${jid}: ${text}`);
+		} catch (error) {
+			console.error(`[WA] reply to ${jid} failed:`, error.message);
+			return; // don't send the rest out of order
+		}
 	}
 }
 
@@ -390,7 +511,7 @@ function _teardown() {
 function disconnect() {
 	_teardown();
 	_shopId = null;
-	_set({ state: "idle", qr: null, me: null, error: null });
+	_set({ state: "idle", qr: null, me: null, error: null, enabled: true, flow: DEFAULT_FLOW });
 }
 
 // Drawer "Unlink": removes this device from the WhatsApp account and forgets it.
@@ -413,4 +534,4 @@ async function unlink() {
 	return { success: true };
 }
 
-module.exports = { start, connect, disconnect, unlink, sendText, getSnapshot, setNotifier };
+module.exports = { start, connect, disconnect, unlink, setEnabled, setFlow, sendText, getSnapshot, setNotifier };
