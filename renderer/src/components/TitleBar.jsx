@@ -11,6 +11,10 @@ function TitleBar({ theme, onToggleTheme }) {
 					<span className="title-bar__title-click">Click</span>
 					<span className="title-bar__title-print">Print</span>
 				</span>
+				{/* Stamped in at build time; see vite.config.js. */}
+				<span className="title-bar__version">
+					{__APP_VERSION__ === "dev" ? "dev" : `v${__APP_VERSION__}`}
+				</span>
 			</div>
 			{/* Filled by the dashboard (AutoPrintTitleStatus) via a portal, since the
 			    automated-printing state lives below this bar in the tree. */}

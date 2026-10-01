@@ -201,6 +201,14 @@ body {
 	color: var(--color-primary);
 }
 
+.title-bar__version {
+	font-size: 11px;
+	font-weight: 500;
+	color: var(--color-text-muted);
+	font-variant-numeric: tabular-nums;
+	user-select: text;
+}
+
 .title-bar__controls {
 	display: flex;
 	align-items: center;
