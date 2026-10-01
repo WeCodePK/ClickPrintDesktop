@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
+import { toastDock } from "../../components/toastDock";
 
 // How long the jobs stream may be down before the toast appears — rides out the
 // normal connect at startup and momentary blips without flashing.
@@ -37,13 +39,14 @@ function ConnectionToast() {
 	}, [status]);
 
 	if (!visible) return null;
-	return (
+	return createPortal(
 		<div className="conn-toast" role="status" aria-live="polite">
 			<span className="conn-toast__spinner" aria-hidden="true" />
 			<span className="conn-toast__msg">
 				{wasOpen.current ? "Connection lost. Reconnecting…" : "Connecting to ClickPrint…"}
 			</span>
-		</div>
+		</div>,
+		toastDock()
 	);
 }
 

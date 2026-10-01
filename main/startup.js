@@ -1,4 +1,5 @@
 const { app } = require("electron");
+const updateHandoff = require("./updateHandoff");
 
 // ClickPrint always starts when the operator signs in to Windows: a login item
 // relaunches the app straight into the tray, so an unattended shop machine
@@ -21,8 +22,15 @@ function initLoginItem() {
 
 // True when the OS (or a shortcut carrying --hidden) started this process at
 // login, in which case no window is shown until the operator opens the app.
+// Also true after an automatic update relaunched an app that was sitting in the
+// tray — the installer starts it without --hidden, and an unattended machine
+// shouldn't have a window pop up on every update.
 function startedHidden() {
-	return process.argv.includes(HIDDEN_FLAG) || !!app.getLoginItemSettings().wasOpenedAtLogin;
+	return (
+		process.argv.includes(HIDDEN_FLAG) ||
+		!!app.getLoginItemSettings().wasOpenedAtLogin ||
+		!!updateHandoff.take()?.hidden
+	);
 }
 
 module.exports = { initLoginItem, startedHidden };

@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import ConfirmDialog from "./components/ConfirmDialog";
+import { toastDock } from "../components/toastDock";
 import { collectBlockedKeys } from "./jobUtils";
 
 // Thin mirror of the main-process print engine. ALL orchestration — service
@@ -19,6 +20,7 @@ const EMPTY_SNAPSHOT = {
 	routingLoaded: false,
 	autoRouteReady: false,
 	resumePrompt: null,
+	updateHold: false,
 	autoPaused: {},
 	manualOnly: {},
 	queuedJobIds: [],
@@ -301,6 +303,9 @@ export function AutoPrintProvider({ children }) {
 		autoRouteReady: snapshot.autoRouteReady,
 		printersReady: snapshot.routingLoaded,
 		refreshPrinterState,
+		// An update is waiting for the current print to finish; manual print
+		// controls are locked until the app restarts into it (UpdateToast says so).
+		updateHold: !!snapshot.updateHold,
 	};
 
 	// Shown once per launch when automated printing was armed in the previous
@@ -334,7 +339,7 @@ export function AutoPrintProvider({ children }) {
 						</div>
 					))}
 				</div>,
-				document.body
+				toastDock()
 			)}
 		</AutoPrintContext.Provider>
 	);

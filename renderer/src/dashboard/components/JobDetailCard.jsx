@@ -134,12 +134,16 @@ function waitHint(waitReason) {
 			return "Queued · printer offline";
 		case "route":
 			return "Queued · no matching service printer";
+		case "updating":
+			return "Queued · waiting for the update";
 		default:
 			return "Queued";
 	}
 }
 
-function FilePreview({ file, index, onOpen, onPrint, onChangeSettings, showPreview, printed, onMarkJobFailed, printers, onPrinterMenuOpen, autoPrintOn, state }) {
+// `printLocked`: an update is waiting for the current print to finish — no new
+// print may be started.
+function FilePreview({ file, index, onOpen, onPrint, onChangeSettings, showPreview, printed, onMarkJobFailed, printers, onPrinterMenuOpen, autoPrintOn, printLocked, state }) {
 	const settings = file.settings || {};
 	const changedKeys = file.overriddenKeys || [];
 	// Per-file engine state: "waiting" | "printing" | "verifying" | "printed" | "failed".
@@ -215,6 +219,7 @@ function FilePreview({ file, index, onOpen, onPrint, onChangeSettings, showPrevi
 								<PrintSplitButton
 									size="sm"
 									tone="retry"
+									disabled={printLocked}
 									onPrint={(deviceName) => onPrint(file, deviceName)}
 									onOpen={onPrinterMenuOpen}
 									printers={printers}
@@ -246,6 +251,7 @@ function FilePreview({ file, index, onOpen, onPrint, onChangeSettings, showPrevi
 							) : (
 								<PrintSplitButton
 									size="sm"
+									disabled={printLocked}
 									onPrint={(deviceName) => onPrint(file, deviceName)}
 									onOpen={onPrinterMenuOpen}
 									printers={printers}
@@ -502,7 +508,7 @@ function JobNote({ text }) {
 //   │ Payment proof │                  │
 //   └───────────────┴──────────────────┘
 
-function JobDetailCard({ entry, headerActions, onOpenFile, onChangeFileSettings, onPrintFile, showPreview = true, printedFileIds, fileStates, onMarkJobFailed, printers, onPrinterMenuOpen, autoPrintOn }) {
+function JobDetailCard({ entry, headerActions, onOpenFile, onChangeFileSettings, onPrintFile, showPreview = true, printedFileIds, fileStates, onMarkJobFailed, printers, onPrinterMenuOpen, autoPrintOn, printLocked = false }) {
 	const files = entry.files || [];
 	const cost = entry.cost;
 	const totalPages = getJobTotalPages(entry);
@@ -637,6 +643,7 @@ function JobDetailCard({ entry, headerActions, onOpenFile, onChangeFileSettings,
 								printers={printers}
 								onPrinterMenuOpen={onPrinterMenuOpen}
 								autoPrintOn={autoPrintOn}
+								printLocked={printLocked}
 								state={fileStates?.[file.docId]}
 							/>
 						))}

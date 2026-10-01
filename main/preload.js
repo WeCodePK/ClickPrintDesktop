@@ -147,10 +147,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	maximizeWindow: () => ipcRenderer.send("window:maximize"),
 	closeWindow: () => ipcRenderer.send("window:close"),
 
-	// Auto-update
+	// Auto-update — fully automatic (main/updater.js); the renderer only shows
+	// progress. { state, version, percent }.
 	getAppVersion: () => ipcRenderer.invoke("app:get-version"),
 	getUpdateStatus: () => ipcRenderer.invoke("app:get-update-status"),
-	restartToUpdate: () => ipcRenderer.send("app:restart-to-update"),
 	onUpdateStatus: (callback) => {
 		const handler = (_event, status) => callback(status);
 		ipcRenderer.on("updater:status", handler);

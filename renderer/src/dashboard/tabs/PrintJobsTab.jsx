@@ -48,6 +48,7 @@ function PrintJobsTab() {
 		refreshPrinterState,
 		settingsOverrides,
 		setFileSettings,
+		updateHold,
 	} = useAutoPrint();
 
 	const [selectedId, setSelectedId] = useState(null);
@@ -373,6 +374,7 @@ function PrintJobsTab() {
 							printers={printers}
 							onPrinterMenuOpen={() => refreshPrinters(true)}
 							autoPrintOn={autoDriving}
+							printLocked={updateHold}
 							headerActions={
 								selectedEntry.status !== "completed" ? (
 									<>
@@ -442,7 +444,8 @@ function PrintJobsTab() {
 												size="md"
 												onPrint={handlePrintAll}
 												showMenu={false}
-												disabled={remainingCount === 0}
+												// Locked while an update waits for the current print.
+												disabled={remainingCount === 0 || updateHold}
 												showInfo
 												info={hasQueued || actionsLocked ? "Printing…" : undefined}
 												infoActive={hasQueued || actionsLocked}

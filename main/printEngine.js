@@ -12,6 +12,7 @@ const store = require("./store");
 const { getJobs } = require("./state");
 const { manualPrintReasons, requiresManualPrinting } = require("./jobRules");
 const { sanitizeSettingsPatch, applySettingsPatch, effectiveSettings } = require("./fileSettings");
+const updateHandoff = require("./updateHandoff");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The print engine: owns ALL print orchestration and state in the main process.
@@ -161,7 +162,20 @@ const engine = {
 
 	seenJobs: new Set(), // jobIds already considered for auto-enqueue
 	initialized: false, // first reconcile handled (resume prompt decided)
+
+	// An update has downloaded and is waiting for the printers to go quiet (see
+	// holdForUpdate). Nothing new dispatches, in either mode. It is never lifted —
+	// the app restarts into the new version — and survives stop()/start().
+	updateHold: false,
+	// Engine state saved by the previous process right before an update relaunch
+	// (exportUpdateState). The first reconcile applies it instead of asking the
+	// resume question.
+	pendingRestore: null,
 };
+
+// The update handoff is read once per process — a later logout/login must not
+// replay it.
+let _handoffChecked = false;
 
 let _getMainWindow = null;
 let _onSnapshot = null; // (snapshot) => void
@@ -169,6 +183,13 @@ let _onToast = null; // ({kind, jobId, who, fileName}) => void
 let _onJobsChanged = null; // () => void  (ipc re-pushes jobs:updated with overrides)
 let _routingTimer = null;
 let _emitTimer = null;
+
+// Dispatches in progress — from claiming a printer until the outcome is
+// recorded (verified printed, failed, or put back). Counted apart from task
+// status because a task can leave the list (remote cancel) while its document
+// is still spooling. whenNothingPrinting() waits for this to reach zero.
+let _activeDispatches = 0;
+let _idleWaiters = [];
 
 // ── snapshot / events ────────────────────────────────────────────────────────
 
@@ -210,6 +231,9 @@ function getSnapshot() {
 		routingLoaded: engine.routingLoaded,
 		autoRouteReady: registry.hasAutoRoute(),
 		resumePrompt: engine.resumePrompt,
+		// An update is waiting for the current print to finish; manual print
+		// controls stay locked until the app restarts into it.
+		updateHold: engine.updateHold,
 		// { [jobId]: "operator" | "failure" } — automated printing held per job.
 		autoPaused: Object.fromEntries(engine.autoPausedJobs),
 		// Jobs automated printing never takes (see manualOnlyJobs); the renderer
@@ -468,6 +492,14 @@ function schedule() {
 		(t) => !(t.mode === "auto" && t.status === "waiting" && manualOnly[t.jobId])
 	);
 
+	// Draining for an update: whatever is at a printer finishes, nothing else
+	// starts. The queue is rebuilt from the backend after the restart.
+	if (engine.updateHold) {
+		for (const t of engine.tasks) if (t.status === "waiting") t.waitReason = "updating";
+		emit();
+		return;
+	}
+
 	// Jobs that currently have a document at a printer. A print-all batch sends
 	// its documents ONE AT A TIME: the next dispatches only once the previous one
 	// settles (printed or failed), so a job never stacks the Windows queue. Any
@@ -551,12 +583,21 @@ function claimAndDispatch(task, device) {
 		fileName: task.fileName,
 	});
 
-	dispatch(task, device).catch((err) => {
-		// dispatch handles its own failures; this only guards programmer error.
-		console.error(`[Engine] dispatch crashed for ${task.id}:`, err);
-		registry.dequeue(device, task.id);
-		emit();
-	});
+	_activeDispatches++;
+	dispatch(task, device)
+		.catch((err) => {
+			// dispatch handles its own failures; this only guards programmer error.
+			console.error(`[Engine] dispatch crashed for ${task.id}:`, err);
+			registry.dequeue(device, task.id);
+			emit();
+		})
+		.finally(() => {
+			_activeDispatches--;
+			if (_activeDispatches > 0) return;
+			const waiters = _idleWaiters;
+			_idleWaiters = [];
+			waiters.forEach((resolve) => resolve());
+		});
 }
 
 async function dispatch(task, device) {
@@ -587,8 +628,10 @@ async function dispatch(task, device) {
 			// Re-check INSIDE the lock. While queued behind other documents on
 			// this printer the engine may have stopped, or the job may have been
 			// cancelled/completed remotely — spooling now would put paper out for
-			// work nobody is waiting for any more.
-			if (!engine.running || !engine.tasks.includes(task)) return;
+			// work nobody is waiting for any more. An update hold that began while
+			// this document waited for the printer stops it here too: only what is
+			// already spooling gets to finish.
+			if (!engine.running || !engine.tasks.includes(task) || engine.updateHold) return;
 
 			const gate = deferred();
 			printing = files.printAndVerify(task.fileId, task.settings, device, task.fileName, {
@@ -608,7 +651,12 @@ async function dispatch(task, device) {
 		});
 
 		if (!printing) {
-			// Never spooled — the guard inside the lock fired. Nothing printed.
+			// Never spooled — the guard inside the lock fired. Nothing printed. A
+			// task still listed was held back by an update: it goes back to waiting.
+			if (engine.tasks.includes(task)) {
+				task.status = "waiting";
+				task.device = null;
+			}
 			registry.dequeue(device, task.id);
 			return;
 		}
@@ -885,10 +933,17 @@ function onJobsReconciled(jobs) {
 		engine.initialized = true;
 		activeJobs.forEach((j) => engine.seenJobs.add(j._id));
 
-		// Automated printing never resumes on its own. If it was armed when the app
-		// last closed, ASK — with the number of jobs that would start printing
-		// immediately, since some may have printed just before the app closed.
-		if (!engine.autoPrint && store.get(AUTO_PRINT_ARMED_KEY) === true) {
+		if (engine.pendingRestore) {
+			// Relaunched by an automatic update. The previous process let its
+			// printers finish before quitting, so its state is exact — carry on
+			// without asking anyone (the machine may well be unattended).
+			restoreAfterUpdate(engine.pendingRestore, activeJobs);
+			engine.pendingRestore = null;
+		} else if (!engine.autoPrint && store.get(AUTO_PRINT_ARMED_KEY) === true) {
+			// After any other restart automated printing never resumes on its own:
+			// the app may have died mid-print. If it was armed when the app last
+			// closed, ASK — with the number of jobs that would start printing
+			// immediately, since some may have printed just before the app closed.
 			const pendingJobs = activeJobs.filter(
 				(j) => !requiresManualPrinting(j) && jobFileList(j).some((f) => !isFilePrinted(j._id, f.docId))
 			).length;
@@ -912,6 +967,10 @@ function onJobsReconciled(jobs) {
 
 // ── commands (IPC surface) ───────────────────────────────────────────────────
 
+// The renderer locks its print controls during an update hold; this covers a
+// click that raced the lock (checked again after the backend PATCH).
+const UPDATE_HOLD_REFUSAL = { success: false, reason: "updating", message: "ClickPrint is about to restart for an update" };
+
 // Part 2 — the job's main "Print" button. Moves the WHOLE job to "printing" on
 // the backend, then queues every unprinted document as a SEQUENTIAL batch: the
 // task list is the job's own state array, and the scheduler feeds the printer
@@ -929,12 +988,14 @@ function onJobsReconciled(jobs) {
 async function printJob(jobId) {
 	const job = getJobs().find((j) => j._id === jobId);
 	if (!job) return { success: false, message: "job not found" };
+	if (engine.updateHold) return UPDATE_HOLD_REFUSAL;
 
 	const ok = await ensureJobPrinting(jobId);
 	if (!ok) {
 		toast({ kind: "job-printing-failed", jobId, who: jobWho(job) });
 		return { success: false, message: "could not move the job to printing" };
 	}
+	if (engine.updateHold) return UPDATE_HOLD_REFUSAL;
 
 	addTasks(job, "manual", null, { explicit: true, sequential: true });
 	schedule();
@@ -963,6 +1024,7 @@ function stopJobBatch(jobId) {
 async function printFile(jobId, docId, deviceName = null) {
 	const job = getJobs().find((j) => j._id === jobId);
 	if (!job) return { success: false, message: "job not found" };
+	if (engine.updateHold) return UPDATE_HOLD_REFUSAL;
 
 	const ok = await ensureJobPrinting(jobId);
 	if (!ok) {
@@ -970,6 +1032,7 @@ async function printFile(jobId, docId, deviceName = null) {
 		toast({ kind: "job-printing-failed", jobId, who: jobWho(job) });
 		return { success: false, message: "could not move the job to printing" };
 	}
+	if (engine.updateHold) return UPDATE_HOLD_REFUSAL;
 
 	addTasks(job, "manual", deviceName, { onlyDocId: docId, explicit: true });
 	schedule();
@@ -1202,6 +1265,11 @@ function start() {
 	store.remove("autoPrint");
 	engine.paused = false;
 	engine.initialized = false;
+	if (!_handoffChecked) {
+		_handoffChecked = true;
+		engine.pendingRestore = updateHandoff.take()?.engine || null;
+		if (engine.pendingRestore) console.log("[Engine] relaunched by an update — restoring the previous printing state");
+	}
 	loadPrintedFiles();
 	loadSettingsOverrides();
 	// Populate the registry, then take a first reading of every printer's real
@@ -1226,6 +1294,7 @@ function stop() {
 	_spoolLocks.clear();
 	registry.reset();
 	engine.resumePrompt = null;
+	engine.pendingRestore = null;
 	// Disarmed in memory on logout too — but the persisted "was armed" marker is
 	// deliberately left alone, so logging back in offers to resume just like a
 	// restart does.
@@ -1240,6 +1309,91 @@ function stop() {
 	engine.printingPatches.clear();
 	engine.overrides.clear();
 	emit();
+}
+
+// ── automatic updates ────────────────────────────────────────────────────────
+
+// An update is ready to install. From here nothing new reaches a printer —
+// automated or manual — while documents already spooling finish normally.
+function holdForUpdate() {
+	if (engine.updateHold) return;
+	engine.updateHold = true;
+	console.log(`[Engine] update hold — ${_activeDispatches} document(s) still at a printer`);
+	schedule();
+	emit();
+}
+
+// Resolves once no document is being printed or verified.
+function whenNothingPrinting() {
+	if (_activeDispatches === 0) return Promise.resolve();
+	return new Promise((resolve) => _idleWaiters.push(resolve));
+}
+
+// What the relaunched app needs to carry on unattended; call once nothing is
+// printing. Queued work is rebuilt from the backend — what must be remembered
+// is the operator's choices and what still needs a human.
+function exportUpdateState() {
+	if (!engine.running) return null;
+	const pendingAutoJobs = new Set();
+	const failedDocs = [];
+	for (const t of engine.tasks) {
+		if (t.status === "failed") {
+			failedDocs.push({
+				jobId: t.jobId,
+				docId: t.docId,
+				mode: t.mode,
+				sequential: t.sequential,
+				failureReason: t.failureReason,
+				attempts: t.attempts,
+			});
+		} else if (t.mode === "auto" && t.status !== "printed") {
+			pendingAutoJobs.add(t.jobId);
+		}
+	}
+	return {
+		autoPrint: engine.autoPrint,
+		paused: engine.paused,
+		autoPausedJobs: [...engine.autoPausedJobs],
+		seenJobs: [...engine.seenJobs],
+		pendingAutoJobs: [...pendingAutoJobs],
+		failedDocs,
+	};
+}
+
+function restoreAfterUpdate(saved, activeJobs) {
+	const byId = new Map(activeJobs.map((j) => [j._id, j]));
+	engine.paused = !!saved.paused;
+	for (const [jobId, reason] of saved.autoPausedJobs || []) {
+		if (byId.has(jobId)) engine.autoPausedJobs.set(jobId, reason);
+	}
+
+	// Failed documents keep their failure: still flagged for the operator, never
+	// retried just because the app restarted. Restored before the auto queue so
+	// addTasks (non-explicit) leaves them alone.
+	for (const f of saved.failedDocs || []) {
+		const job = byId.get(f.jobId);
+		if (!job || isFilePrinted(f.jobId, f.docId)) continue;
+		addTasks(job, f.mode, null, { onlyDocId: f.docId, sequential: !!f.sequential });
+		const task = findTask(f.jobId, f.docId);
+		if (!task) continue;
+		task.status = "failed";
+		task.failureReason = f.failureReason || "print";
+		task.attempts = Array.isArray(f.attempts) ? f.attempts : [];
+	}
+
+	if (saved.autoPrint) {
+		engine.autoPrint = true;
+		store.set(AUTO_PRINT_ARMED_KEY, true);
+		// Re-queue exactly what automated printing still owed, plus any job that
+		// arrived while the app was restarting. Jobs it had already let go of
+		// (stopped by the operator, …) stay as they were.
+		const seenBefore = new Set(saved.seenJobs || []);
+		const pending = new Set(saved.pendingAutoJobs || []);
+		for (const job of activeJobs) {
+			if (pending.has(job._id) || !seenBefore.has(job._id)) addTasks(job, "auto", null, { sequential: true });
+		}
+	}
+	console.log(`[Engine] restored after update — automated printing ${engine.autoPrint ? "on" : "off"}${engine.paused ? " (paused)" : ""}`);
 }
 
 module.exports = {
@@ -1265,4 +1419,7 @@ module.exports = {
 	dropJob,
 	setFileSettings,
 	jobWho,
+	holdForUpdate,
+	whenNothingPrinting,
+	exportUpdateState,
 };

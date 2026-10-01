@@ -4,11 +4,8 @@ const { registerFileSchemePrivileges, registerFileProtocol, clearProofCache, cle
 const { loadPersistedAuth, getAuth } = require('./state');
 const { startOfflineWatcher } = require('./printers');
 const { initLoginItem, startedHidden } = require('./startup');
+const { initUpdater } = require('./updater');
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
-const { autoUpdater } = require('electron-updater');
-
-autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;
 
 // The app lives in the tray and keeps printing while its window is hidden, so a
 // second launch must hand off to the running instance rather than start a rival
@@ -16,50 +13,6 @@ autoUpdater.autoInstallOnAppQuit = true;
 // the winner surfaces its window in the "second-instance" handler below.
 const hasInstanceLock = app.requestSingleInstanceLock();
 if (!hasInstanceLock) app.quit();
-
-// Last known update-lifecycle state. Kept here and replayed to the renderer on
-// demand (app:get-update-status) so a banner that mounts late — e.g. after the
-// operator logs in — still reflects an already-downloaded update instead of
-// missing the one-off "downloaded" event.
-// state: 'idle' | 'checking' | 'downloading' | 'ready'
-let updateStatus = { state: 'idle', version: null, percent: 0 };
-
-function setUpdateStatus(state, extra = {}) {
-	updateStatus = { ...updateStatus, state, ...extra };
-	if (window && !window.isDestroyed()) {
-		window.webContents.send('updater:status', updateStatus);
-	}
-}
-
-autoUpdater.on('checking-for-update', () => setUpdateStatus('checking'));
-autoUpdater.on('update-available', (info) => {
-	console.log('Update available:', info.version);
-	setUpdateStatus('downloading', { version: info.version, percent: 0 });
-});
-autoUpdater.on('update-not-available', () => setUpdateStatus('idle'));
-autoUpdater.on('download-progress', (p) => setUpdateStatus('downloading', { percent: Math.round(p.percent || 0) }));
-autoUpdater.on('update-downloaded', (info) => {
-	console.log(`Update ${info.version} downloaded — ready to install on relaunch`);
-	setUpdateStatus('ready', { version: info.version });
-});
-autoUpdater.on('error', (err) => {
-	console.error('Auto-updater error:', err);
-	// Fall back to idle; a later check can retry.
-	setUpdateStatus('idle', { error: err?.message || String(err) });
-});
-
-// Let the renderer trigger a restart + install, read the version, or replay the
-// current update status (for a banner that mounts after events already fired).
-//
-// Both flags matter. The first installs silently: the NSIS installer is the
-// "assisted" kind (nsis.oneClick is false) so a *first* install can pick its
-// directory, but without /S an update drags the operator back through the
-// wizard's progress and Finish pages. The second relaunches the app once the
-// installer finishes -- electron-updater only forces a relaunch on its own for
-// the non-silent path, so a silent install without it would just exit.
-ipcMain.on('app:restart-to-update', () => autoUpdater.quitAndInstall(true, true));
-ipcMain.handle('app:get-version', () => app.getVersion());
-ipcMain.handle('app:get-update-status', () => updateStatus);
 
 // Privileged scheme registration must happen before the app is ready.
 registerFileSchemePrivileges();
@@ -238,11 +191,8 @@ if (hasInstanceLock) app.whenReady().then(() => {
 	// Warm the printer offline-state cache and keep it fresh in the background so
 	// listing printers never blocks on a PowerShell spawn.
 	startOfflineWatcher();
-	if (app.isPackaged) {
-		autoUpdater.checkForUpdates();
-		// Re-check hourly so a long-running instance picks up new releases.
-		setInterval(() => autoUpdater.checkForUpdates(), 60 * 60 * 1000);
-	}
+	// Checks, downloads and installs on its own — see updater.js.
+	initUpdater({ getMainWindow: () => window });
 });
 
 // Deliberately empty: the app is a tray resident, so a closed (hidden) window

@@ -12,6 +12,9 @@ function loadEngine({ jobs = [], storeData = {} } = {}) {
 		printed: [], // every document sent to a printer: { fileId, device, settings }
 		statusCalls: [], // every backend status PATCH: { jobId, status }
 		readyFiles: null, // null = every document downloaded; a Set = only these
+		// true = prints stay in flight until the test calls one of pendingPrints.
+		holdPrints: false,
+		pendingPrints: [],
 		statusListeners: [],
 		store: new Map(Object.entries(storeData)),
 	};
@@ -33,6 +36,9 @@ function loadEngine({ jobs = [], storeData = {} } = {}) {
 				state.printed.push({ fileId, device, settings });
 				onPhase?.();
 				onIdentified?.(`spool-${state.printed.length}`);
+				if (state.holdPrints) {
+					return new Promise((resolve) => state.pendingPrints.push(() => resolve({ outcome: "printed" })));
+				}
 				return Promise.resolve({ outcome: "printed" });
 			},
 			deleteJobFiles: async () => {},
@@ -70,7 +76,7 @@ function loadEngine({ jobs = [], storeData = {} } = {}) {
 		require.cache[file] = mod;
 	}
 	// A fresh engine per test — it keeps its state at module level.
-	for (const name of ["printEngine", "jobRules", "fileSettings"]) delete require.cache[path.join(MAIN, `${name}.js`)];
+	for (const name of ["printEngine", "jobRules", "fileSettings", "updateHandoff"]) delete require.cache[path.join(MAIN, `${name}.js`)];
 
 	const engine = require(path.join(MAIN, "printEngine.js"));
 	engine.init({ getMainWindow: () => null, onSnapshot: () => {}, onToast: () => {}, onJobsChanged: () => {} });
