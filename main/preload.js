@@ -23,7 +23,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	},
 
 	// WhatsApp linked device — status snapshot { state, qr, me, error, enabled,
-	// flow } where state is "idle" | "connecting" | "qr" | "open" | "reconnecting"
+	// flow, excludedContacts } where state is "idle" | "connecting" | "qr" | "open" | "reconnecting"
 	// | "logged_out". `qr` is a PNG data URL while waiting for a scan; `enabled` is
 	// false while message handling is paused; `flow` is "menu" or "chat".
 	getWhatsAppStatus: () => ipcRenderer.invoke("whatsapp:get-status"),
@@ -37,6 +37,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	setWhatsAppEnabled: (enabled) => ipcRenderer.invoke("whatsapp:set-enabled", enabled),
 	// "menu" | "chat": the ordering flow for this shop's new WhatsApp orders.
 	setWhatsAppFlow: (flow) => ipcRenderer.invoke("whatsapp:set-flow", flow),
+	addWhatsAppExcludedContact: (contact) => ipcRenderer.invoke("whatsapp:add-excluded-contact", contact),
+	removeWhatsAppExcludedContact: (id) => ipcRenderer.invoke("whatsapp:remove-excluded-contact", id),
 
 	// Jobs — the list is pushed authoritatively from main; operator actions are
 	// commands handled entirely by the main-process print engine.

@@ -31,22 +31,39 @@ function parseContact(input) {
 		return { id: match[2] === "lid" ? `${match[1]}@lid` : `+${match[1]}` };
 	}
 	if (!/^[+\d\s()-]+$/.test(value)) return { error: "Phone numbers can only contain digits, spaces, +, - and brackets." };
-	const digits = value.replace(/\D/g, "");
+	let digits = value.replace(/\D/g, "");
+	if (digits.startsWith("00")) digits = digits.slice(2);
+	if (/^03\d{9}$/.test(digits)) digits = `92${digits.slice(1)}`;
 	if (digits.length < 7 || digits.length > 15) return { error: "Enter the full number with country code, e.g. +92 300 1234567." };
 	return { id: `+${digits}` };
 }
 
-// Contacts whose incoming WhatsApp messages are not forwarded to ClickPrint.
-// UI-only for now: the list lives in component state. When the backend is
-// ready, load it in an effect and swap add/remove for the API calls — the rest
-// of the section already works on { id, name } entries.
+// Main owns the disk-backed list and pushes successful changes in its snapshot.
 function useExcludedContacts() {
-	const [contacts, setContacts] = useState([]);
+	const { status } = useWhatsAppStatus();
+	const [saving, setSaving] = useState(false);
+	const [error, setError] = useState(null);
+	const loading = !Array.isArray(status.excludedContacts);
+	const contacts = status.excludedContacts || [];
 
-	const add = (contact) => setContacts((list) => [contact, ...list]);
-	const remove = (id) => setContacts((list) => list.filter((c) => c.id !== id));
+	const mutate = async (method, value) => {
+		setSaving(true);
+		setError(null);
+		try {
+			const result = await window.electronAPI[method](value);
+			if (!result?.success) throw new Error(result?.message || "Couldn't save excluded contacts.");
+			return true;
+		} catch (err) {
+			setError(err.message || "Couldn't save excluded contacts.");
+			return false;
+		} finally {
+			setSaving(false);
+		}
+	};
 
-	return { contacts, add, remove };
+	const add = (contact) => mutate("addWhatsAppExcludedContact", contact);
+	const remove = (id) => mutate("removeWhatsAppExcludedContact", id);
+	return { contacts, loading, saving, error, add, remove };
 }
 
 function ConnectionCard() {
@@ -182,13 +199,14 @@ function ConversationStyleCard() {
 }
 
 function ExcludedContactsCard() {
-	const { contacts, add, remove } = useExcludedContacts();
+	const { contacts, loading, saving, error: saveError, add, remove } = useExcludedContacts();
 	const [number, setNumber] = useState("");
 	const [name, setName] = useState("");
 	const [error, setError] = useState(null);
 
-	const handleAdd = (e) => {
+	const handleAdd = async (e) => {
 		e.preventDefault();
+		if (loading || saving) return;
 		const parsed = parseContact(number);
 		if (parsed.error) {
 			setError(parsed.error);
@@ -198,10 +216,11 @@ function ExcludedContactsCard() {
 			setError("That contact is already excluded.");
 			return;
 		}
-		add({ id: parsed.id, name: name.trim() || null });
-		setNumber("");
-		setName("");
 		setError(null);
+		if (await add({ id: parsed.id, name: name.trim() || null })) {
+			setNumber("");
+			setName("");
+		}
 	};
 
 	return (
@@ -211,6 +230,7 @@ function ExcludedContactsCard() {
 					<h4 className="wa-card__title">Excluded contacts</h4>
 					<p className="wa-card__sub">
 						Messages from these contacts stay in WhatsApp and are ignored by ClickPrint.
+						{" "}Saved on this device for this shop.
 					</p>
 				</div>
 				{contacts.length > 0 && <span className="wa-count">{contacts.length}</span>}
@@ -222,19 +242,23 @@ function ExcludedContactsCard() {
 					placeholder="Name (optional)"
 					value={name}
 					maxLength={50}
+					disabled={loading || saving}
 					onChange={(e) => setName(e.target.value)}
 				/>
 				<input
 					className="form-input"
 					placeholder="Phone number or WhatsApp ID"
 					value={number}
+					disabled={loading || saving}
 					onChange={(e) => { setNumber(e.target.value); setError(null); }}
 				/>
-				<button type="submit" className="btn-gradient">Add</button>
+				<button type="submit" className="btn-gradient" disabled={loading || saving}>{saving ? "Saving…" : "Add"}</button>
 			</form>
-			{error && <span className="wa-exclude-form__error">{error}</span>}
+			{(error || saveError) && <span className="wa-exclude-form__error">{error || saveError}</span>}
 
-			{contacts.length === 0 ? (
+			{loading ? (
+				<div className="wa-empty">Loading excluded contacts…</div>
+			) : contacts.length === 0 ? (
 				<div className="wa-empty">No excluded contacts.</div>
 			) : (
 				<ul className="wa-contacts">
@@ -251,6 +275,7 @@ function ExcludedContactsCard() {
 								type="button"
 								className="wa-contact__remove"
 								onClick={() => remove(c.id)}
+								disabled={saving}
 								title="Remove from excluded"
 							>
 								<TrashIcon />

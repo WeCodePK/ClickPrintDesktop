@@ -25,8 +25,10 @@ function readStore() {
 function writeStore(data) {
 	try {
 		fs.writeFileSync(file(), JSON.stringify(data, null, 2));
+		return true;
 	} catch (error) {
 		console.error("[Store] write failed:", error.message);
+		return false;
 	}
 }
 
@@ -37,7 +39,7 @@ function get(key) {
 function set(key, value) {
 	const data = readStore();
 	data[key] = value;
-	writeStore(data);
+	return writeStore(data);
 }
 
 function remove(key) {

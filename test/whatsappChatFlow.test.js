@@ -75,8 +75,8 @@ function setup() {
 			inferences.push(body);
 			return script.shift() ?? inferred({ intent: "offtopic" });
 		},
-		// No COD limit and no wallet by default: confirming places the order directly.
-		shop: {},
+		// Cash is permitted for these ordinary flow tests; no wallet is needed.
+		shop: { codLimit: 500 },
 		async fetchShop() {
 			calls.push(["shop"]);
 			return api.shop ? { success: true, status: 200, data: api.shop } : { success: false, message: "offline" };
@@ -465,6 +465,28 @@ test("a shop without a COD limit takes online payment only", async () => {
 test("a shop with a COD limit but no wallet takes the order as cash", async () => {
 	const { say } = await readyToPay({ codLimit: 500 });
 	assert.match(await say("confirm"), /^Your job has been submitted!\n\nJob code: \*#0427\*\nTotal cost: Rs\.\d+$/);
+});
+
+test("a missing wallet never bypasses disabled, missing, or exceeded COD limits", async () => {
+	for (const shop of [{}, { codLimit: 0 }, { codLimit: 47 }, { codLimit: 48 }, { codLimit: 0, wallet: { number: "" } }]) {
+		const { say, calls, entry } = await readyToPay(shop);
+		const draftId = entry().draftId;
+		assert.equal(await say("confirm"), T.en.paymentUnavailable);
+		assert.equal(entry().draftId, draftId);
+		assert.equal(entry().awaiting, "confirm");
+		assert.equal(await say("yes"), T.en.paymentUnavailable);
+		await say("cash");
+		assert.ok(!calls.some((c) => c[0] === "submit"), JSON.stringify(shop));
+	}
+});
+
+test("a blocked payment can be retried after the shop configures a wallet", async () => {
+	const { say, api, calls, entry } = await readyToPay({ codLimit: 0 });
+	assert.equal(await say("confirm"), T.en.paymentUnavailable);
+	api.shop = { codLimit: 0, wallet };
+	assert.match((await say("confirm"))[0], /Transfer \*Rs\. 48\*/);
+	assert.equal(entry().awaiting, "proof");
+	assert.ok(!calls.some((c) => c[0] === "submit"));
 });
 
 test("when the shop can't be loaded, confirming can be retried", async () => {

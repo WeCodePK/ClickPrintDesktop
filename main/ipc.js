@@ -395,6 +395,14 @@ function registerIpcHandlers(getMainWindow) {
 		return whatsapp.setFlow(String(flow));
 	});
 
+	ipcMain.handle("whatsapp:add-excluded-contact", async (_event, contact) => {
+		return whatsapp.addExcludedContact(contact);
+	});
+
+	ipcMain.handle("whatsapp:remove-excluded-contact", async (_event, id) => {
+		return whatsapp.removeExcludedContact(id);
+	});
+
 	// ── Print engine (all orchestration/state lives in main) ───────────────────
 	ipcMain.handle("engine:get-state", async () => {
 		return engine.getSnapshot();

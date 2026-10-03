@@ -10,6 +10,7 @@ const { MAX_UPLOAD_BYTES, mediaOf, mediaSize, uploadName, uploadErrorReply } = r
 const { textOf, createOrderCore } = require("./whatsappOrders");
 const { createMenuFlow } = require("./whatsappMenuFlow");
 const { createChatFlow } = require("./whatsappChatFlow");
+const { createExcludedContacts } = require("./whatsappContacts");
 
 // The shop's linked WhatsApp account, driven by Baileys. One socket per app
 // (the single-instance lock in main.js guarantees that), scoped to the selected
@@ -31,6 +32,7 @@ async function baileys() {
 }
 
 const logger = pino({ level: "silent" });
+const excludedContacts = createExcludedContacts(store);
 
 const orders = createOrderCore({
 	api,
@@ -62,7 +64,8 @@ const _pendingMedia = new Map();
 // state: "idle" | "connecting" | "qr" | "open" | "reconnecting" | "logged_out"
 // enabled: false while the operator has paused message handling (see setEnabled).
 // flow: the shop's ordering flow for new orders (see setFlow).
-let _snapshot = { state: "idle", qr: null, me: null, error: null, enabled: true, flow: DEFAULT_FLOW };
+// excludedContacts: saved on this device for the selected shop.
+let _snapshot = { state: "idle", qr: null, me: null, error: null, enabled: true, flow: DEFAULT_FLOW, excludedContacts: [] };
 let _notify = null;
 
 let _shopId = null;
@@ -119,7 +122,7 @@ function start(shopId) {
 	if (!shopId) return;
 	if (_shopId !== shopId) _teardown();
 	_shopId = shopId;
-	_set({ enabled: isEnabled(shopId), flow: flowSetting(shopId) });
+	_set({ enabled: isEnabled(shopId), flow: flowSetting(shopId), excludedContacts: excludedContacts.list(shopId) });
 	if (_sock) return;
 	if (isLinked(shopId)) {
 		console.log("[WA] linked device found — reconnecting");
@@ -274,6 +277,26 @@ function setFlow(flow) {
 	return { success: true };
 }
 
+function addExcludedContact(contact) {
+	if (!_shopId) return { success: false, message: "No shop selected." };
+	const result = excludedContacts.add(_shopId, contact);
+	if (result.success) _set({ excludedContacts: result.data });
+	return result;
+}
+
+function removeExcludedContact(id) {
+	if (!_shopId) return { success: false, message: "No shop selected." };
+	const result = excludedContacts.remove(_shopId, id);
+	if (result.success) _set({ excludedContacts: result.data });
+	return result;
+}
+
+async function _canHandle(sock, shopId, msg) {
+	if (_shopId !== shopId || sock !== _sock || !_snapshot.enabled) return false;
+	if (await excludedContacts.isExcluded(shopId, msg, sock)) return false;
+	return _shopId === shopId && sock === _sock && _snapshot.enabled;
+}
+
 // The flow handling this customer: their open draft's, else the shop's.
 function _flowFor(shopId, customer) {
 	return FLOWS[orders.flowOf(shopId, customer.number)] || FLOWS[flowSetting(shopId)];
@@ -283,7 +306,7 @@ function _flowFor(shopId, customer) {
 // status updates): documents and photos go into the customer's draft, and text messages
 // drive its settings menu and "confirm" / "cancel". Text that isn't meant for
 // the order flow gets no reply. Every one is marked delivered; only the ones the
-// app acts on are marked read. Nothing is handled — or read — while paused.
+// app acts on are marked read. Paused and excluded contacts aren't processed.
 async function _onMessagesUpsert(sock, shopId, { type, messages }) {
 	if (type !== "notify") return;
 	const { isPnUser, isLidUser } = await baileys();
@@ -300,7 +323,6 @@ async function _onMessagesUpsert(sock, shopId, { type, messages }) {
 	for (const msg of incoming) {
 		const jid = msg.key.remoteJid;
 		if (mediaOf(msg)) {
-			_markRead(sock, msg);
 			_pendingMedia.set(jid, (_pendingMedia.get(jid) || 0) + 1);
 			_enqueue(jid, () => _onMedia(sock, shopId, msg));
 			continue;
@@ -347,11 +369,16 @@ async function _onMedia(sock, shopId, msg) {
 	const left = (_pendingMedia.get(jid) || 1) - 1;
 	if (left > 0) _pendingMedia.set(jid, left);
 	else _pendingMedia.delete(jid);
+	// The operator may exclude this contact while the message waits in its queue.
+	if (!await _canHandle(sock, shopId, msg)) return;
+	_markRead(sock, msg);
 
 	const uploaded = await _handleMedia(sock, shopId, msg);
+	if (!await _canHandle(sock, shopId, msg)) return;
 	// Checked after the upload: files arriving meanwhile are part of the burst.
 	const morePending = _pendingMedia.has(jid);
 	const customer = await _customerOf(sock, msg);
+	if (!await _canHandle(sock, shopId, msg)) return;
 	const flow = _flowFor(shopId, customer);
 
 	if (!uploaded) {
@@ -366,9 +393,12 @@ async function _onMedia(sock, shopId, msg) {
 }
 
 async function _onText(sock, shopId, msg, text) {
+	if (!await _canHandle(sock, shopId, msg)) return;
 	const customer = await _customerOf(sock, msg);
+	if (!await _canHandle(sock, shopId, msg)) return;
 	const reply = await _flowFor(shopId, customer).handleText(shopId, customer, text);
 	if (!reply) return; // ordinary chat: left unread for the shop
+	if (!await _canHandle(sock, shopId, msg)) return;
 	_markRead(sock, msg);
 	await _reply(shopId, msg, reply);
 }
@@ -424,6 +454,7 @@ async function _handleMedia(sock, shopId, msg) {
 		return null;
 	}
 
+	if (!await _canHandle(sock, shopId, msg)) return null;
 	const result = await api.uploadFile(filePath, { filename: name, filetype: media.mimetype });
 	if (result.success) return { file: result.data, name };
 	await _reply(shopId, msg, uploadErrorReply(name, result));
@@ -442,6 +473,7 @@ async function _reply(shopId, msg, reply) {
 			console.error(`[WA] dropped reply to ${jid}: not connected`);
 			return;
 		}
+		if (!await _canHandle(_sock, shopId, msg)) return;
 		try {
 			await _sock.sendMessage(jid, { text }, i === 0 ? { quoted: msg } : undefined);
 			console.log(`[WA] replied to ${jid}: ${text}`);
@@ -511,7 +543,7 @@ function _teardown() {
 function disconnect() {
 	_teardown();
 	_shopId = null;
-	_set({ state: "idle", qr: null, me: null, error: null, enabled: true, flow: DEFAULT_FLOW });
+	_set({ state: "idle", qr: null, me: null, error: null, enabled: true, flow: DEFAULT_FLOW, excludedContacts: [] });
 }
 
 // Drawer "Unlink": removes this device from the WhatsApp account and forgets it.
@@ -534,4 +566,4 @@ async function unlink() {
 	return { success: true };
 }
 
-module.exports = { start, connect, disconnect, unlink, setEnabled, setFlow, sendText, getSnapshot, setNotifier };
+module.exports = { start, connect, disconnect, unlink, setEnabled, setFlow, addExcludedContact, removeExcludedContact, sendText, getSnapshot, setNotifier };
