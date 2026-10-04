@@ -90,7 +90,7 @@ function whatsappHarness(folder, flowOverride = {}) {
 		module.exports.testPending = () => _pendingMedia.size;
 		_handleMedia = async () => { effects.push(['download']); return { file: { _id: 'f1', numberOfPages: 1 }, name: 'a.pdf' }; };
 	`, {
-		module, console, setTimeout, clearTimeout, effects,
+		module, console, setTimeout, clearTimeout, setInterval, clearInterval, effects,
 		require: (id) => {
 			if (id === "electron") return { app: { getPath: () => folder } };
 			if (id === "pino") return () => ({});
@@ -99,6 +99,7 @@ function whatsappHarness(folder, flowOverride = {}) {
 			if (id === "./store") return store;
 			if (id === "./whatsappMenuFlow") return { createMenuFlow: () => flow };
 			if (id === "./whatsappChatFlow") return { createChatFlow: () => flow };
+			if (id === "./whatsappWelcome") return { createWelcome: () => ({ message: async () => null, sent: () => {} }) };
 			return id.startsWith("./") ? require(path.join(__dirname, "../main", id)) : require(id);
 		},
 	});

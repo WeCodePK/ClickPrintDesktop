@@ -44,7 +44,15 @@ function costLines(cost) {
 // api: { createDraft, updateDraft, checkDraft, submitDraft, deleteDraft }, each
 // resolving { success, status, message, data } with data the draft (or job, for
 // submit). load() returns the saved drafts map; save(map) persists it.
-function createOrderCore({ api, load, save }) {
+const SESSION_IDLE_MS = 10 * 60 * 1000;
+
+function createOrderCore({ api, load, save, loadSessions, saveSessions, loadExpired, saveExpired }) {
+	let sessions = {}, expiredDrafts = {};
+	loadSessions ||= () => sessions;
+	saveSessions ||= (value) => { sessions = value; };
+	loadExpired ||= () => expiredDrafts;
+	saveExpired ||= (value) => { expiredDrafts = value; };
+	let cleaning = null;
 	function keyOf(shopId, number) {
 		return `${shopId}:${number}`;
 	}
@@ -54,10 +62,77 @@ function createOrderCore({ api, load, save }) {
 	}
 
 	function setEntry(key, entry) {
+		if (retired(key, entry)) return false;
 		const drafts = load();
-		if (entry) drafts[key] = entry;
+		if (entry) drafts[key] = { ...entry, lastActivityAt: Date.now() };
 		else delete drafts[key];
 		save(drafts);
+		return true;
+	}
+
+	function session(key, updates) {
+		const map = loadSessions();
+		if (updates) {
+			map[key] = { ...map[key], ...updates };
+			saveSessions(map);
+		}
+		return map[key] || {};
+	}
+
+	function retired(key, entry) {
+		return !!entry?.draftId && session(key).expiredDraftId === entry.draftId;
+	}
+
+	// Forget locally first, so a failed cleanup request cannot attach yesterday's
+	// files to a new order. Retry the backend deletion from the persisted queue.
+	function expire(key) {
+		const entry = getEntry(key);
+		if (!entry || (Number.isFinite(entry.lastActivityAt) && Date.now() - entry.lastActivityAt < SESSION_IDLE_MS)) return false;
+		if (entry.draftId) {
+			const pending = loadExpired();
+			pending[entry.draftId] = key.slice(0, key.indexOf(":"));
+			saveExpired(pending);
+		}
+		session(key, { expired: true, expiredDraftId: entry.draftId });
+		setEntry(key, null);
+		return true;
+	}
+
+	function expireIdle(shopId) {
+		for (const key of Object.keys(load())) if (key.startsWith(`${shopId}:`)) expire(key);
+	}
+
+	function prepare(key) {
+		expire(key);
+		const expired = !!session(key).expired;
+		if (expired) session(key, { expired: false });
+		const entry = getEntry(key);
+		if (entry) setEntry(key, entry);
+		return { expired };
+	}
+
+	// Older `greeted` flags were also set by uploads, even without a welcome.
+	function hasGreeted(key) { return !!session(key).welcomeSent; }
+	function markGreeted(key) { session(key, { welcomeSent: true }); }
+
+	function flushExpired(shopId) {
+		if (cleaning) return cleaning;
+		cleaning = (async () => {
+			for (const [draftId, shop] of Object.entries(loadExpired())) {
+				if (shop !== String(shopId)) continue;
+				try {
+					const result = await api.deleteDraft(draftId);
+					if (result?.success || result?.status === 404) {
+						const pending = loadExpired();
+						delete pending[draftId];
+						saveExpired(pending);
+					}
+				} catch (error) {
+					console.error("[Drafts] expired draft cleanup failed:", error.message);
+				}
+			}
+		})().finally(() => { cleaning = null; });
+		return cleaning;
 	}
 
 	// Which flow owns the customer's open draft, or null when they have none.
@@ -72,6 +147,7 @@ function createOrderCore({ api, load, save }) {
 	// has them. Saves the entry, with its draftId, only on success. Returns
 	// { ok, entry } (the saved entry) or { ok: false, message }.
 	async function push(shopId, key, entry, files) {
+		if (retired(key, entry)) return { ok: false, message: "This session expired. Send a document to start a new order." };
 		const body = {
 			source: "shop",
 			channel: "whatsapp",
@@ -81,9 +157,11 @@ function createOrderCore({ api, load, save }) {
 			...(entry.additionalComments != null && { additionalComments: entry.additionalComments }),
 			...(entry.paymentProofFile != null && { paymentProofFile: entry.paymentProofFile }),
 		};
+		if (entry.draftId && entry.paymentProofFile === null) body.paymentProofFile = null;
 		let result = entry.draftId ? await api.updateDraft(entry.draftId, body) : await api.createDraft(body);
 		if (entry.draftId && result?.status === 404) {
 			console.log(`[Drafts] draft ${entry.draftId} for ${entry.customer.number} is gone — creating a new one`);
+			if (body.paymentProofFile === null) delete body.paymentProofFile;
 			result = await api.createDraft(body);
 		}
 		const draftId = result?.data?._id ?? entry.draftId;
@@ -92,7 +170,7 @@ function createOrderCore({ api, load, save }) {
 			return { ok: false, message: result?.message };
 		}
 		const saved = { ...entry, draftId };
-		setEntry(key, saved);
+		if (!setEntry(key, saved)) return { ok: false, message: "This session expired. Send a document to start a new order." };
 		return { ok: true, entry: saved };
 	}
 
@@ -100,6 +178,7 @@ function createOrderCore({ api, load, save }) {
 	// `files` first. Returns { ok, entry, cost } or { ok: false, message }; the
 	// entry itself isn't saved here beyond what a recreate needs.
 	async function price(shopId, key, entry, files) {
+		if (retired(key, entry)) return { ok: false, message: "This session expired. Send a document to start a new order." };
 		let current = entry;
 		let check = await api.checkDraft(current.draftId);
 		if (check?.status === 404) {
@@ -120,6 +199,7 @@ function createOrderCore({ api, load, save }) {
 	// { ok: false, gone } — gone when the backend no longer has the draft (it's
 	// forgotten too), else with the backend's message and the entry kept.
 	async function submit(key, entry) {
+		if (retired(key, entry)) return { ok: false, gone: true };
 		const result = await api.submitDraft(entry.draftId);
 		if (result?.success) {
 			setEntry(key, null);
@@ -149,7 +229,7 @@ function createOrderCore({ api, load, save }) {
 		return { ok: true };
 	}
 
-	return { keyOf, getEntry, setEntry, flowOf, push, price, submit, remove };
+	return { keyOf, getEntry, setEntry, flowOf, push, price, submit, remove, prepare, expire, expireIdle, flushExpired, hasGreeted, markGreeted };
 }
 
-module.exports = { textOf, normalize, rupees, plural, costLines, createOrderCore };
+module.exports = { textOf, normalize, rupees, plural, costLines, createOrderCore, SESSION_IDLE_MS };

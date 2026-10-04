@@ -13,7 +13,7 @@
 //
 // LLM calls are kept to messages that need one: file receipts, keywords
 // (confirm / cancel / yes-words), thanks and emoji never reach it, and
-// customers without an open order are ignored entirely.
+// the shared incoming handler sends the first-message welcome without an LLM call.
 //
 // Its draft entries (see whatsappOrders.js) look like:
 //   { flow: "chat", draftId, customer,
@@ -36,6 +36,7 @@
 
 const { DEFAULT_SETTINGS, MAX_COPIES, autoDuplex, code } = require("./whatsappSettings");
 const { normalize, rupees } = require("./whatsappOrders");
+const { removalOf, pickupQuestion, paymentAnswer } = require("./whatsappChatCommands");
 
 const FLOW = "chat";
 const HISTORY_TURNS = 6;
@@ -44,7 +45,7 @@ const MAX_PARTS = 20; // runs per file the backend accepts as context
 // ── Words handled without the LLM ─────────────────────────────────────────────
 
 const CONFIRM_WORDS = new Set(["confirm"]);
-const CANCEL_WORDS = new Set(["cancel", "cancel karo", "cancel kardo", "cancel kar do"]);
+const CANCEL_WORDS = new Set(["cancel", "cancel karo", "cancel kardo", "cancel kar do", "close session", "end session", "start over", "new order", "naya order", "نیا آرڈر"]);
 // Only mean "go ahead" once a total is waiting for an answer.
 const YES_WORDS = new Set([
 	"yes", "y", "yep", "ok", "okay", "haan", "han", "ha", "ji", "jee", "g", "done",
@@ -52,7 +53,7 @@ const YES_WORDS = new Set([
 	"ہاں", "جی", "ٹھیک ہے", "👍", "✅", "👌",
 ]);
 // How the customer wants to pay, once asked.
-const CASH_WORDS = new Set(["cash", "naqad", "nakad", "cod", "pickup", "نقد", "کیش"]);
+const CASH_WORDS = new Set(["cash", "naqad", "nakad", "cop", "cod", "pickup", "نقد", "کیش"]);
 const ONLINE_WORDS = new Set(["online", "transfer", "bank", "jazzcash", "easypaisa", "sadapay", "nayapay", "آن لائن", "آنلائن"]);
 
 // "cash", "online", or null when the message says neither (or both).
@@ -109,6 +110,19 @@ const placedText = (heading, codeLine, totalLine) => [heading, "", ...[codeLine,
 
 const T = {
 	en: {
+		welcome: (shop) => `I am ClickPrint AI of *${shop}*, send a document to continue.`,
+		expired: "Your previous draft expired after 10 minutes of inactivity. Its files are no longer in your order. Send a document to start a new order.",
+		expiredAdded: "Your previous draft expired after 10 minutes of inactivity. This document starts a new order.",
+		pickup: "Collect at the shop counter.",
+		cashPickup: "*Cash on Pickup*: pay and collect at the shop counter.",
+		cashLimit: (limit) => `Cash on Pickup is available for orders below ${rupees(limit)}.`,
+		onlineAvailable: "You can also pay online by bank transfer and send a screenshot of the payment confirmation.",
+		onlineRequired: "Cash on Pickup isn't available for this order. Online payment is required before submission.",
+		cashDisabled: "Cash on Pickup is disabled for this shop. Online payment is required.",
+		whichRemove: "Which document should I remove? Reply with its number or filename:",
+		removed: (names) => `Removed from your order: ${names.map(code).join(", ")}.`,
+		removedAll: "All documents have been removed and the draft is closed. Send a document to start a new order.",
+		kept: "Your documents are unchanged.",
 		color: "color", bw: "B&W", single: "single-sided", double: "double-sided",
 		landscape: "landscape", portrait: "portrait", perSheet: (n) => `${n} per sheet`,
 		copies: (n) => plural(n, "copy", "copies"),
@@ -123,7 +137,7 @@ const T = {
 		confirmHint: "Reply *confirm* to place your order.",
 		placed: (codeText, total) =>
 			placedText("Your job has been submitted!", codeText && `Job code: *#${codeText}*`, total != null && `Total cost: Rs.${total}`),
-		payHow: "How would you like to pay?\n• *cash*: pay when you collect\n• *online*: pay now by bank transfer",
+		payHow: "How would you like to pay?\n• *cash*: Cash on Pickup\n• *online*: pay now by bank transfer\n\ncollect at the shop counter",
 		payOnline: (amount, wallet, limit) =>
 			payMessages(
 				(limit != null ? `Orders of ${rupees(limit)} or more are paid online.\n` : "") +
@@ -148,6 +162,19 @@ const T = {
 		gone: "Sorry, I couldn't find your order anymore. Please send your files again.",
 	},
 	roman_urdu: {
+		welcome: (shop) => `Main *${shop}* ka ClickPrint AI hoon, aage barhne ke liye document bhejen.`,
+		expired: "10 minute koi activity na hone par aap ka pichla draft expire ho gaya. Purani files ab order mein nahi hain. Naya order shuru karne ke liye document bhejen.",
+		expiredAdded: "10 minute koi activity na hone par pichla draft expire ho gaya. Is document se naya order shuru hua hai.",
+		pickup: "Shop counter se collect karen.",
+		cashPickup: "*Cash on Pickup*: shop counter par payment karen aur prints collect karen.",
+		cashLimit: (limit) => `Cash on Pickup ${rupees(limit)} se kam ke orders ke liye available hai.`,
+		onlineAvailable: "Aap bank transfer se online payment bhi kar sakte hain aur payment confirmation ka screenshot bhej sakte hain.",
+		onlineRequired: "Is order ke liye Cash on Pickup available nahi hai. Order submit karne se pehle online payment zaroori hai.",
+		cashDisabled: "Is shop par Cash on Pickup band hai. Online payment zaroori hai.",
+		whichRemove: "Kaunsa document remove karna hai? Us ka number ya filename likhen:",
+		removed: (names) => `Order se remove kar diya: ${names.map(code).join(", ")}.`,
+		removedAll: "Tamam documents remove ho gaye aur draft band ho gaya. Naya order shuru karne ke liye document bhejen.",
+		kept: "Aap ke documents mein koi tabdeeli nahi hui.",
 		color: "color", bw: "black & white", single: "single side", double: "double side",
 		landscape: "landscape", portrait: "portrait", perSheet: (n) => `${n} per sheet`,
 		copies: (n) => plural(n, "copy", "copies"),
@@ -162,7 +189,7 @@ const T = {
 		confirmHint: "Order dene ke liye *confirm* likhen.",
 		placed: (codeText, total) =>
 			placedText("Aap ki job submit ho gayi hai!", codeText && `Job code: *#${codeText}*`, total != null && `Total cost: Rs.${total}`),
-		payHow: "Payment kaise karenge?\n• *cash*: pickup par payment\n• *online*: abhi bank transfer",
+		payHow: "Payment kaise karenge?\n• *cash*: Cash on Pickup\n• *online*: abhi bank transfer\n\nshop counter se collect karen",
 		payOnline: (amount, wallet, limit) =>
 			payMessages(
 				(limit != null ? `${rupees(limit)} ya us se zyada ke orders ki payment online hoti hai.\n` : "") +
@@ -187,6 +214,19 @@ const T = {
 		gone: "Maaf kijiye, aap ka order nahi mila. Files dobara bhejen.",
 	},
 	urdu: {
+		welcome: (shop) => `میں *${shop}* کا ClickPrint AI ہوں، آگے بڑھنے کے لیے دستاویز بھیجیں۔`,
+		expired: "10 منٹ کوئی سرگرمی نہ ہونے پر آپ کا پچھلا ڈرافٹ ختم ہو گیا۔ پرانی فائلیں اب آرڈر میں شامل نہیں ہیں۔ نیا آرڈر شروع کرنے کے لیے دستاویز بھیجیں۔",
+		expiredAdded: "10 منٹ کوئی سرگرمی نہ ہونے پر پچھلا ڈرافٹ ختم ہو گیا۔ اس دستاویز سے نیا آرڈر شروع ہوا ہے۔",
+		pickup: "دکان کے کاؤنٹر سے وصول کریں۔",
+		cashPickup: "*Cash on Pickup*: دکان کے کاؤنٹر پر ادائیگی کریں اور پرنٹس وصول کریں۔",
+		cashLimit: (limit) => `${rupees(limit)} سے کم کے آرڈرز کے لیے Cash on Pickup دستیاب ہے۔`,
+		onlineAvailable: "آپ بینک ٹرانسفر کے ذریعے آن لائن ادائیگی بھی کر سکتے ہیں اور ادائیگی کی تصدیق کا اسکرین شاٹ بھیج سکتے ہیں۔",
+		onlineRequired: "اس آرڈر کے لیے Cash on Pickup دستیاب نہیں ہے۔ آرڈر جمع کرنے سے پہلے آن لائن ادائیگی ضروری ہے۔",
+		cashDisabled: "اس دکان پر Cash on Pickup بند ہے۔ آن لائن ادائیگی ضروری ہے۔",
+		whichRemove: "کون سی دستاویز ہٹانی ہے؟ اس کا نمبر یا فائل کا نام لکھیں:",
+		removed: (names) => `آرڈر سے ہٹا دیا: ${names.map(code).join("، ")}۔`,
+		removedAll: "تمام دستاویزات ہٹا دی گئیں اور ڈرافٹ بند ہو گیا۔ نیا آرڈر شروع کرنے کے لیے دستاویز بھیجیں۔",
+		kept: "آپ کی دستاویزات میں کوئی تبدیلی نہیں ہوئی۔",
 		color: "رنگین", bw: "بلیک اینڈ وائٹ", single: "ایک طرف", double: "دونوں طرف",
 		landscape: "لینڈ اسکیپ", portrait: "پورٹریٹ", perSheet: (n) => `ایک شیٹ پر ${n}`,
 		copies: (n) => `${n} کاپی`,
@@ -201,7 +241,7 @@ const T = {
 		confirmHint: "آرڈر کے لیے *confirm* لکھیں۔",
 		placed: (codeText, total) =>
 			placedText("آپ کی جاب جمع ہو گئی ہے!", codeText && `جاب کوڈ: *#${codeText}*`, total != null && `کل لاگت: Rs.${total}`),
-		payHow: "ادائیگی کیسے کریں گے؟\n• *cash*: وصولی پر ادائیگی\n• *online*: ابھی بینک ٹرانسفر",
+		payHow: "ادائیگی کیسے کریں گے؟\n• *cash*: Cash on Pickup\n• *online*: ابھی بینک ٹرانسفر\n\nدکان کے کاؤنٹر سے وصول کریں",
 		payOnline: (amount, wallet, limit) =>
 			payMessages(
 				(limit != null ? `${rupees(limit)} یا اس سے زیادہ کے آرڈرز کی ادائیگی آن لائن ہوتی ہے۔\n` : "") +
@@ -466,8 +506,9 @@ function createChatFlow(core, api) {
 	// file. Replies once per batch: while more of their files are still being
 	// uploaded (`morePending`) it stays quiet and remembers the file. While a
 	// payment screenshot is awaited, the file is that screenshot instead.
-	async function addFile(shopId, customer, file, name = file.name, { morePending = false } = {}) {
+	async function addFile(shopId, customer, file, name = file.name, { morePending = false, messageId } = {}) {
 		const key = keyOf(shopId, customer.number);
+		const { expired } = core.prepare(key);
 		const previous = getEntry(key);
 		if (previous?.awaiting === "proof") return attachProof(shopId, key, previous, file);
 
@@ -483,11 +524,17 @@ function createChatFlow(core, api) {
 			flow: FLOW,
 			draftId: previous?.draftId ?? null,
 			customer,
-			files: [...(previous?.files || []), { file: file._id, name, numberOfPages: pages, runs: wholeFile(pages) }],
+			files: [...(previous?.files || []), { file: file._id, name, numberOfPages: pages, runs: wholeFile(pages), messageId }],
 			awaiting: null,
 			language: previous?.language || "en",
 			history: previous?.history || [],
 			batch: [...(previous?.batch || []), name],
+			focusedFiles: [file._id],
+			pendingRemoval: false,
+			sessionExpired: expired || previous?.sessionExpired,
+			payment: null,
+			cashPayment: false,
+			paymentProofFile: previous?.paymentProofFile ? null : undefined,
 		};
 		const t = textsFor(entry.language);
 
@@ -508,22 +555,28 @@ function createChatFlow(core, api) {
 	// Asks for the print settings of the files just received (no need to echo
 	// their names back: the reply quotes the customer's last file).
 	function acknowledge(key, entry) {
-		const reply = textsFor(entry.language).received((entry.batch || []).length <= 1);
-		setEntry(key, { ...remember(entry, null, reply), batch: [] });
+		const t = textsFor(entry.language);
+		const reply = [entry.sessionExpired && t.expiredAdded, t.received((entry.batch || []).length <= 1)].filter(Boolean).join("\n\n");
+		setEntry(key, { ...remember(entry, null, reply), batch: [], sessionExpired: false });
 		return reply;
 	}
 
 	// Handles a text message. Returns the reply, or null to stay silent.
-	async function handleText(shopId, customer, text) {
+	async function handleText(shopId, customer, text, { quotedMessageId } = {}) {
 		const key = keyOf(shopId, customer.number);
+		const { expired } = core.prepare(key);
 		let entry = getEntry(key);
 		const word = wordOf(text);
 		const guess = detectLanguage(text);
 
 		if (!entry) {
-			// Only the two keywords get an answer; anything else is ordinary chat.
+			if (expired) return textsFor(guess).expired;
 			if (CONFIRM_WORDS.has(word)) return textsFor(guess).noOrder;
-			if (CANCEL_WORDS.has(word)) return textsFor(guess).noOrderToCancel;
+			if (CANCEL_WORDS.has(word)) {
+				justPlaced.delete(key);
+				return textsFor(guess).noOrderToCancel;
+			}
+			if (pickupQuestion(text)) return pickupInfo(key, null, text);
 			return null;
 		}
 		if (guess && guess !== entry.language) {
@@ -532,21 +585,64 @@ function createChatFlow(core, api) {
 		}
 
 		if (CANCEL_WORDS.has(word)) return cancel(key, entry);
+		const removal = removalOf(text, entry, entry.pendingRemoval);
+		if (removal) {
+			if (removal.keep) return reply(key, { ...entry, pendingRemoval: false }, text, textsFor(entry.language).kept);
+			if (removal.clarify) {
+				const list = entry.files.map((file, i) => `${i + 1}. ${code(file.name)}`).join("\n");
+				return reply(key, { ...entry, pendingRemoval: true }, text, `${textsFor(entry.language).whichRemove}\n${list}`);
+			}
+			return removeFiles(shopId, key, entry, text, removal.indices);
+		}
+		const quoted = quotedMessageId && entry.files.find((file) => file.messageId === quotedMessageId);
+		if (quoted) entry = { ...entry, focusedFiles: [quoted.file] };
+		if (pickupQuestion(text) && (!inPayment(entry) || !paymentAnswer(text))) return pickupInfo(key, entry, text);
 
 		// Choosing how to pay, or sending the payment screenshot: the choice and
 		// the usual yes-words are understood without the LLM.
 		if (entry.awaiting === "payment" || entry.awaiting === "proof") {
-			const choice = paymentChoice(word);
-			if (choice === "cash" && entry.payment?.codOk) return placeOrder(key, entry);
+			const choice = paymentAnswer(text) ? paymentChoice(word) : null;
+			if (choice === "cash" && entry.payment?.codOk) return placeOrder(key, { ...entry, cashPayment: true });
 			if (choice === "online" && entry.awaiting === "payment") return askProof(key, entry, text);
+			if (choice) return paymentPrompt(key, entry, text);
 			if (CONFIRM_WORDS.has(word) || isYes(word)) return paymentPrompt(key, entry, text);
 		} else if (CONFIRM_WORDS.has(word) || (entry.awaiting === "confirm" && isYes(word))) {
 			return confirm(shopId, key, entry, text);
 		}
+		// A question about cash or pickup must not itself confirm the order.
+		if (pickupQuestion(text)) return pickupInfo(key, entry, text);
 		if (isYes(word) || ACK_WORDS.has(word)) return null;
 		if (!/[\p{L}\p{N}]/u.test(text)) return null;
 
 		return understand(shopId, key, entry, text);
+	}
+
+	async function pickupInfo(key, entry, text) {
+		const t = textsFor(entry?.language || detectLanguage(text));
+		const shop = await api.fetchShop();
+		if (!shop?.success || !shop.data) return entry ? reply(key, entry, text, `${t.pickup}\n${t.shopFailed}`) : `${t.pickup}\n${t.shopFailed}`;
+		const limit = shop.data.codLimit;
+		const cash = typeof limit === "number" && limit > 0 && (entry?.total == null || Number(entry.total) < limit);
+		const wallet = !!shop.data.wallet?.number;
+		const guidance = cash ? t.cashLimit(limit) : !wallet ? t.paymentUnavailable : typeof limit === "number" && limit > 0 ? t.onlineRequired : t.cashDisabled;
+		const message = [t.pickup, guidance, cash && wallet && t.onlineAvailable, !entry && t.noOrder].filter(Boolean).join("\n\n");
+		return entry ? reply(key, entry, text, message) : message;
+	}
+
+	async function removeFiles(shopId, key, entry, text, indices) {
+		const t = textsFor(entry.language);
+		const targets = new Set(indices);
+		const removed = entry.files.filter((_, i) => targets.has(i));
+		const remaining = entry.files.filter((_, i) => !targets.has(i));
+		if (!remaining.length) {
+			const result = await core.remove(key, entry);
+			if (result.ok) justPlaced.delete(key);
+			return result.ok ? t.removedAll : reply(key, entry, text, t.updateFailed(result.message));
+		}
+		const next = { ...entry, files: remaining, awaiting: null, total: null, payment: null, cashPayment: false, paymentProofFile: null, pendingRemoval: false, batch: [], history: [], focusedFiles: [] };
+		const saved = await core.push(shopId, key, next, toDraftFiles(next));
+		if (!saved.ok) return reply(key, entry, text, t.updateFailed(saved.message));
+		return showTotal(shopId, key, saved.entry, text, t.removed(removed.map((file) => file.name)));
 	}
 
 	// Asks the backend to read the message and acts on what it found.
@@ -610,7 +706,8 @@ function createChatFlow(core, api) {
 
 	async function changeSettings(shopId, key, entry, text, changes) {
 		const t = textsFor(entry.language);
-		const next = { ...entry, files: applyChanges(entry.files, changes), awaiting: null };
+		const focusedFiles = changes.length ? entry.files.filter((_, i) => changes.some((change) => !change.files?.length || change.files.includes(i + 1))).map((file) => file.file) : entry.focusedFiles;
+		const next = { ...entry, files: applyChanges(entry.files, changes), awaiting: null, payment: null, cashPayment: false, paymentProofFile: null, pendingRemoval: false, focusedFiles };
 		const files = toDraftFiles(next);
 		if (files.length === 0) return reply(key, entry, text, t.nothingLeft);
 
@@ -653,11 +750,11 @@ function createChatFlow(core, api) {
 		const { bank, title, number } = shop.data.wallet || {};
 		const wallet = number ? { bank: bank || "", title: title || "", number } : null;
 		const codOk = codLimit != null && Number(entry.total) < codLimit;
-		const next = { ...entry, payment: { codOk, codLimit, wallet } };
+		const next = { ...entry, payment: { codOk, codLimit, wallet }, cashPayment: false };
 
 		if (codOk && wallet) return reply(key, { ...next, awaiting: "payment" }, text, t.payHow);
 		if (wallet) return askProof(key, next, text);
-		if (codOk) return placeOrder(key, next);
+		if (codOk) return placeOrder(key, { ...next, cashPayment: true });
 		return reply(key, entry, text, t.paymentUnavailable);
 	}
 
@@ -666,7 +763,7 @@ function createChatFlow(core, api) {
 		const t = textsFor(entry.language);
 		const { codOk, codLimit, wallet } = entry.payment;
 		const message = t.payOnline(entry.total, wallet, codOk ? null : codLimit);
-		return reply(key, { ...entry, awaiting: "proof" }, text, message);
+		return reply(key, { ...entry, awaiting: "proof", cashPayment: false }, text, message);
 	}
 
 	// Repeats whatever the payment step is waiting for.
@@ -689,7 +786,7 @@ function createChatFlow(core, api) {
 		if (result.ok) {
 			const { code: orderCode, cost } = result.job;
 			justPlaced.set(key, { code: orderCode, at: Date.now(), language: entry.language });
-			return t.placed(orderCode, cost?.total);
+			return `${t.placed(orderCode, cost?.total)}\n\n${entry.cashPayment ? t.cashPickup : t.pickup}`;
 		}
 		if (result.gone) return t.gone;
 		return reply(key, entry, null, t.submitFailed(result.message));
@@ -698,6 +795,7 @@ function createChatFlow(core, api) {
 	async function cancel(key, entry) {
 		const t = textsFor(entry.language);
 		const result = await core.remove(key, entry);
+		if (result.ok) justPlaced.delete(key);
 		return result.ok ? t.cancelled : t.cancelFailed(result.message);
 	}
 

@@ -11,6 +11,8 @@ const { textOf, createOrderCore } = require("./whatsappOrders");
 const { createMenuFlow } = require("./whatsappMenuFlow");
 const { createChatFlow } = require("./whatsappChatFlow");
 const { createExcludedContacts } = require("./whatsappContacts");
+const { createWelcome } = require("./whatsappWelcome");
+const { getAuth } = require("./state");
 
 // The shop's linked WhatsApp account, driven by Baileys. One socket per app
 // (the single-instance lock in main.js guarantees that), scoped to the selected
@@ -38,6 +40,14 @@ const orders = createOrderCore({
 	api,
 	load: () => store.get("whatsappDrafts") || {},
 	save: (map) => store.set("whatsappDrafts", map),
+	loadSessions: () => store.get("whatsappChatSessions") || {},
+	saveSessions: (map) => store.set("whatsappChatSessions", map),
+	loadExpired: () => store.get("whatsappExpiredDrafts") || {},
+	saveExpired: (map) => store.set("whatsappExpiredDrafts", map),
+});
+const welcome = createWelcome(orders, api, (shopId) => {
+	const auth = getAuth();
+	return auth.shopId === shopId ? auth.shopName : null;
 });
 
 // The ordering flows being tried out, by the name the settings store. Each has
@@ -71,6 +81,7 @@ let _notify = null;
 let _shopId = null;
 let _sock = null;
 let _retryTimer = null;
+let _draftTimer = null;
 let _retryDelay = 2000;
 const MAX_RETRY_DELAY = 30000;
 
@@ -123,6 +134,15 @@ function start(shopId) {
 	if (_shopId !== shopId) _teardown();
 	_shopId = shopId;
 	_set({ enabled: isEnabled(shopId), flow: flowSetting(shopId), excludedContacts: excludedContacts.list(shopId) });
+	if (!_draftTimer) {
+		const cleanDrafts = () => {
+			orders.expireIdle(shopId);
+			void orders.flushExpired(shopId);
+		};
+		cleanDrafts();
+		_draftTimer = setInterval(cleanDrafts, 30 * 1000);
+		_draftTimer.unref?.();
+	}
 	if (_sock) return;
 	if (isLinked(shopId)) {
 		console.log("[WA] linked device found — reconnecting");
@@ -320,7 +340,11 @@ async function _onMessagesUpsert(sock, shopId, { type, messages }) {
 		if (incoming.length) console.log(`[WA] paused — ignoring ${incoming.length} message(s)`);
 		return;
 	}
-	for (const msg of incoming) {
+	for (const original of incoming) {
+		let content = original.message;
+		// Disappearing chats wrap ordinary messages in ephemeralMessage.
+		while (content?.ephemeralMessage?.message) content = content.ephemeralMessage.message;
+		const msg = content === original.message ? original : { ...original, message: content };
 		const jid = msg.key.remoteJid;
 		if (mediaOf(msg)) {
 			_pendingMedia.set(jid, (_pendingMedia.get(jid) || 0) + 1);
@@ -328,7 +352,9 @@ async function _onMessagesUpsert(sock, shopId, { type, messages }) {
 			continue;
 		}
 		const text = textOf(msg);
-		if (text) _enqueue(jid, () => _onText(sock, shopId, msg, text));
+		if (content && !content.protocolMessage && !content.senderKeyDistributionMessage && !content.reactionMessage) {
+			_enqueue(jid, () => _onText(sock, shopId, msg, text || ""));
+		}
 	}
 }
 
@@ -379,6 +405,7 @@ async function _onMedia(sock, shopId, msg) {
 	const morePending = _pendingMedia.has(jid);
 	const customer = await _customerOf(sock, msg);
 	if (!await _canHandle(sock, shopId, msg)) return;
+	orders.expire(orders.keyOf(shopId, customer.number));
 	const flow = _flowFor(shopId, customer);
 
 	if (!uploaded) {
@@ -388,7 +415,7 @@ async function _onMedia(sock, shopId, msg) {
 		if (held) await _reply(shopId, msg, held);
 		return;
 	}
-	const reply = await flow.addFile(shopId, customer, uploaded.file, uploaded.name, { morePending });
+	const reply = await flow.addFile(shopId, customer, uploaded.file, uploaded.name, { morePending, messageId: msg.key.id });
 	if (reply) await _reply(shopId, msg, reply);
 }
 
@@ -396,7 +423,20 @@ async function _onText(sock, shopId, msg, text) {
 	if (!await _canHandle(sock, shopId, msg)) return;
 	const customer = await _customerOf(sock, msg);
 	if (!await _canHandle(sock, shopId, msg)) return;
-	const reply = await _flowFor(shopId, customer).handleText(shopId, customer, text);
+	const key = orders.keyOf(shopId, customer.number);
+	orders.expire(key);
+	const greeting = await welcome.message(shopId, customer, text);
+	if (greeting) {
+		if (!await _reply(shopId, msg, greeting)) return;
+		welcome.sent(shopId, customer);
+		_markRead(sock, msg);
+		// With an existing draft, still process this message's print instruction.
+		if (!orders.getEntry(key)) return;
+	}
+	if (!await _canHandle(sock, shopId, msg)) return;
+	if (orders.flowOf(shopId, customer.number) === "menu") orders.prepare(key);
+	const quotedMessageId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
+	const reply = await _flowFor(shopId, customer).handleText(shopId, customer, text, { quotedMessageId });
 	if (!reply) return; // ordinary chat: left unread for the shop
 	if (!await _canHandle(sock, shopId, msg)) return;
 	_markRead(sock, msg);
@@ -471,17 +511,18 @@ async function _reply(shopId, msg, reply) {
 	for (const [i, text] of texts.entries()) {
 		if (_shopId !== shopId || !_sock || _snapshot.state !== "open") {
 			console.error(`[WA] dropped reply to ${jid}: not connected`);
-			return;
+			return false;
 		}
-		if (!await _canHandle(_sock, shopId, msg)) return;
+		if (!await _canHandle(_sock, shopId, msg)) return false;
 		try {
 			await _sock.sendMessage(jid, { text }, i === 0 ? { quoted: msg } : undefined);
 			console.log(`[WA] replied to ${jid}: ${text}`);
 		} catch (error) {
 			console.error(`[WA] reply to ${jid} failed:`, error.message);
-			return; // don't send the rest out of order
+			return false; // don't send the rest out of order
 		}
 	}
+	return true;
 }
 
 // Accepts a bare phone number (any formatting) or a full JID (…@lid,
@@ -526,6 +567,8 @@ async function sendText(payload) {
 
 // Closes the socket without touching the credentials.
 function _teardown() {
+	clearInterval(_draftTimer);
+	_draftTimer = null;
 	clearTimeout(_retryTimer);
 	_retryTimer = null;
 	_retryDelay = 2000;

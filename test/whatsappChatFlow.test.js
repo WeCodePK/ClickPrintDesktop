@@ -283,7 +283,7 @@ test("after the total, a yes-word places the order without the LLM", async () =>
 	script.push(inferred({ changes: [change({ color: true })] }));
 	await say("all color please");
 
-	assert.match(await say("Ok 👍🏻"), /^Your job has been submitted!\n\nJob code: \*#0427\*\nTotal cost: Rs\.48$/);
+	assert.equal(await say("Ok 👍🏻"), `${T.en.placed("0427", 48)}\n\n${T.en.cashPickup}`);
 	assert.equal(inferences.length, 1);
 	assert.equal(calls.at(-1)[0], "submit");
 	assert.equal(entry(), undefined);
@@ -355,7 +355,7 @@ test("cancel is a keyword; the LLM reading 'cancel' only asks to be sure", async
 	assert.equal(entry(), undefined);
 });
 
-test("without an order, only confirm and cancel get an answer", async () => {
+test("without an order, the flow leaves the shared handler to send the welcome", async () => {
 	const { say, inferences } = setup();
 	assert.equal(await say("hello"), null);
 	assert.equal(await say("confirm"), "Send me the files you want printed first.");
@@ -416,14 +416,14 @@ async function readyToPay(shop) {
 test("under the COD limit with a wallet, the customer picks cash or online", async () => {
 	const { say, calls, inferences, entry } = await readyToPay({ codLimit: 500, wallet });
 	const ask = await say("confirm");
-	assert.equal(ask, "How would you like to pay?\n• *cash*: pay when you collect\n• *online*: pay now by bank transfer");
+	assert.equal(ask, T.en.payHow);
 	assert.equal(entry().awaiting, "payment");
 	assert.ok(!calls.some((c) => c[0] === "submit"));
 
 	assert.equal(await say("ok"), ask); // a yes doesn't pick for them
 	assert.equal(
 		await say("Cash on pickup"),
-		"Your job has been submitted!\n\nJob code: *#0427*\nTotal cost: Rs.48"
+		`${T.en.placed("0427", 48)}\n\n${T.en.cashPickup}`
 	);
 	assert.equal(inferences.length, 0);
 	assert.ok(!calls.filter((c) => c[0] === "update").some((c) => c[2].paymentProofFile));
@@ -441,7 +441,7 @@ test("paying online shows the shop's account, and the screenshot places the orde
 	assert.equal(await say("sending it now"), "Please send a screenshot of your payment to place your order.");
 
 	const placed = await add("p1", "IMG-20261001-143012.jpg", 1);
-	assert.equal(placed, "Your job has been submitted!\n\nJob code: *#0427*\nTotal cost: Rs.48");
+	assert.equal(placed, `${T.en.placed("0427", 48)}\n\n${T.en.pickup}`);
 	const update = calls.filter((c) => c[0] === "update").at(-1);
 	assert.equal(update[2].paymentProofFile, "p1");
 	assert.deepEqual(update[2].files.map((f) => f.file), ["f1"]); // the screenshot isn't printed
@@ -464,7 +464,7 @@ test("a shop without a COD limit takes online payment only", async () => {
 
 test("a shop with a COD limit but no wallet takes the order as cash", async () => {
 	const { say } = await readyToPay({ codLimit: 500 });
-	assert.match(await say("confirm"), /^Your job has been submitted!\n\nJob code: \*#0427\*\nTotal cost: Rs\.\d+$/);
+	assert.equal(await say("confirm"), `${T.en.placed("0427", 48)}\n\n${T.en.cashPickup}`);
 });
 
 test("a missing wallet never bypasses disabled, missing, or exceeded COD limits", async () => {
