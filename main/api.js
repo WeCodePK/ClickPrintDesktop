@@ -127,6 +127,13 @@ async function fetchJobs() {
 	}
 }
 
+// Wired by ipc.js: persist the outgoing message without importing whatsapp.js,
+// which already imports this module for uploads and drafts.
+let _onJobCompleted = null;
+function setJobCompletedHandler(cb) {
+	_onJobCompleted = cb;
+}
+
 async function updateJobStatus(jobId, status) {
 	try {
 		const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/status`, {
@@ -137,7 +144,16 @@ async function updateJobStatus(jobId, status) {
 			},
 			body: JSON.stringify({ status }),
 		});
-		return unwrap(await readJson(response), "job");
+		const result = unwrap(await readJson(response), "job");
+		if (response.ok && result?.success && status === "completed" && result.data?.status === "completed" && _onJobCompleted) {
+			try {
+				_onJobCompleted(result.data);
+			} catch (error) {
+				// A notification failure must not undo a successful status update.
+				console.error(`[API] job ${jobId} completion notification failed:`, error.message);
+			}
+		}
+		return result;
 	} catch (error) {
 		console.error(`[API] updateJobStatus ${jobId} error:`, error);
 		return { success: false };
@@ -794,6 +810,7 @@ module.exports = {
 	setSseStatusNotifier,
 	setPingNotifier,
 	setWhatsAppSendHandler,
+	setJobCompletedHandler,
 	getSseStatus,
 	getShopId,
 	createDraft,

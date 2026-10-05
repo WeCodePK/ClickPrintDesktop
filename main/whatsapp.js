@@ -12,6 +12,8 @@ const { createMenuFlow } = require("./whatsappMenuFlow");
 const { createChatFlow } = require("./whatsappChatFlow");
 const { createExcludedContacts } = require("./whatsappContacts");
 const { createWelcome } = require("./whatsappWelcome");
+const { createJobNotifications } = require("./whatsappJobNotifications");
+const { createWhatsAppJobs } = require("./whatsappJobs");
 const { getAuth } = require("./state");
 
 // The shop's linked WhatsApp account, driven by Baileys. One socket per app
@@ -35,6 +37,18 @@ async function baileys() {
 
 const logger = pino({ level: "silent" });
 const excludedContacts = createExcludedContacts(store);
+const jobNotifications = createJobNotifications(store);
+let _jobActions = null;
+const jobCommands = createWhatsAppJobs({
+	api,
+	store,
+	withStatuses: (jobs) => _jobActions?.withStatuses(jobs) || jobs,
+	cancelJob: (job) => _jobActions?.cancelJob(job) || { success: false },
+});
+
+function setJobActions(actions) {
+	_jobActions = actions;
+}
 
 const orders = createOrderCore({
 	api,
@@ -138,6 +152,8 @@ function start(shopId) {
 		const cleanDrafts = () => {
 			orders.expireIdle(shopId);
 			void orders.flushExpired(shopId);
+			void flushReadyNotifications();
+			jobCommands.expireSelections();
 		};
 		cleanDrafts();
 		_draftTimer = setInterval(cleanDrafts, 30 * 1000);
@@ -221,6 +237,7 @@ async function _onConnectionUpdate(sock, shopId, { connection, lastDisconnect, q
 			error: null,
 			me: { id: sock.user?.id ?? null, lid: sock.user?.lid ?? null, name: sock.user?.name ?? null },
 		});
+		void flushReadyNotifications();
 		return;
 	}
 
@@ -405,6 +422,7 @@ async function _onMedia(sock, shopId, msg) {
 	const morePending = _pendingMedia.has(jid);
 	const customer = await _customerOf(sock, msg);
 	if (!await _canHandle(sock, shopId, msg)) return;
+	jobCommands.clear(shopId, customer.number);
 	orders.expire(orders.keyOf(shopId, customer.number));
 	const flow = _flowFor(shopId, customer);
 
@@ -430,10 +448,25 @@ async function _onText(sock, shopId, msg, text) {
 		if (!await _reply(shopId, msg, greeting)) return;
 		welcome.sent(shopId, customer);
 		_markRead(sock, msg);
-		// With an existing draft, still process this message's print instruction.
-		if (!orders.getEntry(key)) return;
 	}
 	if (!await _canHandle(sock, shopId, msg)) return;
+	const jobReply = await jobCommands.handleText(shopId, customer, text, {
+		hasDraft: !!orders.getEntry(key),
+		canHandle: () => _canHandle(sock, shopId, msg),
+	});
+	if (jobReply) {
+		let sent = false;
+		if (jobReply.reply && await _canHandle(sock, shopId, msg)) {
+			_markRead(sock, msg);
+			sent = await _reply(shopId, msg, jobReply.reply);
+		}
+		// Never accept serial numbers from a menu that wasn't sent successfully.
+		if (jobReply.selection && !sent) jobCommands.clear(shopId, customer.number);
+		return;
+	}
+	// The first non-document message still gets the welcome, while a job query
+	// in that same message is handled above instead of being swallowed.
+	if (greeting && !orders.getEntry(key)) return;
 	if (orders.flowOf(shopId, customer.number) === "menu") orders.prepare(key);
 	const quotedMessageId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
 	const reply = await _flowFor(shopId, customer).handleText(shopId, customer, text, { quotedMessageId });
@@ -456,7 +489,8 @@ async function _customerOf(sock, msg) {
 		if (!pn) console.warn(`[WA] no phone number known for ${jid} — using its LID`);
 	}
 	const number = (pn || jid).split("@")[0].split(":")[0].replace(/\D/g, "");
-	return { name: msg.pushName || number, number };
+	// An opaque LID is not proof of ownership of a phone number's submitted jobs.
+	return { name: msg.pushName || number, number, numberIsPhone: !!pn };
 }
 
 function documentsDir(shopId) {
@@ -534,6 +568,32 @@ function toJid(to) {
 	return digits ? `${digits}@s.whatsapp.net` : null;
 }
 
+// Called only after the completion PATCH succeeds, for both manual and
+// automatic printing. Persist first; WhatsApp can reconnect later.
+function notifyJobReady(job) {
+	if (jobNotifications.enqueue(job)) void flushReadyNotifications();
+}
+
+function flushReadyNotifications() {
+	const shopId = _shopId;
+	const sock = _sock;
+	if (!shopId || !sock || _snapshot.state !== "open") return;
+	return jobNotifications.flush(shopId, async ({ id, to, text }) => {
+		if (_shopId !== shopId || _sock !== sock || _snapshot.state !== "open") return false;
+		const jid = toJid(to);
+		if (!jid) return false;
+		try {
+			const sent = await sock.sendMessage(jid, { text });
+			if (!sent?.key?.id) return false;
+			console.log(`[WA] sent ready notification ${id} (${sent.key.id})`);
+			return true;
+		} catch (error) {
+			console.error(`[WA] ready notification ${id} failed:`, error.message);
+			return false;
+		}
+	});
+}
+
 // Handler for the backend's "whatsappSend" SSE event: { id, to, text }.
 // Fire-and-forget — the outcome is only logged.
 async function sendText(payload) {
@@ -609,4 +669,4 @@ async function unlink() {
 	return { success: true };
 }
 
-module.exports = { start, connect, disconnect, unlink, setEnabled, setFlow, addExcludedContact, removeExcludedContact, sendText, getSnapshot, setNotifier };
+module.exports = { start, connect, disconnect, unlink, setEnabled, setFlow, addExcludedContact, removeExcludedContact, sendText, notifyJobReady, setJobActions, getSnapshot, setNotifier };

@@ -152,7 +152,7 @@ function createOrderCore({ api, load, save, loadSessions, saveSessions, loadExpi
 			source: "shop",
 			channel: "whatsapp",
 			shop: shopId,
-			customer: entry.customer,
+			customer: { name: entry.customer.name, number: entry.customer.number },
 			files,
 			...(entry.additionalComments != null && { additionalComments: entry.additionalComments }),
 			...(entry.paymentProofFile != null && { paymentProofFile: entry.paymentProofFile }),

@@ -26,6 +26,7 @@ const {
 	setSseStatusNotifier,
 	setPingNotifier,
 	setWhatsAppSendHandler,
+	setJobCompletedHandler,
 	getSseStatus,
 	getShopId,
 } = require("./api");
@@ -109,6 +110,11 @@ function registerIpcHandlers(getMainWindow) {
 	// "whatsappSend" SSE events go straight out through the linked socket.
 	whatsapp.setNotifier((snapshot) => send("whatsapp:status", snapshot));
 	setWhatsAppSendHandler((payload) => whatsapp.sendText(payload));
+	setJobCompletedHandler((job) => whatsapp.notifyJobReady(job));
+	whatsapp.setJobActions({
+		withStatuses: (jobs) => engine.applyOverrides(jobs),
+		cancelJob: (job) => engine.declineJob(job._id, { job }),
+	});
 
 	// Push live SSE connection-state changes to the renderer (drives the
 	// connection indicator next to the settings/logout icons).

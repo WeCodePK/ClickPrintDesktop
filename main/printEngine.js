@@ -150,6 +150,7 @@ const engine = {
 	jobsMarkedPrinting: new Set(),
 	jobsCompleting: new Set(),
 	jobsFailing: new Set(),
+	jobsCancelling: new Set(),
 	printingPatches: new Map(), // jobId -> in-flight ensureJobPrinting promise
 	overrides: new Map(), // jobId -> locally-applied status, until SSE confirms
 
@@ -512,6 +513,7 @@ function schedule() {
 
 	for (const task of engine.tasks) {
 		if (task.status !== "waiting") continue;
+		if (engine.jobsCancelling.has(task.jobId)) continue;
 		// Automated printing held for THIS job (operator switch, or a failure that
 		// needs manual intervention). Manual prints are unaffected — that is how
 		// the operator intervenes.
@@ -772,6 +774,7 @@ async function handleDispatchFailure(task, device, err) {
 // rejected because the ack already landed backend-side (our cache is stale),
 // ignore it and let the "printing" step decide the real outcome.
 function ensureJobPrinting(jobId) {
+	if (engine.jobsCancelling.has(jobId)) return Promise.resolve(false);
 	if (engine.jobsMarkedPrinting.has(jobId)) return Promise.resolve(true);
 	const inflight = engine.printingPatches.get(jobId);
 	if (inflight) return inflight;
@@ -1161,14 +1164,14 @@ function resolveResumePrompt(accept) {
 	return { success: true };
 }
 
-async function declineJob(jobId) {
-	const job = getJobs().find((j) => j._id === jobId);
+async function declineJob(jobId, { job: latestJob } = {}) {
+	const job = latestJob || getJobs().find((j) => j._id === jobId);
 
 	// Effective backend status. Once the engine advances a job to "printing"
 	// (auto or manual dispatch calls ensureJobPrinting), that PATCH has already
 	// landed server-side — even if nothing is in a printer queue right now
 	// (between documents, or waiting for a printer).
-	const current = engine.jobsMarkedPrinting.has(jobId)
+	const current = engine.jobsMarkedPrinting.has(jobId) || engine.printingPatches.has(jobId) || job?.status === "printing"
 		? "printing"
 		: engine.overrides.get(jobId) || job?.status;
 
@@ -1186,27 +1189,43 @@ async function declineJob(jobId) {
 		};
 	}
 
-	dropJobTasks(jobId);
-	emit();
-
-	const result = await updateJobStatus(jobId, "cancelled");
-	if (result?.success) {
-		engine.overrides.set(jobId, "cancelled");
-		finalizeJob(jobId, jobDiskFileIds(job));
-		jobsChanged();
-		return { success: true };
+	if (current !== "submitted" && current !== "queued") {
+		return { success: false, reason: "not-cancellable", message: "Only submitted or queued jobs can be cancelled." };
 	}
-	console.error(`[Engine] failed to decline job ${jobId}:`, result?.message);
-	return { success: false, message: result?.message || "request failed" };
+	if (engine.jobsCompleting.has(jobId) || engine.jobsFailing.has(jobId)) return { success: false, reason: "transitioning", message: "This job's status is being updated." };
+	if (engine.jobsCancelling.has(jobId)) return { success: false, reason: "cancelling", message: "Cancellation is already in progress." };
+
+	// Hold queued tasks before the PATCH so auto/manual printing cannot race a
+	// customer's cancellation. A failed request leaves the tasks available.
+	engine.jobsCancelling.add(jobId);
+	emit();
+	try {
+		const result = await updateJobStatus(jobId, "cancelled");
+		if (result?.success) {
+			engine.overrides.set(jobId, "cancelled");
+			finalizeJob(jobId, jobDiskFileIds(job));
+			jobsChanged();
+			return { success: true };
+		}
+		console.error(`[Engine] failed to decline job ${jobId}:`, result?.message);
+		return { success: false, message: result?.message || "request failed" };
+	} finally {
+		engine.jobsCancelling.delete(jobId);
+		schedule();
+		emit();
+	}
 }
 
 // `force` steps a never-printed job through the backend's required
 // queued → printing → completed sequence.
 async function completeJob(jobId, { force = false } = {}) {
+	if (engine.jobsCancelling.has(jobId)) return { success: false, message: "Cancellation is in progress." };
 	const job = getJobs().find((j) => j._id === jobId);
 	if (force) {
-		const printing = await updateJobStatus(jobId, "printing");
-		if (!printing?.success) return { success: false, message: printing?.message || "printing transition failed" };
+		// Use the same transition lock as real prints, so customer cancellation
+		// cannot overlap the forced printing step.
+		const printing = await ensureJobPrinting(jobId);
+		if (!printing) return { success: false, message: "printing transition failed" };
 	}
 	const result = await updateJobStatus(jobId, "completed");
 	if (result?.success) {
@@ -1220,6 +1239,7 @@ async function completeJob(jobId, { force = false } = {}) {
 
 // Operator's per-document failure banner: force-fail the whole job.
 async function forceFailJob(jobId) {
+	if (engine.jobsCancelling.has(jobId)) return { success: false, message: "Cancellation is in progress." };
 	const ok = await autoFailJob(jobId);
 	return ok ? { success: true } : { success: false, message: "request failed" };
 }
@@ -1306,6 +1326,7 @@ function stop() {
 	engine.jobsMarkedPrinting.clear();
 	engine.jobsCompleting.clear();
 	engine.jobsFailing.clear();
+	engine.jobsCancelling.clear();
 	engine.printingPatches.clear();
 	engine.overrides.clear();
 	emit();
