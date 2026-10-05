@@ -2123,8 +2123,9 @@ body,
 	margin-left: 6px;
 }
 
-/* Icon-only refresh button in a list header; the icon spins while it works. */
-.list-refresh-btn {
+/* Icon controls in list headers; the refresh icon spins while it works. */
+.list-refresh-btn,
+.jobs-list__sort {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -2139,14 +2140,27 @@ body,
 	transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-.list-refresh-btn:hover {
+.list-refresh-btn:hover,
+.jobs-list__sort:hover {
 	background: rgba(134, 150, 160, 0.14);
 	color: var(--color-text-primary);
 }
 
-.list-refresh-btn svg {
+.list-refresh-btn svg,
+.jobs-list__sort svg {
 	width: 15px;
 	height: 15px;
+}
+
+.jobs-list__actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.jobs-list__sort:focus-visible {
+	outline: 2px solid var(--color-primary);
+	outline-offset: 2px;
 }
 
 .list-refresh-btn--busy {

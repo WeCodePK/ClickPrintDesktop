@@ -202,6 +202,16 @@ export const SearchIcon = () => (
 	</svg>
 );
 
+export const SortIcon = ({ ascending = false }) => (
+	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+		<line x1="5" y1="4" x2="5" y2="20" />
+		<polyline points={ascending ? "2 7 5 4 8 7" : "2 17 5 20 8 17"} />
+		<line x1="11" y1="5" x2={ascending ? "15" : "21"} y2="5" />
+		<line x1="11" y1="12" x2="18" y2="12" />
+		<line x1="11" y1="19" x2={ascending ? "21" : "15"} y2="19" />
+	</svg>
+);
+
 export const EditIcon = () => (
 	<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
 		<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />

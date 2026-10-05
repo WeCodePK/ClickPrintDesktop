@@ -10,7 +10,7 @@ import RefreshButton from "../components/RefreshButton";
 import EmptyState from "../components/EmptyState";
 import ConfirmDialog from "../components/ConfirmDialog";
 import PrintSplitButton from "../components/PrintSplitButton";
-import { CheckIcon, CrossIcon, SearchIcon, PrinterIcon, PauseIcon, PlayIcon, FolderIcon, ChevronDownIcon } from "../icons";
+import { CheckIcon, CrossIcon, SearchIcon, PrinterIcon, PauseIcon, PlayIcon, FolderIcon, ChevronDownIcon, SortIcon } from "../icons";
 
 // Statuses from which the backend won't allow a direct jump to "completed" — the
 // job must pass through "printing" first. The main-process engine performs the
@@ -76,6 +76,7 @@ function PrintJobsTab() {
 	// backend can't cancel from there, so we explain it and offer the refund.
 	const [declineBlocked, setDeclineBlocked] = useState(null);
 	const [query, setQuery] = useState("");
+	const [newestFirst, setNewestFirst] = useState(true);
 
 	// Available printers for the manual print dropdowns. Printing without an
 	// explicit pick routes each document to its service's automated printer
@@ -96,12 +97,16 @@ function PrintJobsTab() {
 		refreshPrinters();
 	}, [refreshPrinters]);
 
-	// Oldest job first (queue order). formattedNumber is a display-friendly phone.
+	// Recent jobs first by default; the header toggle reverses the list order.
+	// formattedNumber is a display-friendly phone.
 	// The operator's setting overrides are applied here, so the list rows and the
 	// detail card both show what will actually print.
 	const entries = printJobs
 		.filter((j) => ACTIVE_STATUSES.has(j.rawStatus))
-		.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+		.sort((a, b) => {
+			const difference = new Date(a.createdAt) - new Date(b.createdAt);
+			return newestFirst ? -difference : difference;
+		})
 		.map((job) =>
 			applySettingsOverrides({ ...job, formattedNumber: formatPhone(job.createdBy?.number) || "" }, settingsOverrides[job._id])
 		);
@@ -262,7 +267,21 @@ function PrintJobsTab() {
 			<ListColumn
 				title="Jobs"
 				count={visible.length}
-				action={<RefreshButton onRefresh={refreshJobs} label="Refresh jobs" />}
+				action={
+					<div className="jobs-list__actions">
+						<button
+							type="button"
+							className="jobs-list__sort"
+							onClick={() => setNewestFirst((current) => !current)}
+							aria-label="Show earliest jobs first"
+							aria-pressed={!newestFirst}
+							title={newestFirst ? "Recent jobs first. Switch to earliest first" : "Earliest jobs first. Switch to recent first"}
+						>
+							<SortIcon ascending={!newestFirst} />
+						</button>
+						<RefreshButton onRefresh={refreshJobs} label="Refresh jobs" />
+					</div>
+				}
 				className="db-list--jobs"
 				bodyClassName="db-list__entries--split"
 			>
