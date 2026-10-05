@@ -512,6 +512,8 @@ function JobDetailCard({ entry, headerActions, onOpenFile, onChangeFileSettings,
 	const files = entry.files || [];
 	const cost = entry.cost;
 	const totalPages = getJobTotalPages(entry);
+	// The backend's international form ("923001234567"), digits only.
+	const waNumber = String(entry.createdBy?.number || "").replace(/\D/g, "");
 	const costRows = [
 		...(cost?.lines || []).map((line, i) => ({
 			key: `line-${i}`,
@@ -536,7 +538,24 @@ function JobDetailCard({ entry, headerActions, onOpenFile, onChangeFileSettings,
 					</h3>
 					<span className="receipt-subtitle">Received at {entry.time}</span>
 				</div>
-				{headerActions && <div className="job-detail__header-actions">{headerActions}</div>}
+				{(waNumber || headerActions) && (
+					<div className="job-detail__header-actions">
+						{waNumber && (
+							// Opens the customer's chat in the WhatsApp desktop app, or
+							// WhatsApp Web when it isn't installed.
+							<button
+								type="button"
+								className="btn-outline"
+								onClick={() => window.electronAPI.openWhatsAppChat(waNumber)}
+								title="Open this customer's chat in WhatsApp"
+							>
+								<WhatsAppIcon />
+								WhatsApp
+							</button>
+						)}
+						{headerActions}
+					</div>
+				)}
 			</div>
 
 			<div className="detail-quad">

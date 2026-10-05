@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	setWhatsAppFlow: (flow) => ipcRenderer.invoke("whatsapp:set-flow", flow),
 	addWhatsAppExcludedContact: (contact) => ipcRenderer.invoke("whatsapp:add-excluded-contact", contact),
 	removeWhatsAppExcludedContact: (id) => ipcRenderer.invoke("whatsapp:remove-excluded-contact", id),
+	openWhatsAppChat: (number) => ipcRenderer.invoke("whatsapp:open-chat", number),
 
 	// Jobs — the list is pushed authoritatively from main; operator actions are
 	// commands handled entirely by the main-process print engine.
