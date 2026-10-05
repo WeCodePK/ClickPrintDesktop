@@ -1,4 +1,4 @@
-const { ipcMain } = require("electron");
+const { ipcMain, app, shell } = require("electron");
 const {
 	sendOtp,
 	verifyOtp,
@@ -401,6 +401,23 @@ function registerIpcHandlers(getMainWindow) {
 
 	ipcMain.handle("whatsapp:remove-excluded-contact", async (_event, id) => {
 		return whatsapp.removeExcludedContact(id);
+	});
+
+	// A customer's chat in the operator's own WhatsApp: the desktop app when one
+	// handles whatsapp:// links, else wa.me in the browser (WhatsApp Web).
+	ipcMain.handle("whatsapp:open-chat", async (_event, number) => {
+		const phone = String(number || "").replace(/\D/g, "");
+		if (!phone) return { success: false };
+		if (app.getApplicationNameForProtocol("whatsapp://")) {
+			try {
+				await shell.openExternal(`whatsapp://send?phone=${phone}`);
+				return { success: true };
+			} catch (error) {
+				console.error("[IPC] whatsapp:// open failed, using wa.me:", error.message);
+			}
+		}
+		await shell.openExternal(`https://wa.me/${phone}`);
+		return { success: true };
 	});
 
 	// ── Print engine (all orchestration/state lives in main) ───────────────────

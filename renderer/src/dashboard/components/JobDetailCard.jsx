@@ -512,7 +512,7 @@ function JobDetailCard({ entry, headerActions, onOpenFile, onChangeFileSettings,
 	const files = entry.files || [];
 	const cost = entry.cost;
 	const totalPages = getJobTotalPages(entry);
-	// The backend's international form ("923001234567"), digits only for wa.me.
+	// The backend's international form ("923001234567"), digits only.
 	const waNumber = String(entry.createdBy?.number || "").replace(/\D/g, "");
 	const costRows = [
 		...(cost?.lines || []).map((line, i) => ({
@@ -541,12 +541,12 @@ function JobDetailCard({ entry, headerActions, onOpenFile, onChangeFileSettings,
 				{(waNumber || headerActions) && (
 					<div className="job-detail__header-actions">
 						{waNumber && (
-							// Opens the customer's chat in WhatsApp (wa.me hands off to the
-							// desktop app when installed, else WhatsApp Web).
+							// Opens the customer's chat in the WhatsApp desktop app, or
+							// WhatsApp Web when it isn't installed.
 							<button
 								type="button"
 								className="btn-outline"
-								onClick={() => window.open(`https://wa.me/${waNumber}`, "_blank")}
+								onClick={() => window.electronAPI.openWhatsAppChat(waNumber)}
 								title="Open this customer's chat in WhatsApp"
 							>
 								<WhatsAppIcon />
