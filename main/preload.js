@@ -22,6 +22,18 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		return () => ipcRenderer.removeListener("sse:status", handler);
 	},
 
+	// Whether the backend can be reached: { online, since, lastOnlineAt,
+	// authExpired, pendingSync } (pendingSync = job updates waiting to sync).
+	getNetStatus: () => ipcRenderer.invoke("net:get-status"),
+	onNetStatus: (callback) => {
+		const handler = (_event, status) => callback(status);
+		ipcRenderer.on("net:status", handler);
+		return () => ipcRenderer.removeListener("net:status", handler);
+	},
+	checkConnectionNow: () => ipcRenderer.invoke("net:check-now"),
+	// Development only: simulate a bad network ("offline", "flaky:0.5", "latency:3000", "").
+	setNetFault: (spec) => ipcRenderer.invoke("dev:set-net-fault", spec),
+
 	// WhatsApp linked device — status snapshot { state, qr, me, error, enabled,
 	// flow, excludedContacts } where state is "idle" | "connecting" | "qr" | "open" | "reconnecting"
 	// | "logged_out". `qr` is a PNG data URL while waiting for a scan; `enabled` is
@@ -50,8 +62,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	// Operator "mark as failed" via the per-document failure banner. The customer
 	// is refunded on the backend for a "failed" status.
 	markJobFailed: (jobId) => ipcRenderer.invoke("jobs:mark-failed", jobId),
+	// callback(jobs, { stale, fetchedAt }) — stale when the list is the cached
+	// copy shown while the backend can't be reached.
 	onJobsUpdate: (callback) => {
-		const handler = (_event, jobs) => callback(jobs);
+		const handler = (_event, jobs, meta) => callback(jobs, meta || { stale: false, fetchedAt: null });
 		ipcRenderer.on("jobs:updated", handler);
 		return () => ipcRenderer.removeListener("jobs:updated", handler);
 	},

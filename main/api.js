@@ -1,99 +1,59 @@
 const fs = require("fs");
+const path = require("path");
 const EventSource = require("eventsource");
 const tus = require("tus-js-client");
-const { BrowserWindow } = require("electron");
+const { app, BrowserWindow } = require("electron");
 const { getAuth, setAuth, setJobs, clearAuth } = require("./state");
 const { listPrinters } = require("./printers");
+const { request, requestStream, unwrap, baseUrl, getFault } = require("./http");
+const connectivity = require("./connectivity");
+const { createResourceCache, readThrough } = require("./resourceCache");
+const historyCache = require("./historyCache");
 
-const API_BASE_URL = "https://api.clickprint.pk"
+// Every backend route the app uses. Requests go through http.js (timeouts,
+// failure kinds, connectivity reporting). Reads of shop-scoped resources are
+// read-through cached: a fresh result is saved, and a failed one falls back to
+// the last good copy marked `stale` — so screens, routing and WhatsApp keep
+// working from it while the backend can't be reached.
 
-// The backend now nests each route's payload under a named key inside `data`
-// (e.g. { data: { jobs: [...] } } instead of { data: [...] }). Unwrap that named
-// key so callers keep receiving the bare value as `data`, matching the previous
-// response shape. Untouched when the response failed or the key isn't present.
-function unwrap(payload, key) {
-	if (payload && payload.success && payload.data && typeof payload.data === "object" && key in payload.data) {
-		return { ...payload, data: payload.data[key] };
-	}
-	return payload;
+const caches = {
+	jobs: createResourceCache("jobs-cache"),
+	shop: createResourceCache("shop-cache"),
+	services: createResourceCache("services-cache"),
+	printers: createResourceCache("printers-cache"),
+	history: historyCache,
+};
+
+function authHeaders() {
+	return { Authorization: `Bearer ${getAuth().token}` };
 }
 
-// Reads a response body as JSON without throwing. Gateways/proxies return HTML
-// error pages (e.g. a 502 "<!DOCTYPE html>…") that would otherwise blow up
-// JSON.parse — fall back to a clean failure object instead.
-async function readJson(response) {
-	const text = await response.text();
-	try {
-		return JSON.parse(text);
-	} catch {
-		console.error(`[API] non-JSON response (HTTP ${response.status})`);
-		return { success: false, message: `Server error (HTTP ${response.status}). Please try again.` };
-	}
-}
+// ── Auth ──────────────────────────────────────────────────────────────────────
 
 async function sendOtp(number) {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/auth/otp`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ number, intent: "shop" }),
-		});
-
-		const data = await readJson(response);
-
-		if (data.success) {
-			setAuth({ phoneNumber: number });
-		}
-
-		return data;
-	} catch (error) {
-		console.error("[API] sendOtp error:", error);
-		return {
-			success: false,
-			message:
-				error.message === "fetch failed"
-					? "Network error. Please check your internet connection."
-					: "An unexpected error occurred. Please try again.",
-		};
-	}
+	const data = await request("POST", "/api/auth/otp", { body: { number, intent: "shop" } });
+	if (data.success) setAuth({ phoneNumber: number });
+	return data;
 }
 
 async function verifyOtp(code, number) {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/auth/verify`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ code, number }),
+	const data = await request("POST", "/api/auth/verify", { body: { code, number } });
+	if (data.success) {
+		// A user can own multiple shops, returned in data.data.shops as
+		// [{ _id, name }]. We don't know which one yet — the renderer picks one
+		// (or auto-picks when there's a single shop) and calls selectShop, which
+		// is what actually stores shopId and opens the shop-scoped SSE stream.
+		setAuth({
+			token: data.data.token,
+			profile: data.data.profile ?? null,
+			phoneNumber: number,
+			shopId: null,
+			shopName: null,
 		});
-
-		const data = await readJson(response);
-
-		if (data.success) {
-			// A user can own multiple shops, returned in data.data.shops as
-			// [{ _id, name }]. We don't know which one yet — the renderer picks one
-			// (or auto-picks when there's a single shop) and calls selectShop, which
-			// is what actually stores shopId and opens the shop-scoped SSE stream.
-			setAuth({
-				token: data.data.token,
-				profile: data.data.profile ?? null,
-				phoneNumber: number,
-				shopId: null,
-				shopName: null,
-			});
-			console.log("[API] Auth token stored;", (data.data.shops?.length ?? 0), "shop(s) to choose from");
-		}
-
-		return data;
-	} catch (error) {
-		console.error("[API] verifyOtp error:", error);
-		return {
-			success: false,
-			message:
-				error.message === "fetch failed"
-					? "Network error. Please check your internet connection."
-					: "An unexpected error occurred. Please try again.",
-		};
+		connectivity.clearAuthExpired();
+		console.log("[API] Auth token stored;", (data.data.shops?.length ?? 0), "shop(s) to choose from");
 	}
+	return data;
 }
 
 // Records which shop the user chose to operate as for this session. Everything
@@ -106,25 +66,57 @@ function selectShop(shop) {
 	return { success: true };
 }
 
-async function fetchJobs() {
+function getAuthState() {
+	return getAuth();
+}
+function clearAuthState() {
+	clearAuth();
+}
+
+// Resolves the shop id, preferring the value saved at verify time and falling
+// back to decoding it out of the JWT payload.
+function getShopId() {
+	const auth = getAuth();
+	if (auth.shopId) return auth.shopId;
+	if (!auth.token) return null;
 	try {
-		const response = await fetch(`${API_BASE_URL}/api/jobs/shop/${getAuth().shopId}`, {
-			headers: {
-		"Content-Type": "application/json",
-		Authorization: `Bearer ${getAuth().token}`,
-	},
-		});
-		return unwrap(await readJson(response), "jobs");
-	} catch (error) {
-		console.error("[API] fetchJobs error:", error);
-		return {
-			success: false,
-			message:
-				error.message === "fetch failed"
-					? "Network error. Please check your internet connection."
-					: "An unexpected error occurred. Please try again.",
-		};
+		const payload = JSON.parse(Buffer.from(auth.token.split(".")[1], "base64").toString("utf8"));
+		return payload.shopId || payload.sid || payload.shop || payload._id || payload.sub || null;
+	} catch {
+		return null;
 	}
+}
+
+// ── Cached reads ──────────────────────────────────────────────────────────────
+
+// GET with one retry, read through `cache`: { ...fresh } or { ...cached, stale }.
+async function cachedGet(path, key, cache, label) {
+	const result = unwrap(await request("GET", path, { headers: authHeaders(), retries: 1 }), key);
+	return readThrough(cache, getShopId(), result, label);
+}
+
+// The cached copy alone (no request), or null — for callers that only want to
+// avoid a round trip, e.g. WhatsApp replies while offline.
+function cachedCopy(resource) {
+	return caches[resource]?.load(getShopId()) ?? null;
+}
+
+function cachedData(resource) {
+	return cachedCopy(resource)?.data ?? null;
+}
+
+function clearCaches() {
+	return Promise.all(Object.values(caches).map((cache) => cache.clear()));
+}
+
+// ── Jobs ──────────────────────────────────────────────────────────────────────
+
+function fetchJobs() {
+	return cachedGet(`/api/jobs/shop/${getShopId()}`, "jobs", caches.jobs, "fetchJobs");
+}
+
+function fetchHistory() {
+	return cachedGet(`/api/history/shops/${getShopId()}`, "history", caches.history, "fetchHistory");
 }
 
 // Wired by ipc.js: persist the outgoing message without importing whatsapp.js,
@@ -134,37 +126,24 @@ function setJobCompletedHandler(cb) {
 	_onJobCompleted = cb;
 }
 
+// One status transition. Not retried here — a status the backend never saw is
+// replayed by the outbox (statusOutbox.js), and repeating a transition that did
+// land would be rejected as a same-state change.
 async function updateJobStatus(jobId, status) {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/status`, {
-			method: "PATCH",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${getAuth().token}`,
-			},
-			body: JSON.stringify({ status }),
-		});
-		const result = unwrap(await readJson(response), "job");
-		if (response.ok && result?.success && status === "completed" && result.data?.status === "completed" && _onJobCompleted) {
-			try {
-				_onJobCompleted(result.data);
-			} catch (error) {
-				// A notification failure must not undo a successful status update.
-				console.error(`[API] job ${jobId} completion notification failed:`, error.message);
-			}
+	const result = unwrap(
+		await request("PATCH", `/api/jobs/${jobId}/status`, { headers: authHeaders(), body: { status } }),
+		"job"
+	);
+	if (result.success && status === "completed" && result.data?.status === "completed" && _onJobCompleted) {
+		try {
+			_onJobCompleted(result.data);
+		} catch (error) {
+			// A notification failure must not undo a successful status update.
+			console.error(`[API] job ${jobId} completion notification failed:`, error.message);
 		}
-		return result;
-	} catch (error) {
-		console.error(`[API] updateJobStatus ${jobId} error:`, error);
-		return { success: false };
 	}
-}
-
-function getAuthState() {
-	return getAuth();
-}
-function clearAuthState() {
-	clearAuth();
+	if (!result.success) console.error(`[API] updateJobStatus ${jobId} → ${status} failed (${result.kind}):`, result.message);
+	return result;
 }
 
 // Jobs currently being transitioned to "failed". The backend only allows
@@ -178,12 +157,10 @@ function isJobFailing(jobId) {
 	return _failingJobs.has(jobId);
 }
 
-// Marks a job "failed" on the backend — used when one of its files can't be
-// downloaded (even after a retry), or when every document in a job failed to
-// print. Steps through the required "printing" status first; the renderer
-// never sees it (the job is already flagged as failing). `currentStatus`, when
-// known to already be "printing" (true for every print-failure caller, since
-// the print attempt itself only happens after that transition), skips the step
+// Marks a job "failed" on the backend — only ever the operator's explicit
+// decision (it refunds the customer). Steps through the required "printing"
+// status first; the renderer never sees it (the job is already flagged as
+// failing). `currentStatus`, when known to already be "printing", skips the step
 // — some backends reject a redundant same-state transition, which would
 // otherwise block the real "failed" transition from ever being attempted.
 async function markJobFailed(jobId, currentStatus) {
@@ -210,45 +187,29 @@ async function markJobFailed(jobId, currentStatus) {
 	return result;
 }
 
-// Jobs arrive from the backend as "submitted". We acknowledge receipt of each
-// one exactly once by moving it to "queued". The acked set guards against
-// re-sending while a reconcile is in flight (before the new status is fetched).
-const _acknowledgedJobs = new Set();
+// ── Files ─────────────────────────────────────────────────────────────────────
 
-function acknowledgeNewJobs(jobs) {
-	for (const job of jobs || []) {
-		if (job.status !== "submitted" || _acknowledgedJobs.has(job._id)) continue;
-		_acknowledgedJobs.add(job._id);
-		updateJobStatus(job._id, "queued").then((result) => {
-			if (result && result.success) {
-				console.log(`[API] acknowledged job ${job._id} → queued`);
-			} else {
-				console.error(`[API] failed to acknowledge job ${job._id}, will retry`);
-				_acknowledgedJobs.delete(job._id); // allow retry on next reconcile
-			}
-		});
-	}
+// Opens a download of a single file: { ok, response, status } once headers
+// arrive, or a failure ({ ok: false, kind, status, offline, retryable }). The
+// caller (files.js) streams the body with its own stall detection. `accept`
+// asks for a specific format — job files pass "application/pdf" so they come
+// back converted rather than as the raw upload; payment proofs omit it and get
+// the original. `range` resumes from a byte offset.
+function openFileDownload(fileId, { accept, range, controller } = {}) {
+	const headers = authHeaders();
+	if (accept) headers.Accept = accept;
+	if (range) headers.Range = `bytes=${range}-`;
+	return requestStream(`/api/files/${fileId}`, { headers, controller });
 }
 
-// Downloads the raw bytes of a single file. Returns the ArrayBuffer so the
-// caller (files.js) can persist it to disk. `accept` asks the backend for a
-// specific format — job files pass "application/pdf" so they come back converted
-// rather than as the raw upload; payment proofs omit it and get the original.
-async function fetchFileBuffer(fileId, { accept } = {}) {
+// Where tus remembers half-finished uploads, so a retry after the link dropped
+// — even after a restart — continues from the last byte the server has
+// instead of starting over. Absent outside Electron (tests).
+function tusUrlStorage() {
 	try {
-		console.log(`[API] fetchFileBuffer ${fileId}${accept ? ` (${accept})` : ""}`);
-		const headers = { Authorization: `Bearer ${getAuth().token}` };
-		if (accept) headers.Accept = accept;
-		const response = await fetch(`${API_BASE_URL}/api/files/${fileId}`, { headers });
-		if (!response.ok) {
-			console.error(`[API] fetchFileBuffer ${fileId} → HTTP ${response.status}`);
-			return { ok: false };
-		}
-		const buffer = await response.arrayBuffer();
-		return { ok: true, buffer, contentType: response.headers.get("content-type") };
-	} catch (error) {
-		console.error(`[API] fetchFileBuffer ${fileId} error:`, error);
-		return { ok: false };
+		return app?.getPath ? new tus.FileUrlStorage(path.join(app.getPath("userData"), "tus-uploads.json")) : null;
+	} catch {
+		return null;
 	}
 }
 
@@ -257,15 +218,19 @@ async function fetchFileBuffer(fileId, { accept } = {}) {
 // no timeout. Resolves { success: true, data: file } with the backend's File
 // object, or { success: false, status, message } — status is the HTTP status of
 // the failing tus request, undefined when the server was never reached.
+// Network errors and 5xx are retried for about two minutes (resuming each
+// time); after that the caller parks the file and tries again later.
 function uploadFile(filePath, { filename, filetype }) {
 	return new Promise((resolve) => {
+		const urlStorage = tusUrlStorage();
 		const upload = new tus.Upload(fs.createReadStream(filePath), {
-			endpoint: `${API_BASE_URL}/api/files`,
-			headers: { Authorization: `Bearer ${getAuth().token}` },
+			endpoint: `${baseUrl()}/api/files`,
+			headers: authHeaders(),
 			metadata: { filename, filetype: filetype || "application/octet-stream" },
 			chunkSize: 5 * 1024 * 1024,
 			// tus only retries network errors and 5xx; 4xx (413, 422, …) fail at once.
-			retryDelays: [0, 1000, 3000, 5000],
+			retryDelays: [0, 1000, 3000, 5000, 10000, 15000, 30000, 60000],
+			...(urlStorage && { urlStorage, storeFingerprintForResuming: true, removeFingerprintOnSuccess: true }),
 			onSuccess: ({ lastResponse }) => {
 				let body = null;
 				try {
@@ -291,231 +256,44 @@ function uploadFile(filePath, { filename, filetype }) {
 				resolve({ success: false, status, message });
 			},
 		});
-		upload.start();
+		if (!urlStorage) {
+			upload.start();
+			return;
+		}
+		upload
+			.findPreviousUploads()
+			.then((previous) => {
+				if (previous.length) {
+					console.log(`[API] uploadFile ${filename}: resuming an earlier upload`);
+					upload.resumeFromPreviousUpload(previous[0]);
+				}
+			})
+			.catch(() => {})
+			.finally(() => upload.start());
 	});
-}
-
-// Resolves the shop id, preferring the value saved at verify time and falling
-// back to decoding it out of the JWT payload.
-function getShopId() {
-	const auth = getAuth();
-	if (auth.shopId) return auth.shopId;
-	if (!auth.token) return null;
-	try {
-		const payload = JSON.parse(Buffer.from(auth.token.split(".")[1], "base64").toString("utf8"));
-		return payload.shopId || payload.sid || payload.shop || payload._id || payload.sub || null;
-	} catch {
-		return null;
-	}
-}
-
-function authHeaders() {
-	return {
-		"Content-Type": "application/json",
-		Authorization: `Bearer ${getAuth().token}`,
-	};
-}
-
-function apiError(error) {
-	return {
-		success: false,
-		message:
-			error.message === "fetch failed"
-				? "Network error. Please check your internet connection."
-				: "An unexpected error occurred. Please try again.",
-	};
 }
 
 // ── Shop ──────────────────────────────────────────────────────────────────────
 
-async function fetchShop() {
+function fetchShop() {
 	const shopId = getShopId();
-	if (!shopId) return { success: false, message: "Shop not identified." };
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/shops/${shopId}`, {
-			headers: authHeaders(),
-		});
-		return unwrap(await readJson(response), "shop");
-	} catch (error) {
-		console.error("[API] fetchShop error:", error);
-		return apiError(error);
-	}
-}
-
-// ── Shop services CRUD ────────────────────────────────────────────────────────
-// A "service" is a priced print configuration: { rate, keys, printers }. These
-// live under /api/services/:shopId.
-
-async function fetchServices() {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/services/${getAuth().shopId}`, {
-			headers: authHeaders(),
-		});
-		return unwrap(await readJson(response), "services");
-	} catch (error) {
-		console.error("[API] fetchServices error:", error);
-		return apiError(error);
-	}
-}
-
-async function createService(service) {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/services/${getAuth().shopId}`, {
-			method: "POST",
-			headers: authHeaders(),
-			body: JSON.stringify(service),
-		});
-		return unwrap(await readJson(response), "service");
-	} catch (error) {
-		console.error("[API] createService error:", error);
-		return apiError(error);
-	}
-}
-
-async function updateService(serviceId, service) {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/services/${getAuth().shopId}/${serviceId}`, {
-			method: "PUT",
-			headers: authHeaders(),
-			body: JSON.stringify(service),
-		});
-		return unwrap(await readJson(response), "service");
-	} catch (error) {
-		console.error("[API] updateService error:", error);
-		return apiError(error);
-	}
-}
-
-async function deleteService(serviceId) {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/services/${getAuth().shopId}/${serviceId}`, {
-			method: "DELETE",
-			headers: authHeaders(),
-		});
-		return unwrap(await readJson(response), "service");
-	} catch (error) {
-		console.error("[API] deleteService error:", error);
-		return apiError(error);
-	}
-}
-
-async function setServiceDisabled(serviceId, isDisabled) {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/services/${getAuth().shopId}/${serviceId}/isDisabled`, {
-			method: "PATCH",
-			headers: authHeaders(),
-			body: JSON.stringify({ isDisabled }),
-		});
-		return unwrap(await readJson(response), "service");
-	} catch (error) {
-		console.error("[API] setServiceDisabled error:", error);
-		return apiError(error);
-	}
-}
-
-// ── Shop printers CRUD ────────────────────────────────────────────────────────
-// The printers a shop has registered with the backend. Distinct from the local
-// OS printer list (printers.js), which only says what's reachable right now.
-
-async function fetchPrinters() {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/printers/${getAuth().shopId}`, {
-			headers: authHeaders(),
-		});
-		return unwrap(await readJson(response), "printers");
-	} catch (error) {
-		console.error("[API] fetchPrinters error:", error);
-		return apiError(error);
-	}
-}
-
-async function createPrinter(name) {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/printers/${getAuth().shopId}`, {
-			method: "POST",
-			headers: authHeaders(),
-			body: JSON.stringify({ name }),
-		});
-		return unwrap(await readJson(response), "printer");
-	} catch (error) {
-		console.error("[API] createPrinter error:", error);
-		return apiError(error);
-	}
-}
-
-async function deletePrinter(printerId) {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/printers/${getAuth().shopId}/${printerId}`, {
-			method: "DELETE",
-			headers: authHeaders(),
-		});
-		return unwrap(await readJson(response), "printer");
-	} catch (error) {
-		console.error("[API] deletePrinter error:", error);
-		return apiError(error);
-	}
-}
-
-async function setPrinterDisabled(printerId, isDisabled) {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/printers/${getAuth().shopId}/${printerId}/isDisabled`, {
-			method: "PATCH",
-			headers: authHeaders(),
-			body: JSON.stringify({ isDisabled }),
-		});
-		return unwrap(await readJson(response), "printer");
-	} catch (error) {
-		console.error("[API] setPrinterDisabled error:", error);
-		return apiError(error);
-	}
-}
-
-async function fetchHistory() {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/history/shops/${getAuth().shopId}`, {
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${getAuth().token}`,
-			},
-		});
-		return unwrap(await readJson(response), "history");
-	} catch (error) {
-		console.error("[API] fetchHistory error:", error);
-		return {
-			success: false,
-			message:
-				error.message === "fetch failed"
-					? "Network error. Please check your internet connection."
-					: "An unexpected error occurred. Please try again.",
-		};
-	}
+	if (!shopId) return Promise.resolve({ success: false, message: "Shop not identified." });
+	return cachedGet(`/api/shops/${shopId}`, "shop", caches.shop, "fetchShop");
 }
 
 async function updateShop(shopId, data) {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/shops/${shopId}`, {
-			method: "PUT",
-			headers: {
-		"Content-Type": "application/json",
-		Authorization: `Bearer ${getAuth().token}`,
-	},
-			body: JSON.stringify(data),
-		});
-
-		return unwrap(await readJson(response), "shop");
-	} catch (error) {
-		console.error("[API] updateShop error:", error);
-		return {
-			success: false,
-			message:
-				error.message === "fetch failed"
-					? "Network error. Please check your internet connection."
-					: "An unexpected error occurred. Please try again.",
-		};
-	}
+	const result = unwrap(await request("PUT", `/api/shops/${shopId}`, { headers: authHeaders(), body: data }), "shop");
+	if (result.success && result.data) caches.shop.save(shopId, result.data);
+	return result;
 }
 
-async function pingShopStatus(shopId){
+// Reports which of the shop's registered printers this machine can reach right
+// now. Fired on every SSE ping; a ping that lands while the previous one is
+// still in flight is skipped, so a slow link can't stack them up.
+let _pingBusy = false;
+async function pingShopStatus(shopId) {
+	if (_pingBusy) return { success: true, skipped: true };
+	_pingBusy = true;
 	try {
 		const win = BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
 		const localPrinters = win ? await listPrinters(win) : [];
@@ -523,55 +301,69 @@ async function pingShopStatus(shopId){
 
 		const registeredRes = await fetchPrinters();
 		const registeredPrinters = registeredRes?.success && Array.isArray(registeredRes.data) ? registeredRes.data : [];
+		const onlinePrinterIds = registeredPrinters.filter((p) => onlineNames.has(p.name)).map((p) => p._id);
 
-		const onlinePrinterIds = registeredPrinters
-			.filter((p) => onlineNames.has(p.name))
-			.map((p) => p._id);
-
-		//to log the online the printers id, just to check the output of this until confident of the behaviour
-		console.log(onlinePrinterIds)
-
-		const response = await fetch(`${API_BASE_URL}/api/shops/${shopId}/isOnline`, {
-			method: "PATCH",
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${getAuth().token}`,
-			},
-			body: JSON.stringify({
-				printers: onlinePrinterIds,
-			}),
+		return await request("PATCH", `/api/shops/${shopId}/isOnline`, {
+			headers: authHeaders(),
+			body: { printers: onlinePrinterIds },
+			timeoutMs: 10000,
 		});
-		return await readJson(response);
-	} 
-	catch (error) {
+	} catch (error) {
 		console.error("[API] pingShopStatus error:", error);
-		return {
-			success: false,
-			message:
-				error.message === "fetch failed"
-					? "Network error. Please check your internet connection."
-					: "An unexpected error occurred. Please try again.",
-		};
+		return { success: false, message: error.message };
+	} finally {
+		_pingBusy = false;
 	}
 }
 
+// ── Shop services CRUD ────────────────────────────────────────────────────────
+// A "service" is a priced print configuration: { rate, keys, printers }. These
+// live under /api/services/:shopId.
+
+function fetchServices() {
+	return cachedGet(`/api/services/${getShopId()}`, "services", caches.services, "fetchServices");
+}
+
+async function serviceRequest(method, suffix, body) {
+	return unwrap(await request(method, `/api/services/${getShopId()}${suffix}`, { headers: authHeaders(), body }), "service");
+}
+
+const createService = (service) => serviceRequest("POST", "", service);
+const updateService = (serviceId, service) => serviceRequest("PUT", `/${serviceId}`, service);
+const deleteService = (serviceId) => serviceRequest("DELETE", `/${serviceId}`);
+const setServiceDisabled = (serviceId, isDisabled) => serviceRequest("PATCH", `/${serviceId}/isDisabled`, { isDisabled });
+
+// ── Shop printers CRUD ────────────────────────────────────────────────────────
+// The printers a shop has registered with the backend. Distinct from the local
+// OS printer list (printers.js), which only says what's reachable right now.
+
+function fetchPrinters() {
+	return cachedGet(`/api/printers/${getShopId()}`, "printers", caches.printers, "fetchPrinters");
+}
+
+async function printerRequest(method, suffix, body) {
+	return unwrap(await request(method, `/api/printers/${getShopId()}${suffix}`, { headers: authHeaders(), body }), "printer");
+}
+
+const createPrinter = (name) => printerRequest("POST", "", { name });
+const deletePrinter = (printerId) => printerRequest("DELETE", `/${printerId}`);
+const setPrinterDisabled = (printerId, isDisabled) => printerRequest("PATCH", `/${printerId}/isDisabled`, { isDisabled });
+
 // ── Drafts (WhatsApp orders) ──────────────────────────────────────────────────
 // Each resolves the usual { success, message, data } plus the HTTP `status`, so
-// callers can tell a draft that no longer exists (404) from other failures.
-// `data` is the draft, or the job it became for submit.
+// callers can tell a draft that no longer exists (404) from other failures, and
+// `offline` when the backend couldn't be reached. `data` is the draft, or the
+// job it became for submit.
 
+// Updating, pricing and deleting a draft are safe to repeat, so a dropped
+// request is retried once; creating and submitting are not (a repeat could
+// make a second draft or order).
 async function draftRequest(method, route, body, key) {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/drafts${route}`, {
-			method,
-			headers: authHeaders(),
-			body: body ? JSON.stringify(body) : undefined,
-		});
-		return { ...unwrap(await readJson(response), key), status: response.status };
-	} catch (error) {
-		console.error(`[API] ${method} /api/drafts${route} error:`, error);
-		return apiError(error);
-	}
+	const repeatable = method !== "POST" && !route.endsWith("/submit");
+	return unwrap(
+		await request(method, `/api/drafts${route}`, { headers: authHeaders(), body: body ?? undefined, retries: repeatable ? 1 : 0 }),
+		key
+	);
 }
 
 function createDraft(draft) {
@@ -603,26 +395,26 @@ function deleteDraft(draftId) {
 // usual shape plus `status`, with `data` the result { intent, language,
 // changes, question }. The backend gives up on the model after 20s.
 async function inferSettings(body) {
-	try {
-		const response = await fetch(`${API_BASE_URL}/api/webhooks/inference`, {
-			method: "POST",
-			headers: authHeaders(),
-			body: JSON.stringify(body),
-			signal: AbortSignal.timeout(25000),
-		});
-		return { ...unwrap(await readJson(response), "result"), status: response.status };
-	} catch (error) {
-		console.error("[API] inferSettings error:", error.message);
-		return apiError(error);
-	}
+	return unwrap(await request("POST", "/api/webhooks/inference", { headers: authHeaders(), body, timeoutMs: 25000 }), "result");
 }
+
+// ── Live jobs stream (SSE) ────────────────────────────────────────────────────
+
+// No event for this long means the stream is dead even if the socket never said
+// so — a dropped Wi-Fi link leaves a half-open TCP connection that can sit
+// "open" for many minutes. The backend pings every ~5 s.
+const SSE_STALE_MS = 25000;
+const SSE_MIN_DELAY_MS = 1000;
+const SSE_MAX_DELAY_MS = 30000;
 
 let _sse = null;
 let _sseTimer = null;
+let _sseWatchdog = null;
+let _sseDelay = SSE_MIN_DELAY_MS;
+let _sseLastEventAt = 0;
 let _onJobsUpdate = null;
 
-// Connection state of the live jobs stream, surfaced to the renderer so the UI
-// can show a healthy/reconnecting indicator. One of:
+// Connection state of the live jobs stream, surfaced to the renderer. One of:
 //   "connecting"   — opening the EventSource (initial or after a drop)
 //   "open"         — connected and receiving
 //   "reconnecting" — dropped; a retry is scheduled
@@ -631,10 +423,10 @@ let _sseStatus = "closed";
 let _onSseStatus = null;
 
 // Fired on every SSE "ping" (~5s). The print engine hangs its printer-queue
-// reconcile off this — the same beat that refreshes online printers also sweeps
-// each printer's spool queue. Set by ipc.js; api.js must not import the engine
-// (the engine imports api).
+// reconcile off this. Set by ipc.js; api.js must not import the engine (the
+// engine imports api).
 let _onPing = null;
+let _pingHandlerBusy = false;
 
 // Fired on every "whatsappSend" SSE event with its parsed payload
 // ({ id, to, text }). Set by ipc.js; api.js must not import whatsapp.js (it
@@ -664,8 +456,14 @@ function _setSseStatus(status) {
 	if (_onSseStatus) _onSseStatus(status);
 }
 
+// onJobsUpdate(jobs) on every fresh job list from the backend.
 function startJobsSse(onJobsUpdate) {
 	_onJobsUpdate = onJobsUpdate;
+	_sseDelay = SSE_MIN_DELAY_MS;
+	if (!_sseWatchdog) {
+		_sseWatchdog = setInterval(_checkSseAlive, 5000);
+		_sseWatchdog.unref?.();
+	}
 	_connectSse();
 }
 
@@ -673,15 +471,64 @@ function stopJobsSse() {
 	_onJobsUpdate = null;
 	clearTimeout(_sseTimer);
 	_sseTimer = null;
-	_acknowledgedJobs.clear();
-	if (_sse) {
-		_sse.close();
-		_sse = null;
-	}
+	clearInterval(_sseWatchdog);
+	_sseWatchdog = null;
+	_dropSse();
 	_setSseStatus("closed");
 }
 
+// Closes the current EventSource without letting its handlers fire again.
+function _dropSse() {
+	const es = _sse;
+	_sse = null;
+	if (!es) return;
+	es.onopen = es.onmessage = es.onerror = null;
+	try {
+		es.close();
+	} catch {}
+}
+
+function _scheduleReconnect() {
+	_dropSse();
+	if (!_onJobsUpdate) {
+		_setSseStatus("closed");
+		return;
+	}
+	_setSseStatus("reconnecting");
+	clearTimeout(_sseTimer);
+	const delay = Math.round(_sseDelay * (0.5 + Math.random() * 0.5));
+	_sseDelay = Math.min(_sseDelay * 2, SSE_MAX_DELAY_MS);
+	_sseTimer = setTimeout(_connectSse, delay);
+}
+
+// The watchdog: a stream (or a connect attempt) that has gone silent is torn
+// down and reconnected.
+function _checkSseAlive() {
+	if (!_sse || !_onJobsUpdate) return;
+	const silentFor = Date.now() - _sseLastEventAt;
+	if (silentFor < SSE_STALE_MS) return;
+	console.warn(`[SSE] no events for ${Math.round(silentFor / 1000)}s — reconnecting`);
+	connectivity.reportFailure();
+	_scheduleReconnect();
+}
+
+// The connection is back (connectivity.onOnline) or the operator asked for a
+// refresh: reconnect at once if the stream is down, otherwise re-fetch jobs.
+function resync() {
+	if (!_onJobsUpdate) return;
+	if (_sseStatus === "open" && _sse) {
+		_reconcile();
+		return;
+	}
+	clearTimeout(_sseTimer);
+	_sseTimer = null;
+	_sseDelay = SSE_MIN_DELAY_MS;
+	_dropSse();
+	_connectSse();
+}
+
 function _connectSse() {
+	_sseTimer = null;
 	if (!getAuth().token || !_onJobsUpdate) return;
 
 	// The live jobs stream is scoped to the chosen shop: /api/events/shop/:shopId.
@@ -694,33 +541,57 @@ function _connectSse() {
 		return;
 	}
 
-	_setSseStatus("connecting");
+	_dropSse();
+	_setSseStatus(_sseStatus === "reconnecting" ? "reconnecting" : "connecting");
+	_sseLastEventAt = Date.now(); // the connect attempt itself is watched too
 
-	const endpoint = `${API_BASE_URL}/api/events/shop/${shopId}`;
+	// Simulated outage (CLICKPRINT_NET_FAULT=offline, see http.js): the stream
+	// can't connect either.
+	if (getFault().offline) {
+		console.warn("[SSE] connect blocked by injected fault");
+		connectivity.reportFailure();
+		_scheduleReconnect();
+		return;
+	}
 
-	_sse = new EventSource(endpoint, {
+	const es = new EventSource(`${baseUrl()}/api/events/shop/${shopId}`, {
 		headers: { Authorization: `Bearer ${getAuth().token}` },
 	});
+	_sse = es;
+	const current = () => es === _sse;
+	const touch = () => {
+		_sseLastEventAt = Date.now();
+	};
 
-	_sse.onopen = () => {
+	es.onopen = () => {
+		if (!current()) return;
 		console.log("[SSE] Connected");
+		touch();
+		_sseDelay = SSE_MIN_DELAY_MS;
+		connectivity.reportSuccess();
 		_setSseStatus("open");
 		_reconcile();
 	};
 
-	_sse.onmessage = (event) => {
+	es.onmessage = (event) => {
+		if (!current()) return;
+		touch();
 		console.log("[SSE] Event:", event.data);
 		_reconcile();
 	};
 
 	// named events need addEventListener, not onmessage
-	_sse.addEventListener("jobsUpdate", (event) => {
+	es.addEventListener("jobsUpdate", (event) => {
+		if (!current()) return;
+		touch();
 		console.log("[SSE] jobsUpdate:", event.data);
 		_reconcile();
 	});
 
 	// The backend asking to send a WhatsApp text from the shop's linked number.
-	_sse.addEventListener("whatsappSend", (event) => {
+	es.addEventListener("whatsappSend", (event) => {
+		if (!current()) return;
+		touch();
 		let payload;
 		try {
 			payload = JSON.parse(event.data);
@@ -732,53 +603,71 @@ function _connectSse() {
 		if (_onWhatsAppSend) _onWhatsAppSend(payload);
 	});
 
-	_sse.addEventListener("ping", async () => {
-		console.log("[SSE] ping");
-
-		// Sweep every printer's spool queue on the same beat: documents that have
-		// finished (or died) leave the registry, foreign load is re-counted.
-		if (_onPing) {
-			try {
-				await _onPing();
-			} catch (err) {
-				console.error("[SSE] ping handler error:", err.message);
+	es.addEventListener("ping", async () => {
+		if (!current()) return;
+		touch();
+		// A slow beat (PowerShell queue sweep, a slow PATCH) must not stack up
+		// behind the next one.
+		if (_pingHandlerBusy) return;
+		_pingHandlerBusy = true;
+		try {
+			// Sweep every printer's spool queue on the same beat: documents that have
+			// finished (or died) leave the registry, foreign load is re-counted.
+			if (_onPing) {
+				try {
+					await _onPing();
+				} catch (err) {
+					console.error("[SSE] ping handler error:", err.message);
+				}
 			}
-		}
-
-		const shopId = getShopId();
-		if (shopId) {
-			const result = await pingShopStatus(shopId);
-			if (result.success) {
-				console.log("[SSE] ping successful");
-			} else {
-				console.error("[SSE] ping failed:", result.message);
+			const id = getShopId();
+			if (id) {
+				const result = await pingShopStatus(id);
+				if (!result.success) console.error("[SSE] ping failed:", result.message);
 			}
+		} finally {
+			_pingHandlerBusy = false;
 		}
 	});
 
-	_sse.onerror = (err) => {
-		console.error("[SSE] Error:", err.message ?? err.type);
-		_sse.close();
-		_sse = null;
-		if (_onJobsUpdate) {
-			_setSseStatus("reconnecting");
-			_sseTimer = setTimeout(_connectSse, 5000);
-		} else {
-			_setSseStatus("closed");
-		}
+	es.onerror = (err) => {
+		if (!current()) return;
+		console.error("[SSE] Error:", err?.message ?? err?.type, err?.status ?? "");
+		if (err?.status === 401) connectivity.report({ kind: "auth", status: 401 });
+		else connectivity.reportFailure();
+		_scheduleReconnect();
 	};
 }
 
-async function _reconcile() {
-	if (!_onJobsUpdate) return;
-	const result = await fetchJobs();
-	console.log(`[SSE] Reconcile complete — ${result.success ? result.data?.length + " jobs" : "failed: " + result.message}`);
-	if (result.success) {
-		setJobs(result.data);
-		_onJobsUpdate(result.data);
-	}
-}
+// Re-fetches the job list. Coalesced: while one fetch is in flight, any number
+// of further events cause exactly one follow-up fetch.
+let _reconciling = null;
+let _reconcileAgain = false;
 
+function _reconcile() {
+	if (!_onJobsUpdate) return Promise.resolve();
+	if (_reconciling) {
+		_reconcileAgain = true;
+		return _reconciling;
+	}
+	_reconciling = (async () => {
+		do {
+			_reconcileAgain = false;
+			const result = await fetchJobs();
+			// A stale (cached) list is not news — only a fresh one drives the engine.
+			if (result.success && !result.stale && _onJobsUpdate) {
+				console.log(`[SSE] Reconcile complete — ${result.data?.length} jobs`);
+				setJobs(result.data);
+				_onJobsUpdate(result.data);
+			} else if (!result.success || result.stale) {
+				console.warn(`[SSE] Reconcile failed: ${result.message}`);
+			}
+		} while (_reconcileAgain && _onJobsUpdate);
+	})().finally(() => {
+		_reconciling = null;
+	});
+	return _reconciling;
+}
 
 module.exports = {
 	sendOtp,
@@ -799,14 +688,17 @@ module.exports = {
 	setPrinterDisabled,
 	fetchJobs,
 	fetchHistory,
-	fetchFileBuffer,
+	cachedCopy,
+	cachedData,
+	clearCaches,
+	openFileDownload,
 	uploadFile,
 	updateJobStatus,
 	markJobFailed,
 	isJobFailing,
-	acknowledgeNewJobs,
 	startJobsSse,
 	stopJobsSse,
+	resync,
 	setSseStatusNotifier,
 	setPingNotifier,
 	setWhatsAppSendHandler,

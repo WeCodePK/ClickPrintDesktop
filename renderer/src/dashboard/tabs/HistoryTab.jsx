@@ -6,6 +6,8 @@ import JobDetailCard from "../components/JobDetailCard";
 import EmptyState from "../components/EmptyState";
 import JobListCard from "../components/JobListCard";
 import RefreshButton from "../components/RefreshButton";
+import StaleNote from "../components/StaleNote";
+import { useNetStatus } from "../useNetStatus";
 
 // The card shows only the time of day — the date is its group's header.
 function formatHistoryTime(isoString) {
@@ -48,6 +50,11 @@ function groupByDay(entries) {
 function HistoryTab() {
 	const [entries, setEntries] = useState([]);
 	const [loading, setLoading] = useState(true);
+	// Nothing could be loaded (no saved copy either) — never shown as "no history".
+	const [error, setError] = useState(null);
+	// { stale, fetchedAt } — the list is the copy saved before the connection dropped.
+	const [saved, setSaved] = useState({ stale: false, fetchedAt: null });
+	const net = useNetStatus();
 	const [selectedEntry, setSelectedEntry] = useState(null);
 
 	const mounted = useRef(true);
@@ -58,7 +65,10 @@ function HistoryTab() {
 		if (!silent) setLoading(true);
 		try {
 			const result = await window.electronAPI.fetchHistory();
+			if (mounted.current && !result.success) setError(result.message || "Couldn't load history.");
 			if (mounted.current && result.success) {
+				setError(null);
+				setSaved({ stale: !!result.stale, fetchedAt: result.fetchedAt || null });
 				const jobs = (result.data || [])
 					.map(transformJob)
 					.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -68,6 +78,7 @@ function HistoryTab() {
 			}
 		} catch (err) {
 			console.error("[Renderer] failed to load history:", err);
+			if (mounted.current) setError("Couldn't load history.");
 		} finally {
 			if (mounted.current && !silent) setLoading(false);
 		}
@@ -81,6 +92,12 @@ function HistoryTab() {
 		};
 	}, [loadHistory]);
 
+	// Back online: replace a saved (or missing) list with the real one.
+	useEffect(() => {
+		if (net.online && (saved.stale || error)) loadHistory({ silent: true });
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [net.online]);
+
 	return (
 		<>
 			<ListColumn
@@ -90,10 +107,18 @@ function HistoryTab() {
 				className="db-list--jobs"
 				bodyClassName="db-list__entries--column"
 			>
+				<StaleNote stale={saved.stale} fetchedAt={saved.fetchedAt} />
 				{loading ? (
 					<div className="db-coming-soon">
 						<div className="spinner spinner--dark" />
 						<p>Loading history…</p>
+					</div>
+				) : error && entries.length === 0 ? (
+					<div className="db-coming-soon">
+						<p>{net.online ? error : "You're offline — history will appear once the connection is back."}</p>
+						<button type="button" className="btn-outline btn-sm" onClick={() => loadHistory()}>
+							Try again
+						</button>
 					</div>
 				) : entries.length === 0 ? (
 					<EmptyState art="history" title="No print history" />

@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import ListColumn from "../components/ListColumn";
 import WelcomePane from "../components/WelcomePane";
 import EmptyState from "../components/EmptyState";
+import StaleNote from "../components/StaleNote";
+import { useNetStatus, OFFLINE_ACTION_HINT } from "../useNetStatus";
 import ConfirmDialog from "../components/ConfirmDialog";
 import ServiceForm, { serviceLabel, sameKeys, printerIdOf, loadServicePrinters, PAGE_TYPES, serviceCode } from "../components/ServiceForm";
 import { useAutoPrint } from "../AutoPrintContext";
@@ -48,6 +50,12 @@ function ServicesTab() {
 	const [printers, setPrinters] = useState([]); // registered printers + live online flag
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState(null);
+	// { stale, fetchedAt } — set when the list is the copy saved before the
+	// connection dropped. Editing needs the backend, so it waits for it.
+	const [saved, setSaved] = useState({ stale: false, fetchedAt: null });
+	const net = useNetStatus();
+	const offline = !net.online;
+	const offlineTitle = offline ? OFFLINE_ACTION_HINT : undefined;
 	const [selectedId, setSelectedId] = useState(null);
 	const [editing, setEditing] = useState(null); // service object, { keys: {} } for new, or null
 	const [saving, setSaving] = useState(false);
@@ -66,6 +74,8 @@ function ServicesTab() {
 			const result = await window.electronAPI.fetchServices();
 			if (result.success) {
 				setServices(result.data || []);
+				setSaved({ stale: !!result.stale, fetchedAt: result.fetchedAt || null });
+				setError(null);
 				return result.data || [];
 			}
 			setError(result.message || "Failed to load services.");
@@ -94,6 +104,15 @@ function ServicesTab() {
 			setLoading(false);
 		})();
 	}, [loadServices, loadPrinters]);
+
+	// Back online: replace a saved (or missing) list with the real one.
+	useEffect(() => {
+		if (net.online && (saved.stale || error)) {
+			loadServices();
+			loadPrinters();
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [net.online]);
 
 	const selectedService = services.find((s) => s._id === selectedId) || null;
 
@@ -214,19 +233,28 @@ function ServicesTab() {
 				title="Services"
 				bodyClassName="db-list__entries--column"
 				action={
-					<button className="db-list__add" onClick={() => setEditing({ keys: {} })} title="Add a service">
+					<button
+						className="db-list__add"
+						onClick={() => setEditing({ keys: {} })}
+						disabled={offline}
+						title={offlineTitle || "Add a service"}
+					>
 						+ Add
 					</button>
 				}
 			>
+				<StaleNote stale={saved.stale} fetchedAt={saved.fetchedAt} />
 				{loading ? (
 					<div className="db-coming-soon">
 						<div className="spinner spinner--dark" />
 						<p>Loading services…</p>
 					</div>
-				) : error && !editing ? (
+				) : error && !editing && services.length === 0 ? (
 					<div className="db-coming-soon">
-						<p>{error}</p>
+						<p>{offline ? "You're offline — your services will appear once the connection is back." : error}</p>
+						<button type="button" className="btn-outline btn-sm" onClick={loadServices}>
+							Try again
+						</button>
 					</div>
 				) : services.length === 0 ? (
 					<EmptyState art="service" title="No services added" />
@@ -258,7 +286,8 @@ function ServicesTab() {
 												<button
 													type="button"
 													className="svc-tree__group svc-tree__ghost"
-													title={`No ${label} services for ${size} yet. Click to add one.`}
+													title={offlineTitle || `No ${label} services for ${size} yet. Click to add one.`}
+													disabled={offline}
 													onClick={() => setEditing({ keys: { pageType: size, color, sidedness: false } })}
 												>
 													<span className="svc-tree__icon"><Glyph /></span>
@@ -282,7 +311,8 @@ function ServicesTab() {
 																	<button
 																		type="button"
 																		className="svc-tree__leaf svc-tree__ghost"
-																		title={`No ${size} ${label} ${sideLabel} service yet. Click to add it.`}
+																		title={offlineTitle || `No ${size} ${label} ${sideLabel} service yet. Click to add it.`}
+																		disabled={offline}
 																		onClick={() => setEditing({ keys: { pageType: size, color, sidedness } })}
 																	>
 																		<span className="svc-tree__icon"><SideGlyph /></span>
@@ -336,7 +366,13 @@ function ServicesTab() {
 								)}
 							</div>
 							<div className="db-detail__titlebar-actions">
-								<button type="button" className="btn-outline" onClick={() => setEditing(selectedService)}>
+								<button
+									type="button"
+									className="btn-outline"
+									onClick={() => setEditing(selectedService)}
+									disabled={offline}
+									title={offlineTitle}
+								>
 									<EditIcon />
 									Edit
 								</button>
@@ -344,6 +380,8 @@ function ServicesTab() {
 									type="button"
 									className="btn-outline db-detail__remove"
 									onClick={() => setConfirmDelete(selectedService)}
+									disabled={offline}
+									title={offlineTitle}
 								>
 									<TrashIcon />
 									Delete
@@ -353,8 +391,8 @@ function ServicesTab() {
 									className={`toggle ${selectedService.isDisabled ? "" : "toggle--on"}`}
 									role="switch"
 									aria-checked={!selectedService.isDisabled}
-									title={selectedService.isDisabled ? "Enable this service" : "Disable this service"}
-									disabled={togglingId === selectedService._id}
+									title={offlineTitle || (selectedService.isDisabled ? "Enable this service" : "Disable this service")}
+									disabled={togglingId === selectedService._id || offline}
 									onClick={() => handleToggleDisabled(selectedService)}
 								>
 									<span className="toggle__knob" />
@@ -427,6 +465,7 @@ function ServicesTab() {
 							printers={printers}
 							error={error}
 							saving={saving}
+							offline={offline}
 							onSave={handleSave}
 							onCancel={() => setEditing(null)}
 						/>

@@ -2,7 +2,7 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
 const { app, protocol, shell, BrowserWindow } = require("electron");
-const { fetchFileBuffer } = require("./api");
+const { openFileDownload } = require("./api");
 const spooler = require("./spooler");
 
 // Job files are downloaded once and cached on disk under userData, one folder
@@ -113,27 +113,24 @@ function isReady(fileId) {
 	}
 }
 
-// Writes bytes via a temp file renamed into place, so a half-written file is
-// never served and a failed write leaves the previous copy intact.
-async function _writeAtomic(dest, buffer) {
-	await fsp.mkdir(path.dirname(dest), { recursive: true });
-	const tmp = `${dest}.part`;
-	await fsp.writeFile(tmp, Buffer.from(buffer));
-	await fsp.rename(tmp, dest);
-}
+// ── Downloading ───────────────────────────────────────────────────────────────
+// Built for a link that drops out for minutes at a time:
+//   - a download streams to "<name>.part" and only an intact file is renamed
+//     into place, so a half-written copy is never served;
+//   - it is cut off only when no bytes arrive for IDLE_TIMEOUT_MS (a large file
+//     on a slow link still finishes), and the next attempt resumes from the
+//     .part with a Range request when the server supports it;
+//   - a failure that could clear up (offline, timeout, 5xx, 401) is retried on
+//     a backoff, forever, and at once when the connection returns (retryAll) —
+//     it NEVER fails the job. Only a permanent answer (404, 403, 410, …) stops
+//     retrying; the file is then "unavailable" and the operator decides.
 
-// Fetches a file, retrying once.
-async function _fetchWithRetry(fileId, opts, what) {
-	let attempt = await fetchFileBuffer(fileId, opts);
-	if (!attempt.ok || !attempt.buffer) {
-		console.warn(`[Files] ${what} download failed for ${fileId}, retrying once…`);
-		attempt = await fetchFileBuffer(fileId, opts);
-	}
-	if (!attempt.ok || !attempt.buffer) throw new Error(`${what} download failed`);
-	return attempt;
-}
+const IDLE_TIMEOUT_MS = 30000;
+const RETRY_MIN_MS = 5000;
+const RETRY_MAX_MS = 2 * 60 * 1000;
+const PDF_CONCURRENCY = 3;
 
-// fileId -> "downloading" | "ready" | "error"
+// fileId -> "downloading" | "ready" | "retrying" | "unavailable"
 const _status = {};
 const _inflight = new Set();
 let _notify = null; // (updates: {fileId: status}) => void
@@ -155,6 +152,7 @@ function getStatusMap() {
 }
 
 function _setStatus(fileId, status) {
+	if (_status[fileId] === status) return;
 	_status[fileId] = status;
 	if (_notify) _notify({ [fileId]: status });
 	for (const listener of _statusListeners) {
@@ -166,83 +164,250 @@ function _setStatus(fileId, status) {
 	}
 }
 
-// Downloads a document into its job's folder (each fetch retrying once),
-// replacing any copy already there. Callers own the _inflight guard and status
-// reporting.
-//   - The PDF rendition (requested with Accept: application/pdf) is what gets
-//     previewed and printed, so failing to fetch it fails the download.
-//   - The raw upload is only there for the operator to open from Explorer, so
-//     losing it is logged and never fails the document.
-async function _downloadToCache(fileId) {
-	const meta = _fileMeta.get(fileId);
-	if (!meta) throw new Error("file does not belong to a known job");
+// A failed download's verdict: a permanent no, or worth retrying.
+function _isPermanent(failure) {
+	return failure?.kind === "http" && ![408, 429].includes(failure.status);
+}
 
-	const pdf = await _fetchWithRetry(fileId, { accept: "application/pdf" }, "PDF");
-	await _writeAtomic(path.join(jobDir(meta.jobId), meta.pdfName), pdf.buffer);
+// key ("pdf:<id>", "raw:<id>", "proof:<id>") -> { attempt, timer, run }
+const _retries = new Map();
 
-	if (!meta.rawName) return;
+function _scheduleRetry(key, run) {
+	const entry = _retries.get(key) || { attempt: 0, timer: null, run };
+	entry.run = run;
+	entry.attempt += 1;
+	clearTimeout(entry.timer);
+	const ceiling = Math.min(RETRY_MAX_MS, RETRY_MIN_MS * 2 ** (entry.attempt - 1));
+	const delay = Math.round(ceiling / 2 + Math.random() * (ceiling / 2));
+	entry.timer = setTimeout(() => {
+		entry.timer = null;
+		run();
+	}, delay);
+	entry.timer.unref?.();
+	_retries.set(key, entry);
+	console.log(`[Files] ${key} retry #${entry.attempt} in ${Math.round(delay / 1000)}s`);
+}
+
+function _clearRetry(key) {
+	const entry = _retries.get(key);
+	if (!entry) return;
+	clearTimeout(entry.timer);
+	_retries.delete(key);
+}
+
+const _waitingRetry = (key) => !!_retries.get(key)?.timer;
+
+// The connection is back: every waiting download goes now instead of at the
+// end of its backoff.
+function retryAll() {
+	const waiting = [..._retries.values()].filter((entry) => entry.timer);
+	if (waiting.length) console.log(`[Files] connection back — retrying ${waiting.length} download(s)`);
+	for (const entry of waiting) {
+		clearTimeout(entry.timer);
+		entry.timer = null;
+		entry.run();
+	}
+	_pumpRaw();
+}
+
+// The download primitive — api.openFileDownload, behind a function so a failed
+// call can never throw past the retry logic.
+async function _openDownload(fileId, opts) {
 	try {
-		const raw = await _fetchWithRetry(fileId, {}, "raw file");
-		const mime = String(raw.contentType || "").split(";")[0].trim().toLowerCase();
+		return await openFileDownload(fileId, opts);
+	} catch (error) {
+		console.error(`[Files] download of ${fileId} failed to start:`, error.message);
+		return { ok: false, kind: "network", offline: true, retryable: true };
+	}
+}
+
+const INTERRUPTED = { ok: false, kind: "network", offline: true, retryable: true };
+
+// Streams one file from the backend into `part`, resuming from what's already
+// there when the server honours Range. Resolves { ok: true, contentType } with
+// the whole file in `part`, or a failure ({ ok: false, kind, status, … }).
+// `fresh` discards any partial copy first.
+async function _streamToPart(fileId, part, { accept, fresh = false } = {}) {
+	await fsp.mkdir(path.dirname(part), { recursive: true });
+	if (fresh) await fsp.rm(part, { force: true });
+	let offset = 0;
+	try {
+		offset = (await fsp.stat(part)).size;
+	} catch {}
+
+	let res = await _openDownload(fileId, { accept, range: offset || undefined });
+	if (!res.ok && res.status === 416) {
+		// The partial copy doesn't match the file any more — start over.
+		await fsp.rm(part, { force: true });
+		offset = 0;
+		res = await _openDownload(fileId, { accept });
+	}
+	if (!res.ok) return res;
+
+	const headers = res.response.headers;
+	const encoding = headers.get("content-encoding");
+	const encoded = !!encoding && encoding !== "identity";
+	const append = offset > 0 && res.status === 206 && !encoded;
+	const start = append ? offset : 0;
+
+	const handle = await fsp.open(part, append ? "a" : "w");
+	let idle = null;
+	const arm = () => {
+		clearTimeout(idle);
+		idle = setTimeout(() => res.controller?.abort(new Error("download stalled")), IDLE_TIMEOUT_MS);
+	};
+	try {
+		arm();
+		for await (const chunk of res.response.body) {
+			arm();
+			await handle.write(chunk);
+		}
+	} catch (error) {
+		console.warn(`[Files] ${fileId} download interrupted:`, error.message);
+		return INTERRUPTED;
+	} finally {
+		clearTimeout(idle);
+		await handle.close();
+	}
+
+	// A body that ended early (the link dropped) must not pass for the file.
+	const length = Number(headers.get("content-length"));
+	if (!encoded && Number.isFinite(length) && length > 0) {
+		const size = (await fsp.stat(part)).size;
+		if (size !== start + length) {
+			console.warn(`[Files] ${fileId} download truncated (${size} of ${start + length} bytes)`);
+			return INTERRUPTED;
+		}
+	}
+	return { ok: true, contentType: headers.get("content-type") };
+}
+
+// Downloads a document's PDF rendition — what gets previewed and printed —
+// into its job folder. Resolves { ok } or a failure.
+async function _downloadPdf(fileId, { fresh = false } = {}) {
+	const meta = _fileMeta.get(fileId);
+	if (!meta) return { ok: false, kind: "http", status: 404, message: "file does not belong to a known job" };
+	const dest = path.join(jobDir(meta.jobId), meta.pdfName);
+	const part = `${dest}.part`;
+	const result = await _streamToPart(fileId, part, { accept: "application/pdf", fresh });
+	if (!result.ok) return result;
+	await fsp.rename(part, dest);
+	return { ok: true };
+}
+
+// ── Raw uploads (optional; after every PDF) ──
+// The customer's original upload is only there for the operator to open from
+// Explorer, so it never competes with the PDFs that printing waits on: raw
+// downloads run one at a time, only while no PDF is downloading, and a failure
+// is retried quietly (or dropped, when permanent) without touching the
+// document's status.
+
+const _rawQueue = [];
+let _rawBusy = false;
+
+function _queueRaw(fileId) {
+	const meta = _fileMeta.get(fileId);
+	if (!meta?.rawName || rawPath(fileId) || _rawQueue.includes(fileId) || _waitingRetry(`raw:${fileId}`)) return;
+	_rawQueue.push(fileId);
+	_pumpRaw();
+}
+
+async function _pumpRaw() {
+	if (_rawBusy) return;
+	_rawBusy = true;
+	try {
+		while (_rawQueue.length && _inflight.size === 0) {
+			await _downloadRaw(_rawQueue.shift());
+		}
+	} finally {
+		_rawBusy = false;
+	}
+}
+
+async function _downloadRaw(fileId) {
+	const meta = _fileMeta.get(fileId);
+	if (!meta?.rawName) return;
+	const dir = jobDir(meta.jobId);
+	const part = path.join(dir, `${meta.rawName}.part`);
+	try {
+		const result = await _streamToPart(fileId, part, {});
+		if (!result.ok) {
+			if (_isPermanent(result)) {
+				console.warn(`[Files] the raw upload of ${fileId} isn't available (HTTP ${result.status}) — skipping it`);
+				_clearRetry(`raw:${fileId}`);
+			} else if (_fileMeta.has(fileId)) {
+				_scheduleRetry(`raw:${fileId}`, () => _queueRaw(fileId));
+			}
+			return;
+		}
+		_clearRetry(`raw:${fileId}`);
+		const mime = String(result.contentType || "").split(";")[0].trim().toLowerCase();
 		// A name without an extension takes one from the reported type. A raw upload
 		// that turns out to be a PDF is already covered by the rendition.
 		const ext = meta.rawHasExt ? "" : RAW_EXTENSIONS[mime];
-		if (ext === "pdf") return;
-		await _writeAtomic(path.join(jobDir(meta.jobId), ext ? `${meta.rawName}.${ext}` : meta.rawName), raw.buffer);
+		if (ext === "pdf" || !_fileMeta.has(fileId)) {
+			await fsp.rm(part, { force: true });
+			return;
+		}
+		await fsp.rename(part, path.join(dir, ext ? `${meta.rawName}.${ext}` : meta.rawName));
 	} catch (error) {
 		console.warn(`[Files] could not save the raw upload of ${fileId}:`, error.message);
 	}
 }
 
-// Ensures a single file is present on disk, downloading it if needed. Retries
-// the download once before giving up. Returns true on success, false on failure.
-async function ensureFile(fileId) {
+// Ensures a document's PDF is on disk, downloading it now if needed. Resolves
+// true when it's ready. A failure leaves it "retrying" (with a retry
+// scheduled) or "unavailable" — it never fails the job.
+async function ensureFile(fileId, { fresh = false } = {}) {
 	if (!fileId) return false;
 
-	if (isReady(fileId)) {
-		if (_status[fileId] !== "ready") _setStatus(fileId, "ready");
+	if (!fresh && isReady(fileId)) {
+		_setStatus(fileId, "ready");
+		_queueRaw(fileId);
 		return true;
 	}
-	// Another caller already owns this download; it will report the outcome, so
-	// don't start a second and optimistically assume success here.
-	if (_inflight.has(fileId)) return true;
+	if (_inflight.has(fileId)) return false; // its owner reports the outcome
 
 	_inflight.add(fileId);
+	_clearRetry(`pdf:${fileId}`);
 	_setStatus(fileId, "downloading");
+	let result;
 	try {
-		await _downloadToCache(fileId);
-		_setStatus(fileId, "ready");
-		console.log(`[Files] downloaded ${fileId}`);
-		return true;
+		result = await _downloadPdf(fileId, { fresh });
 	} catch (error) {
-		console.error(`[Files] failed to download ${fileId} (after retry):`, error.message);
-		_setStatus(fileId, "error");
-		return false;
+		result = { ok: false, kind: "network", retryable: true, message: error.message };
 	} finally {
 		_inflight.delete(fileId);
 	}
+
+	if (result.ok) {
+		_setStatus(fileId, "ready");
+		console.log(`[Files] downloaded ${fileId}`);
+		_queueRaw(fileId);
+		_pumpRaw();
+		return true;
+	}
+	if (fresh && isReady(fileId)) {
+		// A failed Reload keeps the copy that was cached.
+		_setStatus(fileId, "ready");
+	} else if (_isPermanent(result)) {
+		console.error(`[Files] ${fileId} is unavailable (HTTP ${result.status}) — needs the operator`);
+		_setStatus(fileId, "unavailable");
+	} else {
+		_setStatus(fileId, "retrying");
+		if (_fileMeta.has(fileId)) _scheduleRetry(`pdf:${fileId}`, () => ensureFile(fileId));
+	}
+	_pumpRaw();
+	return false;
 }
 
 // Fetches a fresh copy of a file even though one is cached — the operator's way
-// out of a copy that won't preview (a corrupt or truncated download). If the new
-// download fails, whatever was cached stays put.
+// out of a copy that won't preview (a corrupt or truncated download), and the
+// "Retry" on a file that is unavailable or waiting. If the new download fails,
+// whatever was cached stays put.
 async function redownloadFile(fileId) {
 	if (!fileId || _inflight.has(fileId)) return false;
-
-	_inflight.add(fileId);
-	_setStatus(fileId, "downloading");
-	try {
-		await _downloadToCache(fileId);
-		_setStatus(fileId, "ready");
-		console.log(`[Files] re-downloaded ${fileId}`);
-		return true;
-	} catch (error) {
-		console.error(`[Files] failed to re-download ${fileId}:`, error.message);
-		_setStatus(fileId, isReady(fileId) ? "ready" : "error");
-		return false;
-	} finally {
-		_inflight.delete(fileId);
-	}
+	return ensureFile(fileId, { fresh: true });
 }
 
 // Runs an async worker over items with bounded concurrency.
@@ -256,10 +421,6 @@ async function _runLimited(items, limit, worker) {
 	await Promise.all(runners);
 }
 
-// Jobs already flagged failed (a download couldn't be fetched even after a
-// retry), so we don't re-download or re-notify on every reconcile.
-const _failedJobs = new Set();
-
 function _jobFileIds(job) {
 	const ids = [];
 	for (const entry of job.files || []) {
@@ -271,48 +432,31 @@ function _jobFileIds(job) {
 	return ids;
 }
 
-// Downloads all of a job's files. If any fail (after their one retry),
-// `onJobFailed(jobId)` is invoked so the caller can mark the job "failed" on the
-// backend. Only once that succeeds do we finalize (stop retrying + drop the
-// partial files) — if it fails we leave everything so the next reconcile retries.
-async function _syncOneJob(job, onJobFailed) {
-	const jobId = job._id;
-	const fileIds = _jobFileIds(job);
-	if (fileIds.length === 0) return;
-
-	const results = await Promise.all(fileIds.map((id) => ensureFile(id)));
-	if (results.every(Boolean) || _failedJobs.has(jobId)) return;
-
-	console.error(`[Files] job ${jobId} has a failed download → marking failed`);
-	let handled = true;
-	if (onJobFailed) {
-		try {
-			handled = await onJobFailed(jobId);
-		} catch (err) {
-			console.error(`[Files] onJobFailed(${jobId}) error:`, err.message);
-			handled = false;
-		}
-	}
-	if (handled) {
-		_failedJobs.add(jobId);
-		await deleteJobFiles(jobId, fileIds); // nothing will be printed; drop partial downloads
-	}
-}
-
-// Downloads every job's files in the background (bounded concurrency). Safe to
-// call repeatedly — cached/in-flight files and already-failed jobs are skipped.
-// `onJobFailed(jobId)` fires once per job that has an unrecoverable download.
-// Payment proofs ride along on the same call (see _syncJobProofs) so a new job
-// arrives with everything the operator needs already local.
-function syncJobFiles(jobs, onJobFailed) {
+// Downloads every job's documents in the background (bounded concurrency, in
+// job order). Safe to call on every reconcile: files that are cached, in
+// flight, waiting out a retry or unavailable are skipped — their retries run on
+// their own timers. Payment proofs ride along (see _syncJobProofs) so a new
+// job arrives with everything the operator needs already local.
+function syncJobFiles(jobs) {
 	// Synchronously, before anything async: the print engine is fed the same jobs
 	// right after this call and resolves file paths through _fileMeta.
 	for (const job of jobs || []) _registerJobFiles(job);
 	_syncJobProofs(jobs);
 
-	const pending = (jobs || []).filter((j) => !_failedJobs.has(j._id) && _jobFileIds(j).length > 0);
-	if (pending.length === 0) return;
-	_runLimited(pending, 3, (job) => _syncOneJob(job, onJobFailed)).catch((err) =>
+	const pending = [];
+	for (const job of jobs || []) {
+		for (const fileId of _jobFileIds(job)) {
+			if (isReady(fileId)) {
+				_setStatus(fileId, "ready");
+				_queueRaw(fileId);
+				continue;
+			}
+			if (_inflight.has(fileId) || _status[fileId] === "unavailable" || _waitingRetry(`pdf:${fileId}`)) continue;
+			if (!pending.includes(fileId)) pending.push(fileId);
+		}
+	}
+	if (pending.length === 0) return Promise.resolve();
+	return _runLimited(pending, PDF_CONCURRENCY, (fileId) => ensureFile(fileId)).catch((err) =>
 		console.error("[Files] syncJobFiles error:", err)
 	);
 }
@@ -326,6 +470,10 @@ async function deleteJobFiles(jobId, fileIds) {
 	for (const fileId of fileIds || []) {
 		delete _status[fileId];
 		_fileMeta.delete(fileId);
+		_clearRetry(`pdf:${fileId}`);
+		_clearRetry(`raw:${fileId}`);
+		const queued = _rawQueue.indexOf(fileId);
+		if (queued >= 0) _rawQueue.splice(queued, 1);
 	}
 	if (!jobId) return;
 	try {
@@ -458,39 +606,62 @@ function isProofReady(fileId) {
 
 // Ensures a job's payment proof is on disk, downloading it if needed. Status is
 // reported through the same per-file channel as the printing files, so the
-// renderer's FilesContext tracks both without knowing the difference.
+// renderer's FilesContext tracks both without knowing the difference. Retried
+// like a document while it can't be fetched; a proof never fails its job.
 async function ensureProof(fileId) {
 	if (!fileId) return false;
 
 	if (isProofReady(fileId)) {
-		if (_status[fileId] !== "ready") _setStatus(fileId, "ready");
+		_setStatus(fileId, "ready");
 		return true;
 	}
-	if (_inflight.has(fileId)) return true;
+	if (_inflight.has(fileId)) return false;
 
 	_inflight.add(fileId);
+	_clearRetry(`proof:${fileId}`);
 	_setStatus(fileId, "downloading");
+	const { dir, stem } = _proofLocation(fileId);
+	const part = path.join(dir, `${stem}.download.part`);
+	let result;
 	try {
 		// No Accept header: a proof is served as the customer uploaded it.
-		const attempt = await _fetchWithRetry(fileId, {}, "payment proof");
-
-		const ext = _sniffProofExt(attempt.buffer, attempt.contentType);
-		if (!ext) console.warn(`[Files] payment proof ${fileId}: unrecognised type "${attempt.contentType}"`);
-
-		const { dir, stem } = _proofLocation(fileId);
-		const dest = path.join(dir, `${stem}.${ext || "bin"}`);
-		await _writeAtomic(dest, attempt.buffer);
-		_proofPaths.set(fileId, dest);
-		_setStatus(fileId, "ready");
-		console.log(`[Files] downloaded payment proof ${fileId} (${ext || "unknown type"})`);
-		return true;
+		result = await _streamToPart(fileId, part, {});
+		if (result.ok) {
+			const handle = await fsp.open(part, "r");
+			const head = Buffer.alloc(16);
+			try {
+				await handle.read(head, 0, 16, 0);
+			} finally {
+				await handle.close();
+			}
+			const ext = _sniffProofExt(head, result.contentType);
+			if (!ext) console.warn(`[Files] payment proof ${fileId}: unrecognised type "${result.contentType}"`);
+			const dest = path.join(dir, `${stem}.${ext || "bin"}`);
+			await fsp.rename(part, dest);
+			_proofPaths.set(fileId, dest);
+		}
 	} catch (error) {
-		console.error(`[Files] failed to download payment proof ${fileId} (after retry):`, error.message);
-		_setStatus(fileId, "error");
-		return false;
+		result = { ok: false, kind: "network", retryable: true, message: error.message };
 	} finally {
 		_inflight.delete(fileId);
 	}
+
+	if (result.ok) {
+		_clearRetry(`proof:${fileId}`);
+		_setStatus(fileId, "ready");
+		console.log(`[Files] downloaded payment proof ${fileId}`);
+		_pumpRaw();
+		return true;
+	}
+	if (_isPermanent(result)) {
+		console.error(`[Files] payment proof ${fileId} is unavailable (HTTP ${result.status})`);
+		_setStatus(fileId, "unavailable");
+	} else {
+		_setStatus(fileId, "retrying");
+		_scheduleRetry(`proof:${fileId}`, () => ensureProof(fileId));
+	}
+	_pumpRaw();
+	return false;
 }
 
 // The proof id off a raw backend job. The field is documented as a file id, but
@@ -505,10 +676,9 @@ function _jobProofId(job) {
 // job's cache when it reaches a terminal state (see deleteJobProof).
 const _jobProofs = new Map();
 
-// Downloads the payment proof of every job that has one. A proof that errored
-// is not retried here — repeated reconciles would hammer a file that isn't
-// coming back — but the renderer can ask for another attempt (files:ensure-proof),
-// which is what its retry affordance does.
+// Downloads the payment proof of every job that has one. A proof waiting out a
+// retry, or unavailable, is skipped — its own timer retries it, and the
+// renderer can ask for another attempt (files:ensure-proof).
 function _syncJobProofs(jobs) {
 	const pending = [];
 	for (const job of jobs || []) {
@@ -516,7 +686,7 @@ function _syncJobProofs(jobs) {
 		if (!proofId) continue;
 		_jobProofs.set(job._id, proofId);
 		_proofJobs.set(proofId, job._id);
-		if (isProofReady(proofId) || _inflight.has(proofId) || _status[proofId] === "error") continue;
+		if (isProofReady(proofId) || _inflight.has(proofId) || _status[proofId] === "unavailable" || _waitingRetry(`proof:${proofId}`)) continue;
 		pending.push(proofId);
 	}
 	if (pending.length === 0) return;
@@ -535,6 +705,7 @@ async function deleteJobProof(jobId) {
 	_proofPaths.delete(proofId);
 	_proofJobs.delete(proofId); // a later History fetch goes to the shared cache
 	delete _status[proofId];
+	_clearRetry(`proof:${proofId}`);
 	if (!target) return;
 	try {
 		await fsp.unlink(target);
@@ -809,6 +980,7 @@ function registerFileProtocol() {
 module.exports = {
 	FILE_SCHEME,
 	syncJobFiles,
+	retryAll,
 	getStatusMap,
 	setNotifier,
 	addStatusListener,

@@ -13,6 +13,8 @@ const { getJobs } = require("./state");
 const { manualPrintReasons, requiresManualPrinting } = require("./jobRules");
 const { sanitizeSettingsPatch, applySettingsPatch, effectiveSettings } = require("./fileSettings");
 const updateHandoff = require("./updateHandoff");
+const outbox = require("./outbox");
+const connectivity = require("./connectivity");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The print engine: owns ALL print orchestration and state in the main process.
@@ -50,6 +52,11 @@ const updateHandoff = require("./updateHandoff");
 //        surfaces it as needing attention and restores its manual controls.
 //    The refund PATCH has exactly one trigger in the whole engine: forceFailJob,
 //    the operator's "mark entire job as failed" control.
+//  - Offline (connectivity.js): MANUAL printing carries on from cached files —
+//    the job's "printing"/"completed" transitions go to the outbox
+//    (statusOutbox.js) and reach the backend once it's reachable again.
+//    AUTOMATED printing waits for the connection. Cancelling and failing a job
+//    change what the customer pays, so they are refused while offline.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ACTIVE_STATUSES = new Set(["draft", "submitted", "queued", "processing", "printing"]);
@@ -241,6 +248,9 @@ function getSnapshot() {
 		// keeps their manual print controls available while it's on.
 		manualOnly: manualOnlyJobs(),
 		queuedJobIds,
+		online: connectivity.isOnline(),
+		// { total, byJob: { jobId: n } } — status transitions waiting to sync.
+		pendingSync: outbox.summary(),
 		printedFiles: engine.printedFiles,
 		settingsOverrides: engine.settingsOverrides,
 		files: fileMap,
@@ -268,18 +278,26 @@ function jobsChanged() {
 // Applies the engine's locally-known status transitions on top of a raw job
 // list before it reaches the renderer — the UI updates instantly without the
 // renderer doing its own optimistic bookkeeping.
+// A transition still waiting in the outbox counts as applied — that is what
+// keeps a job printed offline from looking unprinted after a restart.
 function applyOverrides(jobs) {
-	if (engine.overrides.size === 0) return jobs;
+	if (engine.overrides.size === 0 && outbox.summary().total === 0) return jobs;
 	return jobs.map((job) => {
-		const status = engine.overrides.get(job._id);
+		const status = localStatus(job._id);
 		return status && job.status !== status ? { ...job, status } : job;
 	});
 }
 
-// A job's status as the engine knows it: a local transition (completed,
-// cancelled, failed) wins until the backend's list catches up.
+// The status the engine knows locally for a job, or null: an applied transition
+// (completed, cancelled, failed, …) or one queued in the outbox.
+function localStatus(jobId) {
+	return engine.overrides.get(jobId) || outbox.latestStatus(jobId) || null;
+}
+
+// A job's status as the engine knows it: a local transition wins until the
+// backend's list catches up.
 function effectiveStatus(job) {
-	return engine.overrides.get(job._id) || job.status;
+	return localStatus(job._id) || job.status;
 }
 
 // ── persisted progress ───────────────────────────────────────────────────────
@@ -527,6 +545,12 @@ function schedule() {
 			task.waitReason = "paused";
 			continue;
 		}
+		// Automated printing needs the backend: it never prints unconfirmed work
+		// behind the operator's back. Manual prints go on (see ensureJobPrinting).
+		if (task.mode === "auto" && !connectivity.isOnline()) {
+			task.waitReason = "offline";
+			continue;
+		}
 
 		// One-at-a-time gate for print-all batches. busyJobs also gains the job the
 		// moment a document dispatches below, so a single pass never sends two.
@@ -606,7 +630,7 @@ async function dispatch(task, device) {
 	try {
 		// Job → "printing" on the backend before its first document prints. A manual
 		// print already did this on click, so this is a no-op there.
-		const ok = await ensureJobPrinting(task.jobId);
+		const ok = await ensureJobPrinting(task.jobId, { allowOffline: task.mode !== "auto" });
 		if (!ok) {
 			// Backend refused/unreachable — back off so schedule() doesn't spin a
 			// tight PATCH loop; the routing poll re-runs it every 20s.
@@ -773,32 +797,54 @@ async function handleDispatchFailure(task, device, err) {
 // print. So step through "queued" first when needed — and if that PATCH is
 // rejected because the ack already landed backend-side (our cache is stale),
 // ignore it and let the "printing" step decide the real outcome.
-function ensureJobPrinting(jobId) {
+//
+// `allowOffline` (manual prints): when the backend can't be reached, the
+// transitions are queued in the outbox instead and printing goes ahead.
+function ensureJobPrinting(jobId, { allowOffline = false } = {}) {
 	if (engine.jobsCancelling.has(jobId)) return Promise.resolve(false);
 	if (engine.jobsMarkedPrinting.has(jobId)) return Promise.resolve(true);
 	const inflight = engine.printingPatches.get(jobId);
 	if (inflight) return inflight;
 
 	const job = getJobs().find((j) => j._id === jobId);
-	const current = engine.overrides.get(jobId) || job?.status;
+	const current = localStatus(jobId) || job?.status;
 	if (current === "printing") {
 		engine.jobsMarkedPrinting.add(jobId);
 		return Promise.resolve(true);
 	}
 
+	// Offline: queue the transitions — the ack first if it's still outstanding.
+	const queueOffline = () => {
+		if ((localStatus(jobId) || job?.status) === "submitted") outbox.enqueue(jobId, "queued");
+		outbox.enqueue(jobId, "printing");
+		console.log(`[Engine] job ${jobId} → printing queued (offline)`);
+		engine.jobsMarkedPrinting.add(jobId);
+		engine.overrides.set(jobId, "printing");
+		jobsChanged();
+		return true;
+	};
+
 	const promise = (async () => {
+		// Earlier transitions of this job still waiting to sync go first, so the
+		// backend sees them in order.
+		if (outbox.hasPending(jobId) && connectivity.isOnline()) await outbox.flush();
+		if (outbox.hasPending(jobId) || !connectivity.isOnline()) {
+			if (allowOffline) return queueOffline();
+			return false;
+		}
+
 		// Try "printing" directly — works when the job is already "queued".
 		let result = await updateJobStatus(jobId, "printing");
 
 		// A "submitted" job can't jump straight to "printing" (acknowledgement to
 		// "queued" is fire-and-forget and may lag an operator's quick print). The
 		// local cache may not reflect the real status either, so don't trust it:
-		// on any failure, step through "queued" and retry "printing".
-		if (!result?.success) {
+		// on a rejection, step through "queued" and retry "printing".
+		if (!result?.success && !result?.offline) {
 			console.warn(`[Engine] job ${jobId} → printing rejected (${result?.message}); stepping through queued`);
 			const queued = await updateJobStatus(jobId, "queued");
 			if (queued?.success) engine.overrides.set(jobId, "queued");
-			result = await updateJobStatus(jobId, "printing");
+			result = queued?.offline ? queued : await updateJobStatus(jobId, "printing");
 		}
 
 		if (result?.success) {
@@ -807,12 +853,29 @@ function ensureJobPrinting(jobId) {
 			jobsChanged();
 			return true;
 		}
+		if (result?.offline && allowOffline) return queueOffline();
 		console.error(`[Engine] failed to set job ${jobId} printing:`, result?.message);
 		return false;
 	})().finally(() => engine.printingPatches.delete(jobId));
 
 	engine.printingPatches.set(jobId, promise);
 	return promise;
+}
+
+// Moves a job to "completed": straight to the backend when it's reachable and
+// nothing of this job is still waiting to sync, otherwise through the outbox
+// (after its earlier transitions). Resolves { success, queued? }.
+async function transitionCompleted(jobId) {
+	if (outbox.hasPending(jobId) || !connectivity.isOnline()) {
+		outbox.enqueue(jobId, "completed");
+		return { success: true, queued: true };
+	}
+	const result = await updateJobStatus(jobId, "completed");
+	if (!result?.success && result?.offline) {
+		outbox.enqueue(jobId, "completed");
+		return { success: true, queued: true };
+	}
+	return result;
 }
 
 // Completes a job on the backend once every file is verified-printed.
@@ -824,9 +887,9 @@ async function maybeCompleteJob(jobId) {
 	if (docIds.length === 0 || !docIds.every((id) => isFilePrinted(jobId, id))) return;
 
 	engine.jobsCompleting.add(jobId);
-	const result = await updateJobStatus(jobId, "completed");
+	const result = await transitionCompleted(jobId);
 	if (result?.success) {
-		console.log(`[Engine] job ${jobId} completed`);
+		console.log(`[Engine] job ${jobId} completed${result.queued ? " (sync queued)" : ""}`);
 		engine.overrides.set(jobId, "completed");
 		finalizeJob(jobId, jobDiskFileIds(job));
 		jobsChanged();
@@ -884,6 +947,10 @@ function onJobsReconciled(jobs) {
 
 	// Drop local overrides the backend has caught up with (or whose jobs vanished).
 	for (const [jobId, status] of [...engine.overrides]) {
+		// Not before its queued transitions have synced: until then the backend's
+		// status is behind ours, and dropping the override would re-surface a job
+		// that has already printed.
+		if (outbox.hasPending(jobId)) continue;
 		const job = byId.get(jobId);
 		if (!job || job.status === status || !ACTIVE_STATUSES.has(job.status)) {
 			engine.overrides.delete(jobId);
@@ -993,7 +1060,7 @@ async function printJob(jobId) {
 	if (!job) return { success: false, message: "job not found" };
 	if (engine.updateHold) return UPDATE_HOLD_REFUSAL;
 
-	const ok = await ensureJobPrinting(jobId);
+	const ok = await ensureJobPrinting(jobId, { allowOffline: true });
 	if (!ok) {
 		toast({ kind: "job-printing-failed", jobId, who: jobWho(job) });
 		return { success: false, message: "could not move the job to printing" };
@@ -1029,7 +1096,7 @@ async function printFile(jobId, docId, deviceName = null) {
 	if (!job) return { success: false, message: "job not found" };
 	if (engine.updateHold) return UPDATE_HOLD_REFUSAL;
 
-	const ok = await ensureJobPrinting(jobId);
+	const ok = await ensureJobPrinting(jobId, { allowOffline: true });
 	if (!ok) {
 		// Nothing was queued, so the UI would otherwise show no reaction at all.
 		toast({ kind: "job-printing-failed", jobId, who: jobWho(job) });
@@ -1098,7 +1165,7 @@ function setAutoPrint(enabled) {
 	else store.remove(AUTO_PRINT_ARMED_KEY);
 	if (engine.autoPrint) {
 		// Enqueue the current backlog immediately (chosen behavior).
-		const activeJobs = getJobs().filter((j) => ACTIVE_STATUSES.has(j.status));
+		const activeJobs = getJobs().filter((j) => ACTIVE_STATUSES.has(effectiveStatus(j)));
 		for (const job of activeJobs) {
 			engine.seenJobs.add(job._id);
 			// Sequential, exactly like Print-all: one document at a printer at a
@@ -1164,8 +1231,16 @@ function resolveResumePrompt(accept) {
 	return { success: true };
 }
 
+// Refusal for the money-moving controls while the backend can't be reached.
+const OFFLINE_REFUSAL = {
+	success: false,
+	reason: "offline",
+	message: "You're offline. This needs a connection, because it changes what the customer pays.",
+};
+
 async function declineJob(jobId, { job: latestJob } = {}) {
 	const job = latestJob || getJobs().find((j) => j._id === jobId);
+	if (!connectivity.isOnline()) return OFFLINE_REFUSAL;
 
 	// Effective backend status. Once the engine advances a job to "printing"
 	// (auto or manual dispatch calls ensureJobPrinting), that PATCH has already
@@ -1173,7 +1248,7 @@ async function declineJob(jobId, { job: latestJob } = {}) {
 	// (between documents, or waiting for a printer).
 	const current = engine.jobsMarkedPrinting.has(jobId) || engine.printingPatches.has(jobId) || job?.status === "printing"
 		? "printing"
-		: engine.overrides.get(jobId) || job?.status;
+		: localStatus(jobId) || job?.status;
 
 	// The backend state machine forbids printing → cancelled (409). The only
 	// terminals left are completed and failed — and "failed" refunds the customer,
@@ -1201,6 +1276,7 @@ async function declineJob(jobId, { job: latestJob } = {}) {
 	emit();
 	try {
 		const result = await updateJobStatus(jobId, "cancelled");
+		if (result?.offline) return OFFLINE_REFUSAL;
 		if (result?.success) {
 			engine.overrides.set(jobId, "cancelled");
 			finalizeJob(jobId, jobDiskFileIds(job));
@@ -1224,15 +1300,15 @@ async function completeJob(jobId, { force = false } = {}) {
 	if (force) {
 		// Use the same transition lock as real prints, so customer cancellation
 		// cannot overlap the forced printing step.
-		const printing = await ensureJobPrinting(jobId);
+		const printing = await ensureJobPrinting(jobId, { allowOffline: true });
 		if (!printing) return { success: false, message: "printing transition failed" };
 	}
-	const result = await updateJobStatus(jobId, "completed");
+	const result = await transitionCompleted(jobId);
 	if (result?.success) {
 		engine.overrides.set(jobId, "completed");
 		finalizeJob(jobId, jobDiskFileIds(job));
 		jobsChanged();
-		return { success: true };
+		return { success: true, queued: !!result.queued };
 	}
 	return { success: false, message: result?.message || "request failed" };
 }
@@ -1240,6 +1316,11 @@ async function completeJob(jobId, { force = false } = {}) {
 // Operator's per-document failure banner: force-fail the whole job.
 async function forceFailJob(jobId) {
 	if (engine.jobsCancelling.has(jobId)) return { success: false, message: "Cancellation is in progress." };
+	if (!connectivity.isOnline()) return OFFLINE_REFUSAL;
+	// Its queued transitions must land first — failing from a status the backend
+	// hasn't seen yet would be rejected.
+	if (outbox.hasPending(jobId)) await outbox.flush();
+	if (outbox.hasPending(jobId)) return OFFLINE_REFUSAL;
 	const ok = await autoFailJob(jobId);
 	return ok ? { success: true } : { success: false, message: "request failed" };
 }
@@ -1267,6 +1348,12 @@ function init({ getMainWindow, onSnapshot, onToast, onJobsChanged }) {
 	// Any change to a printer's queue (dispatch, spool id, sweep) re-publishes the
 	// engine snapshot, so the renderer's queue view is always live.
 	registry.setChangeNotifier(() => emit());
+	// Online/offline flips which tasks may dispatch (automated ones wait while
+	// offline) — re-run the scheduler on every change.
+	connectivity.onChange(() => {
+		if (engine.running) schedule();
+		emit();
+	});
 }
 
 function start() {
@@ -1424,6 +1511,7 @@ module.exports = {
 	onJobsReconciled,
 	applyOverrides,
 	getSnapshot,
+	notifyChanged: emit,
 	refreshRouting,
 	reconcilePrinterQueues,
 	migrateProgress,

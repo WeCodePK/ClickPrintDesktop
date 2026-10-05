@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { useBlocker } from "react-router-dom";
 import { WalletIcon, PhoneIcon, CashIcon, ClockIcon, AlertIcon, StoreIcon, LockGlyph, LocIcon } from "../../icons";
 import ConfirmDialog from "../ConfirmDialog";
+import StaleNote from "../StaleNote";
+import { useNetStatus } from "../../useNetStatus";
 
 // One section of the profile form: a card with an icon, title and blurb, an
 // optional control (e.g. a toggle or link) on the right of the header, and
@@ -313,6 +315,11 @@ function ShopProfileSettings({ embedded = false, formId: hostFormId, onStatusCha
 	const [loading, setLoading] = useState(true);
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState(null);
+	// { stale, fetchedAt } — the profile shown is the copy saved before the
+	// connection dropped. Saving needs the backend, so it waits for it.
+	const [loadedFrom, setLoadedFrom] = useState({ stale: false, fetchedAt: null });
+	const net = useNetStatus();
+	const offline = !net.online;
 	const [successMessage, setSuccessMessage] = useState(null);
 	const [showSuccessPopup, setShowSuccessPopup] = useState(false);
 
@@ -375,6 +382,7 @@ function ShopProfileSettings({ embedded = false, formId: hostFormId, onStatusCha
 				setTimings(loaded.timings);
 				setCod(loaded.cod);
 				setSaved(loaded);
+				setLoadedFrom({ stale: !!result.stale, fetchedAt: result.fetchedAt || null });
 			} else {
 				setError(result.message || "Failed to load shop profile.");
 			}
@@ -434,7 +442,9 @@ function ShopProfileSettings({ embedded = false, formId: hostFormId, onStatusCha
 		return null;
 	}, [shopId, loading, wallet, form, cod, timings]);
 
-	const canSubmit = !saving && !loading && !validationError;
+	// Never without a loaded profile: saving the blank form a failed load leaves
+	// behind would wipe the shop's details.
+	const canSubmit = !saving && !loading && !validationError && !!saved && !offline;
 
 	const isDirty = useMemo(
 		() => !!saved && JSON.stringify({ wallet, form, timings, cod }) !== JSON.stringify(saved),
@@ -449,6 +459,13 @@ function ShopProfileSettings({ embedded = false, formId: hostFormId, onStatusCha
 		setCod(saved.cod);
 		setError(null);
 	};
+
+	// Back online: a saved copy (or a failed load) is replaced by the real
+	// profile — unless the operator is mid-edit.
+	useEffect(() => {
+		if (net.online && (loadedFrom.stale || !saved) && !isDirty && !loading) loadShop();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [net.online]);
 
 	const handleBlocked = useCallback(() => setNudge((n) => n + 1), []);
 
@@ -573,15 +590,30 @@ function ShopProfileSettings({ embedded = false, formId: hostFormId, onStatusCha
 					<button type="submit" form={formId} className="btn-gradient" disabled={!canSubmit || !isDirty}>
 						{saving ? "Saving changes…" : "Save changes"}
 					</button>
-					{!saving && isDirty && validationError && (
-						<span className="profile-header__hint">{validationError}</span>
+					{!saving && isDirty && (validationError || offline) && (
+						<span className="profile-header__hint">
+							{validationError || "You're offline — your changes are kept and can be saved once the connection is back."}
+						</span>
 					)}
 				</div>
 			</div>
 			)}
 
 			<form id={formId} onSubmit={handleSubmit} className="profile-form">
-				{error && <div className="form-error">{error}</div>}
+				<StaleNote stale={loadedFrom.stale} fetchedAt={loadedFrom.fetchedAt} />
+				{error && (
+					<div className="form-error">
+						{error}
+						{!saved && (
+							<>
+								{" "}
+								<button type="button" className="btn-outline btn-sm" onClick={loadShop}>
+									Try again
+								</button>
+							</>
+						)}
+					</div>
+				)}
 
 				{/* Top row: the admin-managed shop details beside its contact info. */}
 				<div className="profile-form__grid profile-form__grid--top">

@@ -14,6 +14,9 @@ const { createExcludedContacts } = require("./whatsappContacts");
 const { createWelcome } = require("./whatsappWelcome");
 const { createJobNotifications } = require("./whatsappJobNotifications");
 const { createWhatsAppJobs } = require("./whatsappJobs");
+const { createWhatsAppOutbox } = require("./whatsappOutbox");
+const { detectLanguage } = require("./whatsappChatFlow");
+const connectivity = require("./connectivity");
 const { getAuth } = require("./state");
 
 // The shop's linked WhatsApp account, driven by Baileys. One socket per app
@@ -38,6 +41,7 @@ async function baileys() {
 const logger = pino({ level: "silent" });
 const excludedContacts = createExcludedContacts(store);
 const jobNotifications = createJobNotifications(store);
+const outbox = createWhatsAppOutbox(store);
 let _jobActions = null;
 const jobCommands = createWhatsAppJobs({
 	api,
@@ -99,11 +103,6 @@ let _draftTimer = null;
 let _retryDelay = 2000;
 const MAX_RETRY_DELAY = 30000;
 
-// Recently handled send ids, so an SSE replay after a reconnect can't send the
-// same message twice. Insertion-ordered; trimmed to the newest SEEN_LIMIT.
-const _seenSendIds = new Set();
-const SEEN_LIMIT = 500;
-
 function setNotifier(cb) {
 	_notify = cb;
 }
@@ -149,11 +148,20 @@ function start(shopId) {
 	_shopId = shopId;
 	_set({ enabled: isEnabled(shopId), flow: flowSetting(shopId), excludedContacts: excludedContacts.list(shopId) });
 	if (!_draftTimer) {
+		let prunedAt = 0;
 		const cleanDrafts = () => {
 			orders.expireIdle(shopId);
 			void orders.flushExpired(shopId);
 			void flushReadyNotifications();
+			void _flushOutbox();
 			jobCommands.expireSelections();
+			// Parked customer messages (an upload the backend refused with a 5xx
+			// doesn't flip connectivity, so nothing else would retry it).
+			if (_ready()) _replayInbound(shopId);
+			if (Date.now() - prunedAt > 60 * 60 * 1000) {
+				prunedAt = Date.now();
+				_pruneDocuments(shopId);
+			}
 		};
 		cleanDrafts();
 		_draftTimer = setInterval(cleanDrafts, 30 * 1000);
@@ -237,7 +245,12 @@ async function _onConnectionUpdate(sock, shopId, { connection, lastDisconnect, q
 			error: null,
 			me: { id: sock.user?.id ?? null, lid: sock.user?.lid ?? null, name: sock.user?.name ?? null },
 		});
+		// Everything that waited for WhatsApp: queued sends, then customer
+		// messages parked during the outage.
 		void flushReadyNotifications();
+		void _flushOutbox();
+		_wakeWaiters();
+		_replayInbound(shopId);
 		return;
 	}
 
@@ -329,7 +342,7 @@ function removeExcludedContact(id) {
 }
 
 async function _canHandle(sock, shopId, msg) {
-	if (_shopId !== shopId || sock !== _sock || !_snapshot.enabled) return false;
+	if (!sock || _shopId !== shopId || sock !== _sock || !_snapshot.enabled) return false;
 	if (await excludedContacts.isExcluded(shopId, msg, sock)) return false;
 	return _shopId === shopId && sock === _sock && _snapshot.enabled;
 }
@@ -390,6 +403,7 @@ async function _markDelivered(sock, msg) {
 // Read receipt (blue ticks, if the account shares read receipts). Also marks
 // the message read on the shop's phone.
 async function _markRead(sock, msg) {
+	if (!sock || !msg.message) return; // a replayed message (see _liteMsg) was read when it arrived
 	try {
 		await sock.readMessages([msg.key]);
 	} catch (error) {
@@ -407,38 +421,232 @@ function _enqueue(jid, task) {
 	});
 }
 
+// ── Inbound work that outlives an outage ──────────────────────────────────────
+// Every customer message the app acts on is saved as an inbound item before it
+// is handled (a text, or a document already downloaded to disk) and removed
+// once handled. Handling waits for the backend: briefly in the chat's queue
+// (WAIT_ONLINE_MS), after which the item is parked — the customer is told,
+// once, that the connection is slow — and replayed in order when the backend
+// is back (onOnline) or WhatsApp reconnects. A restart replays them too.
+// Nothing a customer sends is lost to a dropped connection, and nothing
+// becomes an error message just because the Wi-Fi blinked.
+
+const INBOUND_KEY = "whatsappPendingInbound";
+const WAIT_ONLINE_MS = 3 * 60 * 1000;
+const INBOUND_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+const HOLDING_EVERY_MS = 10 * 60 * 1000;
+
+const HOLDING_REPLY = {
+	en: "Got it — our connection is slow right now. I'll get back to you as soon as it's back.",
+	urdu: "موصول ہو گیا — اس وقت ہمارا انٹرنیٹ سست ہے۔ کنکشن بحال ہوتے ہی جواب دیتے ہیں۔",
+	roman_urdu: "Mil gaya — is waqt hamara internet slow hai. Connection wapas aate hi jawab dete hain.",
+};
+
+const _activeInbound = new Set(); // item ids queued or running right now
+const _holdingSentAt = new Map(); // jid -> last holding reply time
+let _onlineWaiters = [];
+
+function _inboundItems(shopId) {
+	return (store.get(INBOUND_KEY) || {})[shopId] || [];
+}
+
+function _saveInbound(shopId, items) {
+	const all = store.get(INBOUND_KEY) || {};
+	if (items.length) all[shopId] = items;
+	else delete all[shopId];
+	store.set(INBOUND_KEY, all);
+}
+
+function _addInbound(shopId, item) {
+	_saveInbound(shopId, [..._inboundItems(shopId).filter((i) => i.id !== item.id), item]);
+}
+
+function _removeInbound(shopId, id) {
+	_saveInbound(shopId, _inboundItems(shopId).filter((i) => i.id !== id));
+}
+
+// What's needed of a message to answer it later: its key (chat, id, LID/PN
+// alternates) and the sender's name. No `message`, so replies to a replayed
+// message don't quote it.
+function _liteMsg(item) {
+	return { key: item.key, pushName: item.pushName };
+}
+
+// Whether the backend and WhatsApp can both be used right now.
+const _ready = () => connectivity.isOnline() && !!_sock && _snapshot.state === "open";
+
+// Resolves true once both are usable, or false after `ms`.
+function _whenReady(ms) {
+	if (_ready()) return Promise.resolve(true);
+	return new Promise((resolve) => {
+		const waiter = () => {
+			if (!_ready()) return false;
+			clearTimeout(timer);
+			resolve(true);
+			return true;
+		};
+		const timer = setTimeout(() => {
+			_onlineWaiters = _onlineWaiters.filter((w) => w !== waiter);
+			resolve(false);
+		}, ms);
+		timer.unref?.();
+		_onlineWaiters.push(waiter);
+	});
+}
+
+function _wakeWaiters() {
+	_onlineWaiters = _onlineWaiters.filter((waiter) => !waiter());
+}
+
+// One "our connection is slow" per chat per HOLDING_EVERY_MS — for a file, or
+// a text from a customer mid-order. Ordinary chat with the shop gets no bot
+// reply, outage or not.
+async function _sendHolding(shopId, item) {
+	const last = _holdingSentAt.get(item.jid) || 0;
+	if (Date.now() - last < HOLDING_EVERY_MS) return;
+	if (item.kind === "text") {
+		const customer = await _customerOf(_sock, _liteMsg(item));
+		if (!orders.getEntry(orders.keyOf(shopId, customer.number))) return;
+	}
+	_holdingSentAt.set(item.jid, Date.now());
+	const language = (item.kind === "text" && detectLanguage(item.text || "")) || "en";
+	await _reply(shopId, _liteMsg(item), HOLDING_REPLY[language] || HOLDING_REPLY.en);
+}
+
+// Runs a saved inbound item once the backend is reachable. Leaves it saved
+// (parked) when the backend doesn't come back in time or an upload couldn't
+// reach it; removes it once it's been handled.
+async function _runInbound(shopId, item, msg = _liteMsg(item)) {
+	_activeInbound.add(item.id);
+	try {
+		if (Date.now() - (item.at || 0) > INBOUND_MAX_AGE_MS) {
+			console.log(`[WA] dropping ${item.kind} ${item.id} from ${item.jid}: too old to act on`);
+			if (item.kind === "media") _mediaDone(item.jid);
+			_removeInbound(shopId, item.id);
+			return;
+		}
+		if (!(await _whenReady(WAIT_ONLINE_MS))) {
+			console.log(`[WA] ${item.kind} ${item.id} from ${item.jid} parked until the connection is back`);
+			await _sendHolding(shopId, item);
+			return;
+		}
+		const sock = _sock;
+		if (!(await _canHandle(sock, shopId, msg))) {
+			if (item.kind === "media") _mediaDone(item.jid);
+			_removeInbound(shopId, item.id);
+			return;
+		}
+		if (item.kind === "text") {
+			await _handleText(sock, shopId, msg, item.text, item.quotedMessageId);
+			_removeInbound(shopId, item.id);
+			return;
+		}
+		const done = await _handleUpload(sock, shopId, msg, item);
+		if (done) _removeInbound(shopId, item.id);
+		else await _sendHolding(shopId, item);
+	} catch (error) {
+		// A bug, not an outage: replaying it would only repeat whatever it
+		// already sent before failing.
+		console.error(`[WA] handling ${item.kind} ${item.id} from ${item.jid} failed — dropping it:`, error);
+		if (item.kind === "media") _mediaDone(item.jid);
+		_removeInbound(shopId, item.id);
+	} finally {
+		_activeInbound.delete(item.id);
+	}
+}
+
+// Queues every parked item of the shop (in arrival order, each in its chat's
+// queue) — on reconnect, and when WhatsApp comes back.
+function _replayInbound(shopId) {
+	if (!shopId) return;
+	for (const item of _inboundItems(shopId)) {
+		if (_activeInbound.has(item.id)) continue;
+		_activeInbound.add(item.id);
+		_enqueue(item.jid, () => _runInbound(shopId, item));
+	}
+}
+
 async function _onMedia(sock, shopId, msg) {
 	const jid = msg.key.remoteJid;
-	const left = (_pendingMedia.get(jid) || 1) - 1;
-	if (left > 0) _pendingMedia.set(jid, left);
-	else _pendingMedia.delete(jid);
 	// The operator may exclude this contact while the message waits in its queue.
-	if (!await _canHandle(sock, shopId, msg)) return;
+	if (!await _canHandle(sock, shopId, msg)) return _mediaDone(jid);
 	_markRead(sock, msg);
 
-	const uploaded = await _handleMedia(sock, shopId, msg);
-	if (!await _canHandle(sock, shopId, msg)) return;
-	// Checked after the upload: files arriving meanwhile are part of the burst.
-	const morePending = _pendingMedia.has(jid);
-	const customer = await _customerOf(sock, msg);
-	if (!await _canHandle(sock, shopId, msg)) return;
-	jobCommands.clear(shopId, customer.number);
-	orders.expire(orders.keyOf(shopId, customer.number));
-	const flow = _flowFor(shopId, customer);
-
-	if (!uploaded) {
+	const media = await _downloadMedia(sock, shopId, msg);
+	if (!media) {
+		_mediaDone(jid);
 		// This file failed (the customer was told); earlier ones may still be
 		// waiting for their "received" reply.
-		const held = !morePending && flow.flush ? flow.flush(shopId, customer) : null;
+		const customer = await _customerOf(sock, msg);
+		const flow = _flowFor(shopId, customer);
+		const held = !_pendingMedia.has(jid) && flow.flush ? flow.flush(shopId, customer) : null;
 		if (held) await _reply(shopId, msg, held);
 		return;
 	}
-	const reply = await flow.addFile(shopId, customer, uploaded.file, uploaded.name, { morePending, messageId: msg.key.id });
+	const item = { id: msg.key.id || `${Date.now()}`, kind: "media", jid, key: msg.key, pushName: msg.pushName, media, at: Date.now() };
+	_addInbound(shopId, item);
+	await _runInbound(shopId, item, msg);
+}
+
+// One file of a burst is done with (handled, failed or parked).
+function _mediaDone(jid) {
+	const left = (_pendingMedia.get(jid) || 1) - 1;
+	if (left > 0) _pendingMedia.set(jid, left);
+	else _pendingMedia.delete(jid);
+}
+
+// Uploads a saved document and adds it to the customer's draft. Resolves true
+// when the item is finished with (added, or refused for good — the customer
+// told), false when the upload couldn't reach the backend and should be retried.
+async function _handleUpload(sock, shopId, msg, item) {
+	const jid = item.jid;
+	const { filePath, name, mimetype } = item.media;
+	if (!fs.existsSync(filePath)) {
+		console.error(`[WA] ${name}: the downloaded copy is gone — dropping it`);
+		_mediaDone(jid);
+		return true;
+	}
+	const result = await api.uploadFile(filePath, { filename: name, filetype: mimetype });
+	if (!result.success && (result.status === undefined || result.status >= 500 || result.status === 401)) {
+		// Couldn't reach the backend (or it's down): keep the file, try again later.
+		return false;
+	}
+	_mediaDone(jid);
+	if (!(await _canHandle(_sock, shopId, msg))) return true;
+	const customer = await _customerOf(_sock, msg);
+	const flow = _flowFor(shopId, customer);
+	if (!result.success) {
+		await _reply(shopId, msg, uploadErrorReply(name, result));
+		const held = !_pendingMedia.has(jid) && flow.flush ? flow.flush(shopId, customer) : null;
+		if (held) await _reply(shopId, msg, held);
+		return true;
+	}
+	// Checked after the upload: files arriving meanwhile are part of the burst.
+	const morePending = _pendingMedia.has(jid);
+	jobCommands.clear(shopId, customer.number);
+	orders.expire(orders.keyOf(shopId, customer.number));
+	const reply = await flow.addFile(shopId, customer, result.data, name, { morePending, messageId: item.key?.id });
 	if (reply) await _reply(shopId, msg, reply);
+	return true;
 }
 
 async function _onText(sock, shopId, msg, text) {
 	if (!await _canHandle(sock, shopId, msg)) return;
+	const item = {
+		id: msg.key.id || `${Date.now()}`,
+		kind: "text",
+		jid: msg.key.remoteJid,
+		key: msg.key,
+		pushName: msg.pushName,
+		text,
+		quotedMessageId: msg.message?.extendedTextMessage?.contextInfo?.stanzaId,
+		at: Date.now(),
+	};
+	_addInbound(shopId, item);
+	await _runInbound(shopId, item, msg);
+}
+
+async function _handleText(sock, shopId, msg, text, quotedMessageId) {
 	const customer = await _customerOf(sock, msg);
 	if (!await _canHandle(sock, shopId, msg)) return;
 	const key = orders.keyOf(shopId, customer.number);
@@ -468,7 +676,6 @@ async function _onText(sock, shopId, msg, text) {
 	// in that same message is handled above instead of being swallowed.
 	if (greeting && !orders.getEntry(key)) return;
 	if (orders.flowOf(shopId, customer.number) === "menu") orders.prepare(key);
-	const quotedMessageId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
 	const reply = await _flowFor(shopId, customer).handleText(shopId, customer, text, { quotedMessageId });
 	if (!reply) return; // ordinary chat: left unread for the shop
 	if (!await _canHandle(sock, shopId, msg)) return;
@@ -485,7 +692,7 @@ async function _customerOf(sock, msg) {
 	const jid = msg.key.remoteJid;
 	let pn = [jid, msg.key.remoteJidAlt].find((j) => isPnUser(j));
 	if (!pn && isLidUser(jid)) {
-		pn = await sock.signalRepository?.lidMapping?.getPNForLID(jid).catch(() => null);
+		pn = await sock?.signalRepository?.lidMapping?.getPNForLID(jid).catch(() => null);
 		if (!pn) console.warn(`[WA] no phone number known for ${jid} — using its LID`);
 	}
 	const number = (pn || jid).split("@")[0].split(":")[0].replace(/\D/g, "");
@@ -497,11 +704,11 @@ function documentsDir(shopId) {
 	return path.join(app.getPath("userData"), "whatsapp-files", String(shopId));
 }
 
-// Downloads a customer's document or photo into whatsapp-files/<shopId>/ and
-// uploads it to the backend. Returns { file, name } — the backend's File object
-// and the name it was uploaded under — or null after replying to the customer
-// with what went wrong. The local copy is kept either way.
-async function _handleMedia(sock, shopId, msg) {
+// Downloads a customer's document or photo from WhatsApp into
+// whatsapp-files/<shopId>/ — retried, since WhatsApp's media servers are as far
+// away as ours. Resolves { filePath, name, mimetype }, or null after replying to
+// the customer with what went wrong.
+async function _downloadMedia(sock, shopId, msg) {
 	const media = mediaOf(msg);
 	const name = uploadName(media.fileName, media.mimetype);
 	const from = msg.key?.remoteJid;
@@ -516,47 +723,97 @@ async function _handleMedia(sock, shopId, msg) {
 
 	const dir = documentsDir(shopId);
 	const filePath = path.join(dir, `${msg.key?.id || Date.now()} - ${name}`);
-	try {
-		const { downloadMediaMessage } = await baileys();
-		fs.mkdirSync(dir, { recursive: true });
-		const stream = await downloadMediaMessage(msg, "stream", {}, { logger, reuploadRequest: sock.updateMediaMessage });
-		await pipeline(stream, fs.createWriteStream(filePath));
-	} catch (error) {
-		console.error(`[WA] download of "${name}" failed:`, error.message);
-		fs.rmSync(filePath, { force: true });
-		await _reply(shopId, msg, uploadErrorReply(name));
-		return null;
+	const { downloadMediaMessage } = await baileys();
+	fs.mkdirSync(dir, { recursive: true });
+	for (let attempt = 1; ; attempt++) {
+		try {
+			const stream = await downloadMediaMessage(msg, "stream", {}, { logger, reuploadRequest: sock.updateMediaMessage });
+			await pipeline(stream, fs.createWriteStream(filePath));
+			return { filePath, name, mimetype: media.mimetype };
+		} catch (error) {
+			fs.rmSync(filePath, { force: true });
+			if (attempt >= 4) {
+				console.error(`[WA] download of "${name}" failed:`, error.message);
+				await _reply(shopId, msg, uploadErrorReply(name));
+				return null;
+			}
+			console.warn(`[WA] download of "${name}" failed (attempt ${attempt}), retrying:`, error.message);
+			await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+		}
 	}
+}
 
-	if (!await _canHandle(sock, shopId, msg)) return null;
-	const result = await api.uploadFile(filePath, { filename: name, filetype: media.mimetype });
-	if (result.success) return { file: result.data, name };
-	await _reply(shopId, msg, uploadErrorReply(name, result));
-	return null;
+// Downloaded WhatsApp files are kept a week after they were handled (the
+// operator may want the original), then deleted.
+const DOCUMENT_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+function _pruneDocuments(shopId) {
+	const dir = documentsDir(shopId);
+	const keep = new Set(_inboundItems(shopId).filter((i) => i.media).map((i) => path.basename(i.media.filePath)));
+	let names = [];
+	try {
+		names = fs.readdirSync(dir);
+	} catch {
+		return;
+	}
+	for (const name of names) {
+		if (keep.has(name)) continue;
+		try {
+			const file = path.join(dir, name);
+			if (Date.now() - fs.statSync(file).mtimeMs > DOCUMENT_KEEP_MS) fs.rmSync(file, { force: true });
+		} catch {}
+	}
 }
 
 // Replies to a customer's message on whichever socket is current — an upload
 // can outlive a reconnect. A reply can be several messages (an array), sent in
-// order with only the first quoting the customer's. Dropped (and logged) when
-// the shop changed or WhatsApp isn't connected.
+// order with only the first quoting the customer's. While WhatsApp isn't
+// connected the reply waits in the outbox (whatsappOutbox.js) instead of being
+// lost; it's dropped only when the shop changed. Resolves true once sent or
+// queued.
 async function _reply(shopId, msg, reply) {
 	const jid = msg.key?.remoteJid;
 	const texts = [].concat(reply);
 	for (const [i, text] of texts.entries()) {
-		if (_shopId !== shopId || !_sock || _snapshot.state !== "open") {
-			console.error(`[WA] dropped reply to ${jid}: not connected`);
+		if (_shopId !== shopId) {
+			console.error(`[WA] dropped reply to ${jid}: the shop changed`);
 			return false;
+		}
+		if (!_sock || _snapshot.state !== "open" || outbox.pendingCount(shopId) > 0) {
+			// Behind anything already waiting, so the chat stays in order.
+			for (const rest of texts.slice(i)) outbox.enqueueReply(shopId, jid, rest);
+			void _flushOutbox(); // a no-op until WhatsApp is connected
+			return true;
 		}
 		if (!await _canHandle(_sock, shopId, msg)) return false;
 		try {
-			await _sock.sendMessage(jid, { text }, i === 0 ? { quoted: msg } : undefined);
+			await _sock.sendMessage(jid, { text }, i === 0 && msg.message ? { quoted: msg } : undefined);
 			console.log(`[WA] replied to ${jid}: ${text}`);
 		} catch (error) {
-			console.error(`[WA] reply to ${jid} failed:`, error.message);
-			return false; // don't send the rest out of order
+			// Retried with the rest of the outbox on the next reconnect or tick.
+			console.error(`[WA] reply to ${jid} failed — queued:`, error.message);
+			for (const rest of texts.slice(i)) outbox.enqueueReply(shopId, jid, rest);
+			return true;
 		}
 	}
 	return true;
+}
+
+// Sends everything queued for this shop while WhatsApp was down, in order.
+function _flushOutbox() {
+	const shopId = _shopId;
+	const sock = _sock;
+	if (!shopId || !sock || _snapshot.state !== "open") return;
+	return outbox.flush(shopId, async ({ id, jid, text }) => {
+		if (_shopId !== shopId || _sock !== sock || _snapshot.state !== "open") return false;
+		try {
+			const sent = await sock.sendMessage(jid, { text });
+			console.log(`[WA] sent queued ${id} → ${jid} (${sent?.key?.id})`);
+			return !!sent?.key?.id;
+		} catch (error) {
+			console.error(`[WA] queued ${id} → ${jid} failed:`, error.message);
+			return false;
+		}
+	});
 }
 
 // Accepts a bare phone number (any formatting) or a full JID (…@lid,
@@ -594,17 +851,14 @@ function flushReadyNotifications() {
 	});
 }
 
-// Handler for the backend's "whatsappSend" SSE event: { id, to, text }.
-// Fire-and-forget — the outcome is only logged.
+// Handler for the backend's "whatsappSend" SSE event: { id, to, text }. While
+// WhatsApp isn't connected it waits in the outbox; ids already sent are
+// skipped, so an SSE replay after a reconnect can't send the same text twice.
 async function sendText(payload) {
 	const { id, to, text } = payload || {};
-	if (id != null) {
-		if (_seenSendIds.has(id)) {
-			console.log(`[WA] skipping duplicate send ${id}`);
-			return;
-		}
-		_seenSendIds.add(id);
-		if (_seenSendIds.size > SEEN_LIMIT) _seenSendIds.delete(_seenSendIds.values().next().value);
+	if (id != null && outbox.wasSent(String(id))) {
+		console.log(`[WA] skipping duplicate send ${id}`);
+		return;
 	}
 
 	const jid = toJid(to);
@@ -612,17 +866,42 @@ async function sendText(payload) {
 		console.error(`[WA] dropped send ${id}: invalid recipient or text`);
 		return;
 	}
-	if (!_sock || _snapshot.state !== "open") {
-		console.error(`[WA] dropped send ${id}: not connected`);
+	if (!_shopId) {
+		console.error(`[WA] dropped send ${id}: no shop`);
+		return;
+	}
+	const sendId = id != null ? String(id) : `send:${Date.now()}`;
+	if (!_sock || _snapshot.state !== "open" || outbox.pendingCount(_shopId) > 0) {
+		outbox.enqueue({ id: sendId, shopId: _shopId, jid, text });
+		void _flushOutbox(); // a no-op until WhatsApp is connected
 		return;
 	}
 
 	try {
 		const sent = await _sock.sendMessage(jid, { text });
+		outbox.markSent(sendId);
 		console.log(`[WA] sent ${id} → ${jid} (${sent?.key?.id})`);
 	} catch (error) {
-		console.error(`[WA] send ${id} → ${jid} failed:`, error.message);
+		console.error(`[WA] send ${id} → ${jid} failed — queued:`, error.message);
+		outbox.enqueue({ id: sendId, shopId: _shopId, jid, text });
 	}
+}
+
+// The backend is reachable again (connectivity.onOnline). A socket waiting out
+// its reconnect backoff goes now; queued sends go out, and customer messages
+// waiting on the backend carry on.
+function onOnline() {
+	if (_shopId && !_sock && _retryTimer) {
+		clearTimeout(_retryTimer);
+		_retryTimer = null;
+		_retryDelay = 2000;
+		console.log("[WA] connection back — reconnecting now");
+		void _connect();
+	}
+	void flushReadyNotifications();
+	void _flushOutbox();
+	_wakeWaiters();
+	_replayInbound(_shopId);
 }
 
 // Closes the socket without touching the credentials.
@@ -669,4 +948,4 @@ async function unlink() {
 	return { success: true };
 }
 
-module.exports = { start, connect, disconnect, unlink, setEnabled, setFlow, addExcludedContact, removeExcludedContact, sendText, notifyJobReady, setJobActions, getSnapshot, setNotifier };
+module.exports = { start, connect, disconnect, unlink, onOnline, setEnabled, setFlow, addExcludedContact, removeExcludedContact, sendText, notifyJobReady, setJobActions, getSnapshot, setNotifier };

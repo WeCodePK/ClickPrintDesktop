@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import TitleBar from "./components/TitleBar";
 import LoginScreen from "./screens/LoginScreen";
 import OtpScreen from "./screens/OtpScreen";
@@ -7,6 +7,30 @@ import DashboardScreen from "./screens/DashboardScreen";
 import OnboardingScreen from "./screens/OnboardingScreen";
 import { checkSetup, isSetupComplete } from "./onboarding/setupStatus";
 import { LogoutIcon, RetryIcon } from "./dashboard/icons";
+import { useNetStatus } from "./dashboard/useNetStatus";
+
+// Remembers, per shop, that its setup was found complete — so a launch with no
+// connection (and nothing cached yet) still opens the dashboard instead of
+// stranding the operator on a setup check that can't run.
+const setupOkKey = (shopId) => `clickprint:setupComplete:${shopId}`;
+
+function rememberSetupComplete(shopId, complete) {
+	if (!shopId) return;
+	try {
+		if (complete) localStorage.setItem(setupOkKey(shopId), "1");
+		else localStorage.removeItem(setupOkKey(shopId));
+	} catch {
+		// Storage unavailable — the check simply runs online next time.
+	}
+}
+
+function setupKnownComplete(shopId) {
+	try {
+		return !!shopId && localStorage.getItem(setupOkKey(shopId)) === "1";
+	} catch {
+		return false;
+	}
+}
 
 function App() {
 	const [screen, setScreen] = useState("login"); // "login" | "otp" | "selectShop" | "setup" | "onboarding" | "dashboard"
@@ -40,14 +64,20 @@ function App() {
 	}, [theme]);
 
 	// Runs once per session start (restore or login): an incomplete shop setup
-	// routes to onboarding instead of the dashboard. A failed check is shown with
-	// a retry rather than letting the operator past onboarding.
-	const runSetupCheck = useCallback(async () => {
+	// routes to onboarding instead of the dashboard. The check reads main's saved
+	// copies when the backend can't be reached; if even those are missing, a shop
+	// already known to be set up goes straight to the dashboard (offline banner
+	// and all). Only a shop never seen complete gets the retry card.
+	const shopIdRef = useRef(null);
+	const runSetupCheck = useCallback(async (shopId = shopIdRef.current) => {
+		shopIdRef.current = shopId;
 		setSetupError(null);
 		setScreen("setup");
 		try {
 			const status = await checkSetup();
-			if (isSetupComplete(status)) {
+			const complete = isSetupComplete(status);
+			rememberSetupComplete(shopId, complete);
+			if (complete) {
 				setScreen("dashboard");
 			} else {
 				setSetupStatus(status);
@@ -55,9 +85,24 @@ function App() {
 			}
 		} catch (err) {
 			console.error("[Renderer] setup check failed:", err);
+			if (setupKnownComplete(shopId)) {
+				console.warn("[Renderer] setup check unavailable — shop was set up before, opening the dashboard");
+				setScreen("dashboard");
+				return;
+			}
 			setSetupError(err.message || "Couldn't check your shop setup.");
 		}
 	}, []);
+
+	// A setup check that failed for want of a connection runs again by itself
+	// once the connection is back.
+	const net = useNetStatus();
+	const wasOnline = useRef(net.online);
+	useEffect(() => {
+		const cameBack = net.online && !wasOnline.current;
+		wasOnline.current = net.online;
+		if (cameBack && screen === "setup" && setupError) runSetupCheck();
+	}, [net.online, screen, setupError, runSetupCheck]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -72,7 +117,7 @@ function App() {
 					window.location.hash = "#/jobs";
 					setShopProfile({ _id: auth.shopId, name: auth.shopName ?? "" });
 					setPhoneNumber(auth.phoneNumber || "");
-					runSetupCheck();
+					runSetupCheck(auth.shopId);
 				}
 			})
 			.catch((err) => console.warn("[Renderer] session restore failed:", err))
@@ -102,7 +147,7 @@ function App() {
 	const enterDashboard = (profile) => {
 		window.location.hash = "#/jobs";
 		setShopProfile(profile);
-		runSetupCheck();
+		runSetupCheck(profile?._id || null);
 	};
 
 	const handleOnboardingComplete = useCallback(() => {
@@ -173,7 +218,7 @@ function App() {
 										<LogoutIcon />
 										Log out
 									</button>
-									<button type="button" className="btn-gradient" onClick={runSetupCheck}>
+									<button type="button" className="btn-gradient" onClick={() => runSetupCheck()}>
 										<RetryIcon />
 										Try again
 									</button>

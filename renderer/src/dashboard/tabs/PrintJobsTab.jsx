@@ -9,6 +9,8 @@ import JobListCard from "../components/JobListCard";
 import RefreshButton from "../components/RefreshButton";
 import EmptyState from "../components/EmptyState";
 import ConfirmDialog from "../components/ConfirmDialog";
+import StaleNote from "../components/StaleNote";
+import { OFFLINE_ACTION_HINT } from "../useNetStatus";
 import PrintSplitButton from "../components/PrintSplitButton";
 import { CheckIcon, CrossIcon, SearchIcon, PrinterIcon, PauseIcon, PlayIcon, FolderIcon, ChevronDownIcon, SortIcon } from "../icons";
 
@@ -25,7 +27,7 @@ const capitalize = (text) => text.charAt(0).toUpperCase() + text.slice(1);
 // print execution/orchestration lives in the main-process engine (mirrored via
 // AutoPrintContext); this tab renders the UI and sends commands.
 function PrintJobsTab() {
-	const { printJobs, jobsLoading, refreshJobs } = useJobs();
+	const { printJobs, jobsLoading, jobsError, jobsStale, jobsFetchedAt, refreshJobs } = useJobs();
 	const {
 		autoPrintEnabled,
 		queueInfoFor,
@@ -49,6 +51,8 @@ function PrintJobsTab() {
 		settingsOverrides,
 		setFileSettings,
 		updateHold,
+		online,
+		jobPendingSync,
 	} = useAutoPrint();
 
 	const [selectedId, setSelectedId] = useState(null);
@@ -75,6 +79,9 @@ function PrintJobsTab() {
 	// Set when a cancel was refused because the job is already printing — the
 	// backend can't cancel from there, so we explain it and offer the refund.
 	const [declineBlocked, setDeclineBlocked] = useState(null);
+	// A job action the engine refused (e.g. it needs a connection) — explained in
+	// a dialog rather than failing silently.
+	const [actionError, setActionError] = useState(null);
 	const [query, setQuery] = useState("");
 	const [newestFirst, setNewestFirst] = useState(true);
 
@@ -140,6 +147,8 @@ function PrintJobsTab() {
 			setDeclineBlocked(job);
 			return;
 		}
+		// The connection dropped between opening the dialog and confirming.
+		if (result?.reason === "offline") setActionError(result.message);
 		console.error("[Renderer] failed to cancel job:", result?.message);
 	};
 
@@ -150,7 +159,16 @@ function PrintJobsTab() {
 		setDeclineBlocked(null);
 		setSelectedId(null);
 		const result = await failJob(job);
-		if (!result?.success) console.error("[Renderer] failed to mark job failed:", result?.message);
+		if (!result?.success) {
+			console.error("[Renderer] failed to mark job failed:", result?.message);
+			if (result?.reason === "offline") setActionError(result.message);
+		}
+	};
+
+	// "Mark entire job as failed" from a document's failure box.
+	const handleMarkJobFailed = async (job) => {
+		const result = await failJob(job);
+		if (!result?.success && result?.reason === "offline") setActionError(result.message);
 	};
 
 	const handleConfirmComplete = async () => {
@@ -235,6 +253,17 @@ function PrintJobsTab() {
 		return <span className="db-entry__queue">In queue · Nº{info.place}</span>;
 	};
 
+	// Printed offline: its status updates reach the server once it's reachable.
+	const syncLine = (jobId) =>
+		jobPendingSync(jobId) > 0 ? (
+			<span
+				className="db-entry__queue db-entry__queue--paused"
+				title="Printed while offline — the job's status reaches the server once the connection is back"
+			>
+				Sync pending
+			</span>
+		) : null;
+
 	const renderEntry = (entry) => (
 		<JobListCard
 			key={entry._id}
@@ -242,7 +271,7 @@ function PrintJobsTab() {
 			position={entries.indexOf(entry) + 1}
 			selected={selectedId === entry._id}
 			attention={jobNeedsAttention(entry._id)}
-			footer={queueLine(entry._id)}
+			footer={syncLine(entry._id) || queueLine(entry._id)}
 			onClick={() => setSelectedId(entry._id)}
 		/>
 	);
@@ -303,10 +332,19 @@ function PrintJobsTab() {
 					</div>
 				</div>
 
+				<StaleNote stale={jobsStale} fetchedAt={jobsFetchedAt} />
 				{jobsLoading ? (
 					<div className="db-coming-soon">
 						<div className="spinner spinner--dark" />
 						<p>Loading jobs…</p>
+					</div>
+				) : jobsError && printJobs.length === 0 ? (
+					// Nothing saved to fall back on — never pass this off as an empty queue.
+					<div className="db-coming-soon">
+						<p>Couldn't load jobs. {online ? jobsError : "You're offline — they'll appear once the connection is back."}</p>
+						<button type="button" className="btn-outline btn-sm" onClick={refreshJobs}>
+							Try again
+						</button>
 					</div>
 				) : (
 					<>
@@ -389,7 +427,8 @@ function PrintJobsTab() {
 							onPrintFile={handlePrintFile}
 							printedFileIds={jobPrinted}
 							fileStates={jobStates}
-							onMarkJobFailed={() => failJob(selectedEntry)}
+							onMarkJobFailed={() => handleMarkJobFailed(selectedEntry)}
+							failLocked={!online}
 							printers={printers}
 							onPrinterMenuOpen={() => refreshPrinters(true)}
 							autoPrintOn={autoDriving}
@@ -402,8 +441,8 @@ function PrintJobsTab() {
 											<button
 												className="btn-outline btn-segmented__item btn-segmented__item--decline"
 												onClick={() => setPendingCancel(selectedEntry)}
-												disabled={actionsLocked}
-												title="Cancel this job — the customer is notified"
+												disabled={actionsLocked || !online}
+												title={online ? "Cancel this job — the customer is notified" : `${OFFLINE_ACTION_HINT}, because it changes what the customer pays`}
 											>
 												<CrossIcon />
 												Cancel
@@ -513,6 +552,17 @@ function PrintJobsTab() {
 					tone="danger"
 					onConfirm={handleFailInstead}
 					onCancel={() => setDeclineBlocked(null)}
+				/>
+			)}
+
+			{actionError && (
+				<ConfirmDialog
+					title="That needs a connection"
+					message={actionError}
+					confirmLabel="OK"
+					cancelLabel="Close"
+					onConfirm={() => setActionError(null)}
+					onCancel={() => setActionError(null)}
 				/>
 			)}
 

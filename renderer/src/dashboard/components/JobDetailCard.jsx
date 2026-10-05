@@ -25,14 +25,18 @@ function blockedTitle(reason) {
 	switch (reason) {
 		case "route":
 			return "No service printer matches this document's settings";
+		case "unavailable":
+			return "This document couldn't be downloaded from the server";
 		default:
 			return "This document failed to print";
 	}
 }
 
 // First page of the cached PDF (see pdfThumbs). A document that fails to
-// download or render — corrupt, truncated, not really a PDF — gets one big
-// Reload button, which fetches a fresh copy and renders again.
+// render — corrupt, truncated, not really a PDF — gets one big Reload button,
+// which fetches a fresh copy and renders again. One that couldn't be downloaded
+// says why: waiting for the connection (it retries on its own), or not
+// available on the server.
 function FileThumb({ file }) {
 	const { fileStatus, fileUrl, redownloadFile } = useFiles();
 	const status = fileStatus[file.fileId];
@@ -82,15 +86,35 @@ function FileThumb({ file }) {
 		);
 	}
 
-	if (status === "error" || (status === "ready" && current?.failed)) {
+	if (status === "retrying") {
 		return (
 			<button
 				type="button"
 				className="file-preview__thumb file-preview__reload"
 				onClick={reload}
-				title="This document couldn't be shown — download it again"
+				title="Couldn't reach the server — it retries on its own. Click to try now."
 			>
 				<RetryIcon />
+				<span className="file-preview__thumb-label">Waiting for connection</span>
+				<span className="file-preview__reload-label">Try now</span>
+			</button>
+		);
+	}
+
+	if (status === "unavailable" || (status === "ready" && current?.failed)) {
+		return (
+			<button
+				type="button"
+				className="file-preview__thumb file-preview__reload"
+				onClick={reload}
+				title={
+					status === "unavailable"
+						? "The server doesn't have this document — try downloading it again"
+						: "This document couldn't be shown — download it again"
+				}
+			>
+				<RetryIcon />
+				{status === "unavailable" && <span className="file-preview__thumb-label">Not available</span>}
 				<span className="file-preview__reload-label">Reload</span>
 			</button>
 		);
@@ -111,9 +135,7 @@ function FileThumb({ file }) {
 	return (
 		<div className="file-preview__thumb">
 			<PdfGlyph />
-			<span className="file-preview__thumb-label">
-				{status === "error" ? "Download failed" : "Preview unavailable"}
-			</span>
+			<span className="file-preview__thumb-label">Preview unavailable</span>
 		</div>
 	);
 }
@@ -136,6 +158,9 @@ function waitHint(waitReason) {
 			return "Queued · no matching service printer";
 		case "updating":
 			return "Queued · waiting for the update";
+		case "offline":
+			// Automated printing waits for the connection; a manual print doesn't.
+			return "Queued · waiting for connection";
 		default:
 			return "Queued";
 	}
@@ -143,7 +168,8 @@ function waitHint(waitReason) {
 
 // `printLocked`: an update is waiting for the current print to finish — no new
 // print may be started.
-function FilePreview({ file, index, onOpen, onPrint, onChangeSettings, showPreview, printed, onMarkJobFailed, printers, onPrinterMenuOpen, autoPrintOn, printLocked, state }) {
+// `failLocked`: offline — failing the job (a refund) needs the connection.
+function FilePreview({ file, index, onOpen, onPrint, onChangeSettings, showPreview, printed, onMarkJobFailed, failLocked, printers, onPrinterMenuOpen, autoPrintOn, printLocked, state }) {
 	const settings = file.settings || {};
 	const changedKeys = file.overriddenKeys || [];
 	// Per-file engine state: "waiting" | "printing" | "verifying" | "printed" | "failed".
@@ -156,7 +182,11 @@ function FilePreview({ file, index, onOpen, onPrint, onChangeSettings, showPrevi
 	// accent orange, and the job-level "mark failed" escape hatch. None of them
 	// ever fails the job on its own. AutoPrintContext sounds the alert off the
 	// same helper.
-	const blockedReason = getBlockedReason(state, printed);
+	const { fileStatus } = useFiles();
+	// The server has said this document doesn't exist (404 and the like). It
+	// never fails the job by itself — the operator retries or fails the job.
+	const unavailable = !printed && fileStatus[file.fileId] === "unavailable";
+	const blockedReason = getBlockedReason(state, printed) || (unavailable ? "unavailable" : null);
 	const blocked = !!blockedReason;
 	// Settings can be changed until the document reaches a printer; after that the
 	// change could no longer take effect.
@@ -219,7 +249,7 @@ function FilePreview({ file, index, onOpen, onPrint, onChangeSettings, showPrevi
 								<PrintSplitButton
 									size="sm"
 									tone="retry"
-									disabled={printLocked}
+									disabled={printLocked || blockedReason === "unavailable"}
 									onPrint={(deviceName) => onPrint(file, deviceName)}
 									onOpen={onPrinterMenuOpen}
 									printers={printers}
@@ -303,6 +333,11 @@ function FilePreview({ file, index, onOpen, onPrint, onChangeSettings, showPrevi
 								printed automatically. Assign a printer to a matching service in the Services
 								tab, or pick one now from the <strong>dropdown</strong> beside Print.
 							</>
+						) : blockedReason === "unavailable" ? (
+							<>
+								Document ({index + 1}) couldn't be downloaded — the server says it isn't
+								available. Press <strong>Reload</strong> on its preview to try again.
+							</>
 						) : (
 							<>
 								Document ({index + 1}) failed to print. The job is still open — press{" "}
@@ -310,7 +345,13 @@ function FilePreview({ file, index, onOpen, onPrint, onChangeSettings, showPrevi
 							</>
 						)}
 					</span>
-					<button type="button" className="file-preview__failure-btn" onClick={onMarkJobFailed}>
+					<button
+						type="button"
+						className="file-preview__failure-btn"
+						onClick={onMarkJobFailed}
+						disabled={failLocked}
+						title={failLocked ? "You're offline — failing the job refunds the customer, so it needs a connection" : undefined}
+					>
 						<AlertIcon />
 						Mark entire job as failed
 					</button>
@@ -447,12 +488,16 @@ function PaymentProofTile({ fileId }) {
 						<div className="spinner spinner--dark" style={{ borderTopColor: "var(--color-primary)" }} />
 						<span>Downloading…</span>
 					</div>
-				) : status === "error" ? (
+				) : status === "retrying" || status === "unavailable" ? (
 					<div className="payment-proof__placeholder">
-						<span>Couldn't download the payment proof.</span>
+						<span>
+							{status === "retrying"
+								? "Waiting for the connection to download the payment proof…"
+								: "The payment proof isn't available on the server."}
+						</span>
 						<button type="button" className="btn-outline btn-sm" onClick={retry}>
 							<RetryIcon />
-							Retry
+							{status === "retrying" ? "Try now" : "Retry"}
 						</button>
 					</div>
 				) : imageError ? (
@@ -508,7 +553,7 @@ function JobNote({ text }) {
 //   │ Payment proof │                  │
 //   └───────────────┴──────────────────┘
 
-function JobDetailCard({ entry, headerActions, onOpenFile, onChangeFileSettings, onPrintFile, showPreview = true, printedFileIds, fileStates, onMarkJobFailed, printers, onPrinterMenuOpen, autoPrintOn, printLocked = false }) {
+function JobDetailCard({ entry, headerActions, onOpenFile, onChangeFileSettings, onPrintFile, showPreview = true, printedFileIds, fileStates, onMarkJobFailed, failLocked = false, printers, onPrinterMenuOpen, autoPrintOn, printLocked = false }) {
 	const files = entry.files || [];
 	const cost = entry.cost;
 	const totalPages = getJobTotalPages(entry);
@@ -659,6 +704,7 @@ function JobDetailCard({ entry, headerActions, onOpenFile, onChangeFileSettings,
 								showPreview={showPreview}
 								printed={!!printedFileIds?.[file.docId]}
 								onMarkJobFailed={onMarkJobFailed}
+								failLocked={failLocked}
 								printers={printers}
 								onPrinterMenuOpen={onPrinterMenuOpen}
 								autoPrintOn={autoPrintOn}

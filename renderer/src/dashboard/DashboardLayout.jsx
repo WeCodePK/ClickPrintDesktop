@@ -11,7 +11,7 @@ function DashboardLayout({ onLogout }) {
 				<Sidebar onLogout={onLogout} />
 				<Outlet />
 			</div>
-			<ConnectionToast />
+			<ConnectionToast onLogout={onLogout} />
 		</div>
 	);
 }

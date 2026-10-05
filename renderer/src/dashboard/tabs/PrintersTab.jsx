@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import ListColumn from "../components/ListColumn";
 import WelcomePane from "../components/WelcomePane";
 import EmptyState from "../components/EmptyState";
+import StaleNote from "../components/StaleNote";
+import { useNetStatus, OFFLINE_ACTION_HINT } from "../useNetStatus";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { useAutoPrint } from "../AutoPrintContext";
 import { PrinterIcon, CheckIcon, TrashIcon } from "../icons";
@@ -79,6 +81,12 @@ function PrintersTab() {
 	const [online, setOnline] = useState([]); // live local printers (online only)
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState(null);
+	// { stale, fetchedAt } — set when the list is the copy saved before the
+	// connection dropped.
+	const [saved, setSaved] = useState({ stale: false, fetchedAt: null });
+	// The backend's reachability (`online` above is the local printers').
+	const net = useNetStatus();
+	const offline = !net.online;
 	const [selectedId, setSelectedId] = useState(null);
 	const [testState, setTestState] = useState({}); // name -> "testing" | "success" | "error"
 	const [confirmDelete, setConfirmDelete] = useState(null);
@@ -95,8 +103,11 @@ function PrintersTab() {
 	const loadRegistered = useCallback(async () => {
 		try {
 			const result = await window.electronAPI.fetchPrinters();
-			if (result?.success) setRegistered(result.data || []);
-			else setError(result?.message || "Failed to load printers.");
+			if (result?.success) {
+				setRegistered(result.data || []);
+				setSaved({ stale: !!result.stale, fetchedAt: result.fetchedAt || null });
+				setError(null);
+			} else setError(result?.message || "Failed to load printers.");
 		} catch (err) {
 			console.error("[Renderer] failed to load printers:", err);
 			setError("Failed to load printers.");
@@ -120,6 +131,12 @@ function PrintersTab() {
 			setLoading(false);
 		})();
 	}, [loadRegistered, loadOnline]);
+
+	// Back online: replace a saved (or missing) list with the real one.
+	useEffect(() => {
+		if (net.online && (saved.stale || error)) loadRegistered();
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [net.online]);
 
 	// Periodically re-check reachability so an entry greys out when its printer
 	// drops off (the entry itself is never removed).
@@ -279,19 +296,28 @@ function PrintersTab() {
 				title="Printers"
 				bodyClassName="db-list__entries--column"
 				action={
-					<button className="db-list__add" onClick={openAdd} title="Add printers">
+					<button
+						className="db-list__add"
+						onClick={openAdd}
+						disabled={offline}
+						title={offline ? OFFLINE_ACTION_HINT : "Add printers"}
+					>
 						+ Add
 					</button>
 				}
 			>
+				<StaleNote stale={saved.stale} fetchedAt={saved.fetchedAt} />
 				{loading ? (
 					<div className="db-coming-soon">
 						<div className="spinner spinner--dark" />
 						<p>Loading printers…</p>
 					</div>
-				) : error ? (
+				) : error && registered.length === 0 ? (
 					<div className="db-coming-soon">
-						<p>{error}</p>
+						<p>{offline ? "You're offline — your printers will appear once the connection is back." : error}</p>
+						<button type="button" className="btn-outline btn-sm" onClick={loadRegistered}>
+							Try again
+						</button>
 					</div>
 				) : entries.length === 0 ? (
 					<EmptyState art="printer" title="No printers added" />
@@ -356,6 +382,8 @@ function PrintersTab() {
 									type="button"
 									className="btn-outline db-detail__remove"
 									onClick={() => setConfirmDelete(selectedEntry)}
+									disabled={offline}
+									title={offline ? OFFLINE_ACTION_HINT : undefined}
 								>
 									<TrashIcon />
 									Delete
@@ -366,7 +394,8 @@ function PrintersTab() {
 									role="switch"
 									aria-checked={!selectedEntry.isDisabled}
 									title={selectedEntry.isDisabled ? "Enable this printer" : "Disable this printer"}
-									disabled={togglingId === selectedEntry._id}
+									disabled={togglingId === selectedEntry._id || offline}
+									title={offline ? OFFLINE_ACTION_HINT : undefined}
 									onClick={() => handleToggleDisabled(selectedEntry)}
 								>
 									<span className="toggle__knob" />
@@ -508,7 +537,7 @@ function PrintersTab() {
 							<button
 								className="btn-gradient"
 								onClick={confirmAdd}
-								disabled={addSaving || !pickChanged}
+								disabled={addSaving || !pickChanged || offline}
 							>
 								{addSaving ? "Adding…" : "Add"}
 							</button>

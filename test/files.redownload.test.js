@@ -34,10 +34,14 @@ before(() => {
 		dialog: {},
 	});
 	stub(path.join(MAIN, "api.js"), {
-		fetchFileBuffer: async (fileId, { accept } = {}) => {
+		// The download as api.openFileDownload opens it: a Response to stream, or
+		// the backend's refusal (404) when it doesn't have the file.
+		openFileDownload: async (fileId, { accept } = {}) => {
 			requests.push({ fileId, accept });
 			const source = accept === "application/pdf" ? remote : rawRemote;
-			return source.has(fileId) ? { ok: true, buffer: source.get(fileId) } : { ok: false, buffer: null };
+			if (!source.has(fileId)) return { ok: false, kind: "http", status: 404, offline: false, retryable: false };
+			const body = source.get(fileId);
+			return { ok: true, status: 200, response: new Response(body, { headers: { "content-length": String(body.length) } }), controller: new AbortController() };
 		},
 	});
 	stub(path.join(MAIN, "spooler.js"), {});
@@ -79,11 +83,11 @@ test("a failed Reload keeps the copy that was cached", async () => {
 	assert.deepEqual(statuses, [{ f1: "downloading" }, { f1: "ready" }]);
 });
 
-test("a failed Reload of a file that was never cached reports an error", async () => {
+test("a failed Reload of a file that was never cached reports it unavailable", async () => {
 	statuses.length = 0;
 	assert.equal(await files.redownloadFile("missing"), false);
 	assert.equal(files.isReady("missing"), false);
-	assert.deepEqual(statuses, [{ missing: "downloading" }, { missing: "error" }]);
+	assert.deepEqual(statuses, [{ missing: "downloading" }, { missing: "unavailable" }]);
 });
 
 test("a raw upload that won't download doesn't fail the document", async () => {

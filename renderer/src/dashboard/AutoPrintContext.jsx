@@ -27,6 +27,8 @@ const EMPTY_SNAPSHOT = {
 	printedFiles: {},
 	settingsOverrides: {},
 	files: {},
+	online: true,
+	pendingSync: { total: 0, byJob: {} },
 };
 
 // Legacy localStorage progress (pre-engine builds) — pushed to main once, then
@@ -34,12 +36,14 @@ const EMPTY_SNAPSHOT = {
 const LEGACY_PROGRESS_KEY = "clickprint:printedFiles";
 
 // Copy for the engine's semantic toast events.
-function toastMessage({ kind, who, fileName }) {
+function toastMessage({ kind, who, fileName, status }) {
 	switch (kind) {
+		// Printed while offline, but the backend had already closed the job (the
+		// customer cancelled, or it failed) before our update reached it.
+		case "printed-offline-conflict":
+			return `Job (${who}) was printed while offline, but it had been ${status || "closed"} on the server in the meantime. The server's status stands — check with the customer.`;
 		case "job-failed-print":
 			return `Job (${who}) marked failed — a document couldn't be printed. The customer will be refunded.`;
-		case "job-failed-download":
-			return `Job (${who}) failed — files couldn't be downloaded.`;
 		// A manually-printed document failed. The job is deliberately left open —
 		// the operator retries, or fails the job explicitly from its failure box.
 		case "doc-failed-print":
@@ -151,7 +155,10 @@ export function AutoPrintProvider({ children }) {
 			if (!message) return;
 			const id = Date.now() + Math.random();
 			setToasts((t) => [...t, { id, message }]);
-			setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6000);
+			// A conflict after an outage needs the operator — it stays until dismissed.
+			if (payload?.kind !== "printed-offline-conflict") {
+				setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 6000);
+			}
 		});
 	}, []);
 
@@ -306,6 +313,10 @@ export function AutoPrintProvider({ children }) {
 		// An update is waiting for the current print to finish; manual print
 		// controls are locked until the app restarts into it (UpdateToast says so).
 		updateHold: !!snapshot.updateHold,
+		// Whether the backend is reachable (the engine's view, see connectivity.js).
+		online: snapshot.online !== false,
+		// Status updates of this job printed offline and not yet synced.
+		jobPendingSync: (jobId) => snapshot.pendingSync?.byJob?.[jobId] || 0,
 	};
 
 	// Shown once per launch when automated printing was armed in the previous

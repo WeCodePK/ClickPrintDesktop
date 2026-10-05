@@ -15,9 +15,13 @@ An Electron-based desktop client for **ClickPrint**—an automated, zero-interve
      - Stateful queue management and local spooler tracking.
      - Load balancing across multiple active printers.
      - Manual overrides
-- **Offline Resilience**:
+- **Offline Resilience** (built for shops with unreliable internet):
+     - Every backend call has a timeout; the app tracks whether the server is reachable and shows an offline banner.
+     - Screens show the last saved copy of jobs, history, services, printers and the shop profile when the server can't be reached.
+     - Downloads resume and retry until they succeed. A job is never failed (or refunded) because of the network.
+     - Jobs already downloaded can be printed by hand while offline. Their status updates are queued and sent once the connection returns. Automated printing waits for the connection.
+     - WhatsApp messages received during an outage are kept and handled once it's back, and replies wait until WhatsApp reconnects.
      - Background watcher polling printer availability via PowerShell (WMI) to avoid blocking the main thread.
-     - Autoroutable fallbacks
 - **Seamless Updates**: Automatically checks, downloads, and applies application updates via GitHub releases.
 
 ---
@@ -85,12 +89,7 @@ An Electron-based desktop client for **ClickPrint**—an automated, zero-interve
       npm install
       ```
 
-3. Setup environment variables:
-   Create a `.env` file in the root directory (refer to `.env.example` if available) and add your environment configuration:
-      ```env
-      # Example variables
-      API_BASE_URL=https://api.clickprint.com
-      ```
+3. The backend address is fixed in `main/http.js` (`https://api.clickprint.pk`). A `.env` is only needed to publish releases (`npm run release`).
 
 ### Running Locally
 
@@ -104,6 +103,17 @@ This launches:
 
 - Vite dev server for the React renderer on port `3001`.
 - Electron main process pointing to `http://localhost:3001` (waits for renderer to be ready).
+
+
+### Testing a bad connection
+
+To simulate a poor network in development, set `CLICKPRINT_NET_FAULT` before starting the app. It accepts `offline`, `flaky:0.5` (half of all requests fail), `latency:3000` (every request takes 3 s longer), or a combination such as `flaky:0.3,latency:2000`. It covers requests and file downloads from the ClickPrint server. The live jobs stream only honours `offline`. WhatsApp, and uploads of WhatsApp files, are not covered.
+
+```bash
+CLICKPRINT_NET_FAULT=flaky:0.5 npm run dev
+```
+
+From the renderer devtools you can also switch it at runtime with `window.electronAPI.setNetFault("offline")`, and turn it off with `""` (development builds only).
 
 ---
 

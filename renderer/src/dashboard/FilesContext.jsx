@@ -9,7 +9,8 @@ import { createContext, useContext, useState, useEffect } from "react";
 const FilesContext = createContext(null);
 
 export function FilesProvider({ children }) {
-	// fileId -> "downloading" | "ready" | "error"
+	// fileId -> "downloading" | "ready" | "retrying" (couldn't reach the server;
+	// main retries on its own) | "unavailable" (the server says it doesn't exist)
 	const [fileStatus, setFileStatus] = useState({});
 
 	useEffect(() => {

@@ -17,6 +17,18 @@ function loadEngine({ jobs = [], storeData = {} } = {}) {
 		pendingPrints: [],
 		statusListeners: [],
 		store: new Map(Object.entries(storeData)),
+		// false = the backend can't be reached: connectivity reports offline and
+		// every status PATCH fails as a network error.
+		online: true,
+		// true = requests fail as network errors while connectivity still says
+		// online (the link dropped and nobody has noticed yet).
+		failRequests: false,
+		netListeners: [],
+	};
+	// Flips the simulated connection and tells the engine, like connectivity.js.
+	state.setOnline = (online) => {
+		state.online = online;
+		for (const fn of state.netListeners) fn();
 	};
 
 	const stubs = {
@@ -24,7 +36,8 @@ function loadEngine({ jobs = [], storeData = {} } = {}) {
 			fetchServices: async () => ({ success: true, data: [] }),
 			fetchPrinters: async () => ({ success: true, data: [] }),
 			updateJobStatus: async (jobId, status) => {
-				state.statusCalls.push({ jobId, status });
+				state.statusCalls.push({ jobId, status, online: state.online });
+				if (!state.online || state.failRequests) return { success: false, kind: "network", offline: true, retryable: true };
 				return { success: true };
 			},
 			markJobFailed: async () => ({ success: true }),
@@ -65,7 +78,22 @@ function loadEngine({ jobs = [], storeData = {} } = {}) {
 			remove: (key) => state.store.delete(key),
 		},
 		state: { getJobs: () => state.jobs },
+		connectivity: {
+			isOnline: () => state.online,
+			onChange: (fn) => state.netListeners.push(fn),
+		},
 	};
+	// The REAL outbox, over the in-memory store and the stub backend above.
+	const { createStatusOutbox } = require(path.join(MAIN, "statusOutbox.js"));
+	stubs.outbox = createStatusOutbox({
+		store: stubs.store,
+		updateJobStatus: (jobId, status) => stubs.api.updateJobStatus(jobId, status),
+		fetchJobStatus: async (jobId) => state.jobs.find((j) => j._id === jobId)?.status ?? null,
+		isOnline: () => state.online,
+		setTimer: () => null,
+		clearTimer: () => {},
+	});
+	state.outbox = stubs.outbox;
 
 	for (const [name, exports] of Object.entries(stubs)) {
 		const file = path.join(MAIN, `${name}.js`);

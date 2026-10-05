@@ -118,7 +118,9 @@ const PAPER_OPTIONS = PAGE_TYPES.map((pt) => ({ value: pt, code: pt, name: `${pt
 
 // Create / edit form for a single service, shown inside a modal. Remount it
 // (keyed) per selection so the fields reset cleanly.
-function ServiceForm({ service, printers, error, saving, onSave, onCancel }) {
+// `offline`: the backend can't be reached, so the form can't be saved (the
+// operator's input stays put until it can).
+function ServiceForm({ service, printers, error, saving, offline = false, onSave, onCancel }) {
 	const isNew = !service._id;
 	const [rate, setRate] = useState(service.rate ?? "");
 	const [color, setColor] = useState(service.keys?.color ?? false);
@@ -150,7 +152,7 @@ function ServiceForm({ service, printers, error, saving, onSave, onCancel }) {
 	// Only checks a number was entered; the backend owns the allowed range.
 	const isRateInvalid = rate === "" || isNaN(rateNum);
 	const noPrinters = printers.length === 0;
-	const isSubmitDisabled = saving || isRateInvalid || printerSel.length === 0;
+	const isSubmitDisabled = saving || offline || isRateInvalid || printerSel.length === 0;
 
 	const submit = (e) => {
 		e.preventDefault();
@@ -249,7 +251,12 @@ function ServiceForm({ service, printers, error, saving, onSave, onCancel }) {
 				<button type="button" className="btn-outline" onClick={onCancel} disabled={saving}>
 					Cancel
 				</button>
-				<button type="submit" className="btn-gradient" disabled={isSubmitDisabled}>
+				<button
+					type="submit"
+					className="btn-gradient"
+					disabled={isSubmitDisabled}
+					title={offline ? "You're offline — saving needs a connection" : undefined}
+				>
 					{saving ? "Saving…" : isNew ? "Add Service" : "Save Changes"}
 				</button>
 			</div>

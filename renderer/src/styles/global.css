@@ -2082,9 +2082,15 @@ body,
 	transition: background var(--transition-fast), color var(--transition-fast);
 }
 
-.file-preview__failure-btn:hover {
+.file-preview__failure-btn:hover:not(:disabled) {
 	background: var(--color-accent);
 	color: #fff;
+}
+
+/* Offline: failing a job refunds the customer, so it waits for the connection. */
+.file-preview__failure-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
 }
 
 .file-preview__failure-btn svg {
@@ -5527,6 +5533,31 @@ input.file-preview__spec-input {
 	font-size: 13px;
 	font-weight: 600;
 	color: var(--color-text-primary);
+}
+
+/* Back online and catching up — not a problem, just progress. */
+.conn-toast--info {
+	border-left-color: var(--color-primary);
+}
+
+.conn-toast--info .conn-toast__spinner {
+	border-top-color: var(--color-primary);
+}
+
+.conn-toast__action {
+	flex-shrink: 0;
+	margin-left: auto;
+}
+
+/* One line above a list showing the saved copy while offline (StaleNote.jsx). */
+.stale-note {
+	margin: 0 0 10px;
+	padding: 8px 12px;
+	border-radius: var(--radius-sm);
+	border: 1px dashed var(--border-light);
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--color-text-muted);
 }
 
 /* Automatic-update notice (UpdateToast.jsx). Not dismissible — updates install

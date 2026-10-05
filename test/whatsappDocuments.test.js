@@ -129,15 +129,14 @@ before(async () => {
 	});
 	stub(path.join(__dirname, "..", "main", "printers.js"), { listPrinters: async () => [] });
 
-	// api.js hardcodes the production host; point it at the local server.
-	const source = fs
-		.readFileSync(path.join(__dirname, "..", "main", "api.js"), "utf8")
-		.replace(/const API_BASE_URL = "[^"]*"/, `const API_BASE_URL = "http://127.0.0.1:${server.address().port}"`);
-	const mod = new Module(path.join(__dirname, "..", "main", "api.js"), module);
-	mod.filename = path.join(__dirname, "..", "main", "api.js");
-	mod.paths = Module._nodeModulePaths(path.dirname(mod.filename));
-	mod._compile(source, mod.filename);
-	api = mod.exports;
+	stub(path.join(__dirname, "..", "main", "resourceCache.js"), {
+		createResourceCache: () => ({ load: () => null, save: async () => {}, clear: async () => {} }),
+		readThrough: (_cache, _shopId, result) => result,
+	});
+	stub(path.join(__dirname, "..", "main", "historyCache.js"), { load: () => null, save: async () => {}, clear: async () => {} });
+	// Requests go to the production host; point them at the local server.
+	require("../main/http").setBaseUrl(`http://127.0.0.1:${server.address().port}`);
+	api = require("../main/api");
 });
 
 after(() => {
