@@ -12,6 +12,7 @@ const { createMenuFlow } = require("./whatsappMenuFlow");
 const { createChatFlow } = require("./whatsappChatFlow");
 const { createExcludedContacts } = require("./whatsappContacts");
 const { createWelcome } = require("./whatsappWelcome");
+const { createChatHelp } = require("./whatsappChatHelp");
 const { createJobNotifications } = require("./whatsappJobNotifications");
 const { createWhatsAppJobs } = require("./whatsappJobs");
 const { createWhatsAppOutbox } = require("./whatsappOutbox");
@@ -67,6 +68,7 @@ const welcome = createWelcome(orders, api, (shopId) => {
 	const auth = getAuth();
 	return auth.shopId === shopId ? auth.shopName : null;
 });
+const chatHelp = createChatHelp(orders, welcome);
 
 // The ordering flows being tried out, by the name the settings store. Each has
 // addFile(shopId, customer, file, name, { morePending }) and handleText(shopId,
@@ -75,7 +77,7 @@ const welcome = createWelcome(orders, api, (shopId) => {
 // flush() for a held-back "files received" reply. Removing a flow: delete its
 // file and its entry here (and its option in WhatsAppSettings.jsx).
 const FLOWS = {
-	menu: createMenuFlow(orders),
+	menu: createMenuFlow(orders, api, jobCommands),
 	chat: createChatFlow(orders, api),
 };
 const DEFAULT_FLOW = "menu";
@@ -352,6 +354,20 @@ function _flowFor(shopId, customer) {
 	return FLOWS[orders.flowOf(shopId, customer.number)] || FLOWS[flowSetting(shopId)];
 }
 
+async function _chatSession(shopId, msg, kind, text = "") {
+	const customer = await _customerOf(_sock, msg);
+	if (!await _canHandle(_sock, shopId, msg)) return true;
+	orders.expire(orders.keyOf(shopId, customer.number));
+	if (_flowFor(shopId, customer) !== FLOWS.chat) return false;
+	const result = await chatHelp.receive(shopId, customer, { kind, text, messageId: msg.key?.id }, async (reply) => {
+		if (!await _canHandle(_sock, shopId, msg)) return false;
+		const sent = await _reply(shopId, msg, reply);
+		if (sent) _markRead(_sock, msg);
+		return sent;
+	});
+	return result.stop;
+}
+
 // Handles genuinely incoming one-to-one messages (not our own sends, groups or
 // status updates): documents and photos go into the customer's draft, and text messages
 // drive its settings menu and "confirm" / "cancel". Text that isn't meant for
@@ -570,6 +586,7 @@ async function _onMedia(sock, shopId, msg) {
 	const jid = msg.key.remoteJid;
 	// The operator may exclude this contact while the message waits in its queue.
 	if (!await _canHandle(sock, shopId, msg)) return _mediaDone(jid);
+	if (await _chatSession(shopId, msg, "media")) return _mediaDone(jid);
 	_markRead(sock, msg);
 
 	const media = await _downloadMedia(sock, shopId, msg);
@@ -614,7 +631,11 @@ async function _handleUpload(sock, shopId, msg, item) {
 	_mediaDone(jid);
 	if (!(await _canHandle(_sock, shopId, msg))) return true;
 	const customer = await _customerOf(_sock, msg);
+	const key = orders.keyOf(shopId, customer.number);
+	orders.expire(key);
 	const flow = _flowFor(shopId, customer);
+	// Also covers saved uploads replayed after a restart.
+	if (flow === FLOWS.chat && await _chatSession(shopId, msg, "media")) return true;
 	if (!result.success) {
 		await _reply(shopId, msg, uploadErrorReply(name, result));
 		const held = !_pendingMedia.has(jid) && flow.flush ? flow.flush(shopId, customer) : null;
@@ -624,7 +645,7 @@ async function _handleUpload(sock, shopId, msg, item) {
 	// Checked after the upload: files arriving meanwhile are part of the burst.
 	const morePending = _pendingMedia.has(jid);
 	jobCommands.clear(shopId, customer.number);
-	orders.expire(orders.keyOf(shopId, customer.number));
+	if (flow === FLOWS.menu) orders.touchSession(key);
 	const reply = await flow.addFile(shopId, customer, result.data, name, { morePending, messageId: item.key?.id });
 	if (reply) await _reply(shopId, msg, reply);
 	return true;
@@ -632,6 +653,7 @@ async function _handleUpload(sock, shopId, msg, item) {
 
 async function _onText(sock, shopId, msg, text) {
 	if (!await _canHandle(sock, shopId, msg)) return;
+	if (await _chatSession(shopId, msg, "text", text)) return;
 	const item = {
 		id: msg.key.id || `${Date.now()}`,
 		kind: "text",
@@ -651,32 +673,42 @@ async function _handleText(sock, shopId, msg, text, quotedMessageId) {
 	if (!await _canHandle(sock, shopId, msg)) return;
 	const key = orders.keyOf(shopId, customer.number);
 	orders.expire(key);
-	const greeting = await welcome.message(shopId, customer, text);
+	const flow = _flowFor(shopId, customer);
+	if (flow === FLOWS.chat && await _chatSession(shopId, msg, "text", text)) return;
+	if (flow === FLOWS.menu) orders.touchSession(key);
+	const greeting = flow === FLOWS.menu ? await welcome.message(shopId, customer, text, "Bot") : null;
 	if (greeting) {
+		// The welcome must not wait for the current-jobs request to finish.
 		if (!await _reply(shopId, msg, greeting)) return;
-		welcome.sent(shopId, customer);
+		welcome.sent(shopId, customer, "Bot");
 		_markRead(sock, msg);
+		if (flow === FLOWS.menu && !orders.getEntry(key)) {
+			const menu = await flow.homeMenu(shopId, customer, { greeting: true, canHandle: () => _canHandle(sock, shopId, msg) });
+			if (menu && !await _reply(shopId, msg, menu)) return;
+		}
 	}
 	if (!await _canHandle(sock, shopId, msg)) return;
 	const jobReply = await jobCommands.handleText(shopId, customer, text, {
 		hasDraft: !!orders.getEntry(key),
+		menuAction: flow.jobAction?.(shopId, customer, text),
+		numberedMenu: flow === FLOWS.menu,
 		canHandle: () => _canHandle(sock, shopId, msg),
 	});
 	if (jobReply) {
 		let sent = false;
 		if (jobReply.reply && await _canHandle(sock, shopId, msg)) {
 			_markRead(sock, msg);
-			sent = await _reply(shopId, msg, jobReply.reply);
+			sent = await _reply(shopId, msg, flow.withNavigation ? flow.withNavigation(jobReply.reply) : jobReply.reply);
 		}
 		// Never accept serial numbers from a menu that wasn't sent successfully.
 		if (jobReply.selection && !sent) jobCommands.clear(shopId, customer.number);
 		return;
 	}
-	// The first non-document message still gets the welcome, while a job query
-	// in that same message is handled above instead of being swallowed.
+	// A numbered-menu welcome already shows the next actions. A job query in
+	// that same message is handled above instead of being swallowed.
 	if (greeting && !orders.getEntry(key)) return;
 	if (orders.flowOf(shopId, customer.number) === "menu") orders.prepare(key);
-	const reply = await _flowFor(shopId, customer).handleText(shopId, customer, text, { quotedMessageId });
+	const reply = await flow.handleText(shopId, customer, text, { quotedMessageId, canHandle: () => _canHandle(sock, shopId, msg) });
 	if (!reply) return; // ordinary chat: left unread for the shop
 	if (!await _canHandle(sock, shopId, msg)) return;
 	_markRead(sock, msg);

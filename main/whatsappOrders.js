@@ -111,9 +111,57 @@ function createOrderCore({ api, load, save, loadSessions, saveSessions, loadExpi
 		return { expired };
 	}
 
-	// Older `greeted` flags were also set by uploads, even without a welcome.
-	function hasGreeted(key) { return !!session(key).welcomeSent; }
-	function markGreeted(key) { session(key, { welcomeSent: true }); }
+	// Welcome once per conversation, rather than permanently per contact. Legacy
+	// flags without an activity timestamp cannot suppress a new conversation.
+	function touchSession(key) {
+		const current = session(key);
+		const now = Date.now();
+		const idle = !Number.isFinite(current.lastMessageAt) || now - current.lastMessageAt >= SESSION_IDLE_MS;
+		session(key, {
+			lastMessageAt: now,
+			...(idle && { welcomeSentByAssistant: {}, chatStart: null }),
+		});
+	}
+
+	// AI introductions belong to the first incoming message, including uploads
+	// that fail. Persist the kind so a later text cannot greet a document-first chat.
+	function beginChatSession(key, kind, messageId) {
+		touchSession(key);
+		const current = session(key);
+		if (!current.chatStart) {
+			const existing = getEntry(key);
+			session(key, { chatStart: {
+				kind: existing?.flow === "chat" && existing.files?.length ? "media" : kind,
+				messageId, at: Date.now(), introSent: false,
+			} });
+		}
+		return session(key).chatStart;
+	}
+
+	function markChatIntroSent(key) {
+		const current = session(key).chatStart;
+		if (current) session(key, { chatStart: { ...current, introSent: true } });
+	}
+
+	function hasGreeted(key, assistant = "AI") {
+		const current = session(key);
+		return Number.isFinite(current.lastMessageAt) && Date.now() - current.lastMessageAt < SESSION_IDLE_MS &&
+			!!current.welcomeSentByAssistant?.[assistant];
+	}
+	function markGreeted(key, assistant = "AI") {
+		session(key, {
+			lastMessageAt: Date.now(),
+			welcomeSentByAssistant: { ...session(key).welcomeSentByAssistant, [assistant]: true },
+		});
+	}
+
+	// Remember the displayed main-menu actions separately from an open draft,
+	// so its numbers cannot be confused with settings or payment answers.
+	function mainMenuActions(key, actions) {
+		if (actions !== undefined) session(key, { mainMenuActions: actions });
+		const saved = session(key).mainMenuActions;
+		return Array.isArray(saved) ? saved : null;
+	}
 
 	function flushExpired(shopId) {
 		if (cleaning) return cleaning;
@@ -229,7 +277,7 @@ function createOrderCore({ api, load, save, loadSessions, saveSessions, loadExpi
 		return { ok: true };
 	}
 
-	return { keyOf, getEntry, setEntry, flowOf, push, price, submit, remove, prepare, expire, expireIdle, flushExpired, hasGreeted, markGreeted };
+	return { keyOf, getEntry, setEntry, flowOf, push, price, submit, remove, prepare, expire, expireIdle, flushExpired, touchSession, beginChatSession, markChatIntroSent, hasGreeted, markGreeted, mainMenuActions };
 }
 
 module.exports = { textOf, normalize, rupees, plural, costLines, createOrderCore, SESSION_IDLE_MS };

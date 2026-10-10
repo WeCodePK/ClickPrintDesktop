@@ -393,9 +393,8 @@ function PrintersTab() {
 									className={`toggle ${selectedEntry.isDisabled ? "" : "toggle--on"}`}
 									role="switch"
 									aria-checked={!selectedEntry.isDisabled}
-									title={selectedEntry.isDisabled ? "Enable this printer" : "Disable this printer"}
+									title={offline ? OFFLINE_ACTION_HINT : selectedEntry.isDisabled ? "Enable this printer" : "Disable this printer"}
 									disabled={togglingId === selectedEntry._id || offline}
-									title={offline ? OFFLINE_ACTION_HINT : undefined}
 									onClick={() => handleToggleDisabled(selectedEntry)}
 								>
 									<span className="toggle__knob" />

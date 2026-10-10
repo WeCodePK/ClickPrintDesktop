@@ -1,105 +1,151 @@
-// The numbered-menu WhatsApp ordering flow. Every file a customer sends is added
-// to their draft with the default print settings, and they get a numbered menu
-// of that file's settings. Replying with a number flips a two-way setting or
-// asks for the new value. "confirm" shows the order with its total, a second
-// "confirm" submits it as a job, and "cancel" deletes it.
-//
-// One of two flows being tried out (the other is whatsappChatFlow.js); dropping
-// it means deleting this file and its entry in whatsapp.js's FLOWS.
-//
-// Its draft entries (see whatsappOrders.js) look like:
-//   { flow: "menu", draftId, customer,
-//     files: [{ file, settings, name, numberOfPages, duplex }],
-//     selected,   // index of the file the menu is showing
-//     awaiting }  // null (menu), "file" (picking a file), a setting key
-//                 // (answering its prompt) or "confirm" (total shown)
-
+// The numbered-menu WhatsApp flow: file settings, order review, then payment.
+// Job-list numbers are routed through the shared ownership/cancellation handler.
+// Drafts and payment proofs use the same order core as the AI chat.
 const {
-	DEFAULT_SETTINGS,
-	code,
-	num,
-	settingByKey,
-	menuItems,
-	fileDetails,
-	settingsMenu,
-	settingPrompt,
-	parseSettingAnswer,
-	filePrompt,
-	fileSummary,
+	DEFAULT_SETTINGS, code, num, settingByKey, menuItems, fileDetails,
+	settingsMenu, settingPrompt, parseSettingAnswer, filePrompt, fileSummary,
 } = require("./whatsappSettings");
-const { normalize, rupees, plural, costLines } = require("./whatsappOrders");
+const { normalize, plural, costLines } = require("./whatsappOrders");
+const { T } = require("./whatsappChatFlow");
 
 const FLOW = "menu";
 const CONFIRM = "confirm";
 const CANCEL = "cancel";
 const MENU = "menu";
+const t = T.en;
+const MAIN_MENU_HINT = "Press *0* to go back to the main menu.";
 
-// The backend's draft files for a menu entry: one per file, as-is.
+// Keep account numbers in their own copyable message when adding navigation.
+function withNavigation(reply) {
+	if (!reply) return reply;
+	const texts = [].concat(reply).map((text) => String(text)
+		.replace(/or \*0\* to go back\./g, "or *0* to go back to the main menu.")
+		.replace(/Reply \*0\* to change settings\./g, MAIN_MENU_HINT));
+	const body = texts.join("\n");
+	const isMainMenu = texts[0].startsWith("*Main menu*\n");
+	if (!isMainMenu && !(body.includes("*0*") && /main menu|مرکزی مینو/i.test(body))) texts[0] += "\n\n" + MAIN_MENU_HINT;
+	return Array.isArray(reply) ? texts : texts[0];
+}
+
+function menuWord(text) {
+	return normalize(String(text).normalize("NFKC")
+		.replace(/[۰-۹٠-٩]/g, (digit) => String(digit.charCodeAt(0) - (digit >= "۰" ? 0x6f0 : 0x660)))
+		.replace(/[\uFE0F\u20E3]/g, ""));
+}
+
 function draftFiles(entry) {
 	return entry.files.map(({ file, settings }) => ({ file, settings }));
 }
 
-// core: the order core from whatsappOrders.js.
-function createMenuFlow(core) {
+function createMenuFlow(core, api, jobs) {
 	const { keyOf, getEntry, setEntry } = core;
 
 	function push(shopId, key, entry) {
 		return core.push(shopId, key, entry, draftFiles(entry));
 	}
 
-	// The settings menu for the selected file. `heading` leads its first line,
-	// followed by the filename: "✅ Added to your order `a.pdf`".
+	async function homeMenu(shopId, customer, { greeting = false, canHandle = async () => true } = {}) {
+		const key = keyOf(shopId, customer.number);
+		let available;
+		try { available = await jobs?.menuAvailability(shopId, customer, canHandle); }
+		catch (error) { console.error("[Menu] could not load current jobs:", error.message); }
+		if (available?.aborted || !await canHandle()) return null;
+		const actions = [];
+		if (available?.hasJobs) actions.push("list");
+		if (available?.canCancel) actions.push("cancel");
+		const hasDraft = !!getEntry(key);
+		if (hasDraft) actions.push("settings");
+		core.mainMenuActions(key, actions);
+		if (greeting && available && !available.failed && !actions.length) return "";
+		const labels = { list: "List current jobs", cancel: "Cancel a job", settings: "Print settings" };
+		return withNavigation([
+			"*Main menu*",
+			(!available || available.failed) && "I couldn\'t load your jobs right now. Press *0* to try again.",
+			...actions.map((action, i) => num(i + 1) + " " + labels[action]),
+			hasDraft ? "Reply with a number to continue." : actions.length ? "Reply with a number, or send a document to start an order." : "Send a document to start an order.",
+		].filter(Boolean).join("\n\n"));
+	}
+
+	// Only numbers from a displayed main menu can open job management.
+	function jobAction(shopId, customer, text) {
+		const word = menuWord(text);
+		if (!/^\d+$/.test(word)) return null;
+		const action = core.mainMenuActions(keyOf(shopId, customer.number))?.[Number(word) - 1];
+		return action === "list" || action === "cancel" ? action : null;
+	}
+
 	function menuReply(entry, heading = "📄") {
 		const file = entry.files[entry.selected];
 		const details = fileDetails(file, entry.selected, entry.files.length);
 		return [
-			`${heading} ${code(file.name)}${details ? `\n${details}` : ""}`,
-			`Reply with a number to change a setting\n${settingsMenu(file, entry.files.length)}`,
-			`Reply with *${CONFIRM}* or *${CANCEL}*`,
+			heading + " " + code(file.name) + (details ? "\n" + details : ""),
+			"Reply with a number to change a setting\n" + settingsMenu(file, entry.files.length),
+			"Reply with *confirm* or *cancel*",
 		].join("\n\n");
 	}
 
-	// Adds an uploaded file (the backend's File object) to the customer's draft,
-	// creating the draft on their first file. Returns the reply for the customer.
+	// Any change to print contents/settings invalidates the priced/payment step.
+	// Clear an attached proof on the backend before returning to order editing.
+	function withoutPayment(entry) {
+		return {
+			...entry, awaiting: null, total: null, payment: null, cashPayment: false,
+			paymentProofFile: entry.paymentProofFile ? null : entry.paymentProofFile,
+		};
+	}
+
 	async function addFile(shopId, customer, file, name = file.name) {
 		const key = keyOf(shopId, customer.number);
+		core.mainMenuActions(key, null);
+		const { expired } = core.prepare(key);
 		const previous = getEntry(key);
+		if (previous?.awaiting === "proof") return attachProof(shopId, key, previous, file);
+
+		// A completed order has no open draft. Its next upload starts a new order.
 		const files = [
 			...(previous?.files || []),
 			{ file: file._id, settings: { ...DEFAULT_SETTINGS }, name, numberOfPages: file.numberOfPages ?? null, duplex: null },
 		];
-		const entry = { flow: FLOW, draftId: previous?.draftId ?? null, customer, files, selected: files.length - 1, awaiting: null };
-
+		const entry = withoutPayment({
+			...previous, flow: FLOW, draftId: previous?.draftId ?? null,
+			customer, files, selected: files.length - 1,
+		});
 		const saved = await push(shopId, key, entry);
-		if (!saved.ok) {
-			return `Sorry, we couldn't add ${code(name)} to your order${saved.message ? `: ${saved.message}` : "."} Please send it again.`;
-		}
-		console.log(`[Drafts] ${customer.number}: draft now has ${files.length} file(s)`);
-		return menuReply(saved.entry, "✅ Added to your order");
+		if (!saved.ok) return t.addFailed(name, saved.message);
+		console.log("[Drafts] " + customer.number + ": draft now has " + files.length + " file(s)");
+		return [expired && t.expiredAdded, menuReply(saved.entry, "✅ Added to your order")].filter(Boolean).join("\n\n");
 	}
 
-	// Handles a text message from a customer. Returns the reply, or null when the
-	// message isn't meant for the order flow (the customer has no draft, or it's
-	// ordinary chat while the menu is showing).
-	async function handleText(shopId, customer, text) {
-		const word = normalize(text);
-		if (word === CONFIRM) return confirm(shopId, customer);
-		if (word === CANCEL) return cancel(shopId, customer);
-
+	async function handleText(shopId, customer, text, { canHandle = async () => true } = {}) {
 		const key = keyOf(shopId, customer.number);
-		const entry = getEntry(key);
-		if (!entry) return null;
+		core.prepare(key);
+		const word = menuWord(text);
+		if (word === MENU || word === "0") return homeMenu(shopId, customer, { canHandle });
+		if (word === CONFIRM || word === CANCEL) {
+			core.mainMenuActions(key, null);
+			return word === CONFIRM ? confirm(shopId, customer) : cancel(shopId, customer);
+		}
 
-		if (word === MENU) return back(key, entry);
-		if (entry.awaiting === "file") return pickFile(key, entry, word);
+		const entry = getEntry(key);
+		const actions = core.mainMenuActions(key);
+		if (actions && /^\d+$/.test(word)) {
+			if (actions[Number(word) - 1] === "settings" && entry) {
+				core.mainMenuActions(key, null);
+				return back(shopId, key, entry);
+			}
+			return homeMenu(shopId, customer, { canHandle });
+		}
+		if (!entry) return null;
+		if (actions) core.mainMenuActions(key, null);
+		if (entry.awaiting === "payment" || entry.awaiting === "proof") return answerPayment(key, entry, word);
+		if (entry.awaiting === "file") return pickFile(shopId, key, entry, word);
 		if (entry.awaiting && entry.awaiting !== CONFIRM) return answerSetting(shopId, key, entry, word);
 		if (/^\d+$/.test(word)) return menuChoice(shopId, key, entry, Number(word));
 		return null;
 	}
 
-	// Back to the menu, dropping whatever was being asked.
-	function back(key, entry) {
-		const reset = { ...entry, awaiting: null };
+	async function back(shopId, key, entry) {
+		const reset = withoutPayment(entry);
+		if (entry.paymentProofFile) return saveAndShow(shopId, key, reset, "📄");
 		setEntry(key, reset);
 		return menuReply(reset);
 	}
@@ -108,8 +154,7 @@ function createMenuFlow(core) {
 		const file = entry.files[entry.selected];
 		const items = menuItems(file, entry.files.length);
 		const item = items[n - 1];
-		if (!item) return `Please reply with a number from 1 to ${items.length}, or *${MENU}* to see the settings again.`;
-
+		if (!item) return "Please reply with a number from 1 to " + items.length + ".";
 		if (item.action === "pickFile") {
 			setEntry(key, { ...entry, awaiting: "file" });
 			return filePrompt(entry.files, entry.selected);
@@ -124,12 +169,9 @@ function createMenuFlow(core) {
 		return settingPrompt(setting, file);
 	}
 
-	function pickFile(key, entry, word) {
-		if (word === "0") return back(key, entry);
+	function pickFile(shopId, key, entry, word) {
 		const index = /^\d+$/.test(word) ? Number(word) - 1 : -1;
-		if (!entry.files[index]) {
-			return `Please reply with a number from 1 to ${entry.files.length}, or *0* to go back.`;
-		}
+		if (!entry.files[index]) return "Please reply with a number from 1 to " + entry.files.length + ", or *0* to go back.";
 		const picked = { ...entry, selected: index, awaiting: null };
 		setEntry(key, picked);
 		return menuReply(picked);
@@ -138,78 +180,133 @@ function createMenuFlow(core) {
 	async function answerSetting(shopId, key, entry, word) {
 		const setting = settingByKey(entry.awaiting);
 		const file = entry.files[entry.selected];
-		if (!setting?.apply || !file || word === "0") return back(key, entry);
-
+		if (!setting?.apply || !file) return back(shopId, key, entry);
 		const parsed = parseSettingAnswer(setting, word, file);
 		if (parsed.error) return parsed.error;
 		return changeFile(shopId, key, entry, setting, setting.apply(file, parsed.value));
 	}
 
-	// Replaces the selected file with its changed version and saves the draft.
 	function changeFile(shopId, key, entry, setting, changed) {
 		const files = entry.files.map((f, i) => (i === entry.selected ? changed : f));
-		const heading = `✅ ${setting.label} changed to *${setting.show(changed)}* for`;
-		return saveAndShow(shopId, key, { ...entry, files }, heading);
+		return saveAndShow(shopId, key, { ...entry, files }, "✅ " + setting.label + " changed to *" + setting.show(changed) + "* for");
 	}
 
-	// Pushes changed settings to the draft and shows the menu again. On failure
-	// nothing is saved, so the customer can try the change again.
 	async function saveAndShow(shopId, key, entry, heading) {
-		const saved = await push(shopId, key, { ...entry, awaiting: null });
-		if (!saved.ok) {
-			setEntry(key, { ...getEntry(key), awaiting: null }); // the old settings stay
-			return `Sorry, we couldn't update your order${saved.message ? `: ${saved.message}` : "."} Please try again.`;
-		}
+		const saved = await push(shopId, key, withoutPayment(entry));
+		if (!saved.ok) return t.updateFailed(saved.message);
 		return menuReply(saved.entry, heading);
 	}
 
-	// The first "confirm" prices the order and shows it; a second one, with
-	// nothing changed in between, submits it.
+	// First confirm shows the price; the next opens payment, never bypassing
+	// the shop's COD limit when a wallet is missing.
 	async function confirm(shopId, customer) {
 		const key = keyOf(shopId, customer.number);
 		const entry = getEntry(key);
-		if (!entry) return "You don't have an order yet. Send us a document or photo to start one.";
-		if (entry.awaiting !== CONFIRM) return review(shopId, key, entry);
-
-		const result = await core.submit(key, entry);
-		if (result.ok) {
-			const lines = ["Your job has been submitted!", ""];
-			if (result.job.code) lines.push(`Job code: *#${result.job.code}*`);
-			if (result.job.cost?.total != null) lines.push(`Total cost: Rs.${result.job.cost.total}`);
-			return lines.join("\n");
-		}
-		if (result.gone) return "Sorry, we couldn't find your order anymore. Please send your documents again.";
-		return `Sorry, we couldn't place your order${result.message ? `: ${result.message}` : "."} Please reply *${CONFIRM}* to try again.`;
+		if (!entry) return t.noOrder;
+		if (entry.awaiting === "proof" && entry.paymentProofFile) return placeOrder(key, entry);
+		if (entry.awaiting === "payment" || entry.awaiting === "proof") return paymentPrompt(entry);
+		if (entry.awaiting !== CONFIRM || !Number.isFinite(entry.total)) return review(shopId, key, entry);
+		return choosePayment(key, entry);
 	}
 
 	async function review(shopId, key, entry) {
 		const priced = await core.price(shopId, key, entry, draftFiles(entry));
-		if (!priced.ok) {
-			return `Sorry, we couldn't work out your total${priced.message ? `: ${priced.message}` : "."} Please reply *${CONFIRM}* to try again.`;
-		}
-		const current = priced.entry;
-		setEntry(key, { ...current, awaiting: CONFIRM });
-
-		const files = current.files.map((f, i) => `${num(i + 1)} ${fileSummary(f)}`).join("\n");
+		if (!priced.ok || !Number.isFinite(priced.cost?.total) || priced.cost.total < 0) return t.priceFailed(priced.message);
+		const current = { ...priced.entry, awaiting: CONFIRM, total: priced.cost.total, payment: null, cashPayment: false };
+		setEntry(key, current);
+		const files = current.files.map((f, i) => num(i + 1) + " " + fileSummary(f)).join("\n");
 		return [
-			`*Your order* (${plural(current.files.length, "file")})\n${files}`,
+			"*Your order* (" + plural(current.files.length, "file") + ")\n" + files,
 			costLines(priced.cost),
-			`• *${CONFIRM}* again to place your order\n• *${MENU}* to change something`,
+			t.confirmHint,
 		].join("\n\n");
+	}
+
+	async function choosePayment(key, entry) {
+		let shop;
+		try { shop = await api?.fetchShop(); }
+		catch (error) { console.error("[Menu] couldn't load payment options:", error.message); }
+		if (!shop?.success || !shop.data) return t.shopFailed;
+		const codLimit = Number.isFinite(shop.data.codLimit) && shop.data.codLimit > 0 ? shop.data.codLimit : null;
+		const { bank, title, number } = shop.data.wallet || {};
+		const wallet = number && String(number).trim() ? { bank: bank || "", title: title || "", number } : null;
+		const codOk = codLimit != null && Number.isFinite(entry.total) && entry.total >= 0 && entry.total < codLimit;
+		const next = { ...entry, payment: { codOk, codLimit, wallet }, cashPayment: false };
+		if (codOk) {
+			setEntry(key, { ...next, awaiting: "payment" });
+			return paymentPrompt(next);
+		}
+		if (wallet) return askProof(key, next);
+		return t.paymentUnavailable;
+	}
+
+	function paymentPrompt(entry) {
+		if (entry.awaiting === "proof") return t.proofReminder + "\nReply *0* to change settings.";
+		const options = [];
+		if (entry.payment?.codOk) options.push("1️⃣ Cash on Pickup");
+		if (entry.payment?.wallet) options.push("2️⃣ Prepaid order: pay now by bank transfer");
+		if (!options.length) return t.paymentUnavailable;
+		return "How would you like to pay?\n" + options.join("\n") + "\n\ncollect at the shop counter\nReply *0* to change settings.";
+	}
+
+	function answerPayment(key, entry, word) {
+		const cash = new Set(["1", "cash", "cash on pickup", "cop", "cod"]).has(word);
+		const prepaid = new Set(["2", "prepaid", "prepaid order", "online", "bank transfer", "transfer"]).has(word);
+		if (cash && entry.payment?.codOk) {
+			// Switching away from an attached proof must also clear it on the backend.
+			if (entry.paymentProofFile) return switchToCash(key, entry);
+			return placeOrder(key, { ...entry, cashPayment: true });
+		}
+		if (prepaid && entry.payment?.wallet) return askProof(key, entry);
+		if (cash && !entry.payment?.codOk) return t.onlineRequired + "\n\n" + paymentPrompt(entry);
+		return paymentPrompt(entry);
+	}
+
+	async function switchToCash(key, entry) {
+		const shopId = key.slice(0, key.indexOf(":"));
+		const saved = await push(shopId, key, { ...entry, paymentProofFile: null, cashPayment: true, awaiting: "payment" });
+		return saved.ok ? placeOrder(key, saved.entry) : t.updateFailed(saved.message);
+	}
+
+	function askProof(key, entry) {
+		if (!entry.payment?.wallet) return t.paymentUnavailable;
+		const { codOk, codLimit, wallet } = entry.payment;
+		setEntry(key, { ...entry, awaiting: "proof", cashPayment: false });
+		return t.payOnline(entry.total, wallet, codOk ? null : codLimit);
+	}
+
+	async function attachProof(shopId, key, entry, file) {
+		const saved = await push(shopId, key, { ...entry, paymentProofFile: file._id, cashPayment: false });
+		if (!saved.ok) return t.updateFailed(saved.message);
+		return placeOrder(key, saved.entry);
+	}
+
+	async function placeOrder(key, entry) {
+		const cashAllowed = entry.cashPayment && entry.payment?.codOk &&
+			Number.isFinite(entry.total) && entry.total >= 0 && entry.total < entry.payment.codLimit;
+		if (!entry.paymentProofFile && !cashAllowed) return t.paymentUnavailable;
+		setEntry(key, entry);
+		const result = await core.submit(key, entry);
+		if (result.ok) {
+			return t.placed(result.job.code, result.job.cost?.total) + "\n\n" + (cashAllowed ? t.cashPickup : t.pickup);
+		}
+		if (result.gone) return t.gone;
+		return t.submitFailed(result.message);
 	}
 
 	async function cancel(shopId, customer) {
 		const key = keyOf(shopId, customer.number);
 		const entry = getEntry(key);
-		if (!entry) return "You don't have an order to cancel.";
+		if (!entry) return t.noOrderToCancel;
 		const result = await core.remove(key, entry);
-		if (!result.ok) {
-			return `Sorry, we couldn't cancel your order${result.message ? `: ${result.message}` : "."} Please reply *${CANCEL}* to try again.`;
-		}
-		return "Your order has been cancelled. Send us a document or photo to start a new one.";
+		return result.ok ? t.cancelled : t.cancelFailed(result.message);
 	}
 
-	return { addFile, handleText };
+	return {
+		addFile: async (...args) => withNavigation(await addFile(...args)),
+		handleText: async (...args) => withNavigation(await handleText(...args)),
+		homeMenu, jobAction, withNavigation,
+	};
 }
 
 module.exports = { createMenuFlow };

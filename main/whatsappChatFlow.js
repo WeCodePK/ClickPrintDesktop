@@ -110,7 +110,7 @@ const placedText = (heading, codeLine, totalLine) => [heading, "", ...[codeLine,
 
 const T = {
 	en: {
-		welcome: (shop) => `I am ClickPrint AI of *${shop}*, send a document to continue.`,
+		welcome: (shop, assistant = "AI") => `I am ClickPrint ${assistant} of *${shop}*, send a document to continue.`,
 		expired: "Your previous draft expired after 10 minutes of inactivity. Its files are no longer in your order. Send a document to start a new order.",
 		expiredAdded: "Your previous draft expired after 10 minutes of inactivity. This document starts a new order.",
 		pickup: "Collect at the shop counter.",
@@ -147,7 +147,6 @@ const T = {
 		proofReminder: "Please send a screenshot of your payment to place your order.",
 		shopFailed: "Sorry, I couldn't load the payment options. Please reply *confirm* to try again.",
 		paymentUnavailable: "Cash on pickup isn't available for this order and the shop hasn't configured online payment. Please contact the shop. Your order has not been submitted. Reply *confirm* to try again.",
-		alreadyPlaced: (codeText) => `Your order *${codeText}* is already placed ✅ If that was a new file to print, please send it again.`,
 		cancelled: "Your order has been cancelled.",
 		cancelCheck: "Reply *cancel* to cancel your order.",
 		noOrder: "Send me the files you want printed first.",
@@ -162,7 +161,7 @@ const T = {
 		gone: "Sorry, I couldn't find your order anymore. Please send your files again.",
 	},
 	roman_urdu: {
-		welcome: (shop) => `Main *${shop}* ka ClickPrint AI hoon, aage barhne ke liye document bhejen.`,
+		welcome: (shop, assistant = "AI") => `Main *${shop}* ka ClickPrint ${assistant} hoon, aage barhne ke liye document bhejen.`,
 		expired: "10 minute koi activity na hone par aap ka pichla draft expire ho gaya. Purani files ab order mein nahi hain. Naya order shuru karne ke liye document bhejen.",
 		expiredAdded: "10 minute koi activity na hone par pichla draft expire ho gaya. Is document se naya order shuru hua hai.",
 		pickup: "Shop counter se collect karen.",
@@ -199,7 +198,6 @@ const T = {
 		proofReminder: "Order lagane ke liye payment ka screenshot bhejen.",
 		shopFailed: "Maaf kijiye, payment options load nahi ho sake. Dobara *confirm* likhen.",
 		paymentUnavailable: "Is order ke liye cash on pickup available nahi hai aur shop ne online payment set nahi ki. Shop se rabta karen. Aap ka order submit nahi hua. Dobara koshish ke liye *confirm* likhen.",
-		alreadyPlaced: (codeText) => `Aap ka order *${codeText}* lag chuka hai ✅ Agar ye print ke liye nayi file thi to dobara bhejen.`,
 		cancelled: "Aap ka order cancel kar diya gaya hai.",
 		cancelCheck: "Order cancel karna hai to *cancel* likhen.",
 		noOrder: "Pehle wo files bhejen jo print karni hain.",
@@ -214,7 +212,7 @@ const T = {
 		gone: "Maaf kijiye, aap ka order nahi mila. Files dobara bhejen.",
 	},
 	urdu: {
-		welcome: (shop) => `میں *${shop}* کا ClickPrint AI ہوں، آگے بڑھنے کے لیے دستاویز بھیجیں۔`,
+		welcome: (shop, assistant = "AI") => `میں *${shop}* کا ClickPrint ${assistant} ہوں، آگے بڑھنے کے لیے دستاویز بھیجیں۔`,
 		expired: "10 منٹ کوئی سرگرمی نہ ہونے پر آپ کا پچھلا ڈرافٹ ختم ہو گیا۔ پرانی فائلیں اب آرڈر میں شامل نہیں ہیں۔ نیا آرڈر شروع کرنے کے لیے دستاویز بھیجیں۔",
 		expiredAdded: "10 منٹ کوئی سرگرمی نہ ہونے پر پچھلا ڈرافٹ ختم ہو گیا۔ اس دستاویز سے نیا آرڈر شروع ہوا ہے۔",
 		pickup: "دکان کے کاؤنٹر سے وصول کریں۔",
@@ -251,7 +249,6 @@ const T = {
 		proofReminder: "آرڈر لگانے کے لیے ادائیگی کا اسکرین شاٹ بھیجیں۔",
 		shopFailed: "معذرت، ادائیگی کے آپشنز لوڈ نہیں ہو سکے۔ دوبارہ *confirm* لکھیں۔",
 		paymentUnavailable: "اس آرڈر کے لیے وصولی پر نقد ادائیگی دستیاب نہیں اور دکان نے آن لائن ادائیگی ترتیب نہیں دی۔ دکان سے رابطہ کریں۔ آپ کا آرڈر جمع نہیں ہوا۔ دوبارہ کوشش کے لیے *confirm* لکھیں۔",
-		alreadyPlaced: (codeText) => `آپ کا آرڈر *${codeText}* لگ چکا ہے ✅ اگر یہ پرنٹ کے لیے نئی فائل تھی تو دوبارہ بھیجیں۔`,
 		cancelled: "آپ کا آرڈر منسوخ کر دیا گیا ہے۔",
 		cancelCheck: "آرڈر منسوخ کرنا ہے تو *cancel* لکھیں۔",
 		noOrder: "پہلے وہ فائلیں بھیجیں جو پرنٹ کرنی ہیں۔",
@@ -484,16 +481,11 @@ function describeOrder(entry, cost, t) {
 
 // ── The flow ──────────────────────────────────────────────────────────────────
 
-// After an order is placed, files arriving this soon are most likely another
-// screenshot of the payment, not a new order.
-const JUST_PLACED_MS = 2 * 60 * 1000;
 const MAX_COMMENTS = 500; // the draft's additionalComments limit
 
 // core: the order core from whatsappOrders.js; api: { inferSettings, fetchShop }.
 function createChatFlow(core, api) {
 	const { keyOf, getEntry, setEntry } = core;
-	// key → { code, at }: orders placed in the last few minutes (see JUST_PLACED_MS).
-	const justPlaced = new Map();
 
 	function remember(entry, customerText, reply) {
 		const history = [...(entry.history || [])];
@@ -511,12 +503,6 @@ function createChatFlow(core, api) {
 		const { expired } = core.prepare(key);
 		const previous = getEntry(key);
 		if (previous?.awaiting === "proof") return attachProof(shopId, key, previous, file);
-
-		const placed = justPlaced.get(key);
-		if (!previous && placed && Date.now() - placed.at < JUST_PLACED_MS) {
-			console.log(`[Chat] ${customer.number}: file right after order ${placed.code} — not starting a new order`);
-			return textsFor(placed.language).alreadyPlaced(placed.code);
-		}
 
 		const pages = file.numberOfPages || 1;
 		const entry = {
@@ -572,10 +558,7 @@ function createChatFlow(core, api) {
 		if (!entry) {
 			if (expired) return textsFor(guess).expired;
 			if (CONFIRM_WORDS.has(word)) return textsFor(guess).noOrder;
-			if (CANCEL_WORDS.has(word)) {
-				justPlaced.delete(key);
-				return textsFor(guess).noOrderToCancel;
-			}
+			if (CANCEL_WORDS.has(word)) return textsFor(guess).noOrderToCancel;
 			if (pickupQuestion(text)) return pickupInfo(key, null, text);
 			return null;
 		}
@@ -636,7 +619,6 @@ function createChatFlow(core, api) {
 		const remaining = entry.files.filter((_, i) => !targets.has(i));
 		if (!remaining.length) {
 			const result = await core.remove(key, entry);
-			if (result.ok) justPlaced.delete(key);
 			return result.ok ? t.removedAll : reply(key, entry, text, t.updateFailed(result.message));
 		}
 		const next = { ...entry, files: remaining, awaiting: null, total: null, payment: null, cashPayment: false, paymentProofFile: null, pendingRemoval: false, batch: [], history: [], focusedFiles: [] };
@@ -785,7 +767,6 @@ function createChatFlow(core, api) {
 		const result = await core.submit(key, entry);
 		if (result.ok) {
 			const { code: orderCode, cost } = result.job;
-			justPlaced.set(key, { code: orderCode, at: Date.now(), language: entry.language });
 			return `${t.placed(orderCode, cost?.total)}\n\n${entry.cashPayment ? t.cashPickup : t.pickup}`;
 		}
 		if (result.gone) return t.gone;
@@ -795,7 +776,6 @@ function createChatFlow(core, api) {
 	async function cancel(key, entry) {
 		const t = textsFor(entry.language);
 		const result = await core.remove(key, entry);
-		if (result.ok) justPlaced.delete(key);
 		return result.ok ? t.cancelled : t.cancelFailed(result.message);
 	}
 
